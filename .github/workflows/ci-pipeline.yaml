@@ -73,6 +73,7 @@ jobs:
     if: contains(needs.gitVersion.outputs.branchName, 'main')
     permissions:
       contents: write
+      packages: write
 
     steps:
     - uses: actions/checkout@v4
@@ -83,10 +84,8 @@ jobs:
           git tag -a "${{ needs.gitVersion.outputs.semVer}}" -m "Version ${{ needs.gitVersion.outputs.semVer}}"
           git push --tags
     - name: Pack Nuget
-      run: |
-        cd src
-        dotnet pack -c Release -o out
+      run: dotnet pack -c Release -o out ./Yaref92.Events.sln
     - name: Release NuGet package
-      run: dotnet nuget push ./src/Yaref92.Events/out/$(ls ./src/Yaref92.Events/out) -s https://nuget.pkg.github.com/yaron-E92/index.json -k ${GITHUB_TOKEN}  
+      run: dotnet nuget push ./out/$(ls ./out) -s https://nuget.pkg.github.com/yaron-E92/index.json -k ${GITHUB_TOKEN}  
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
