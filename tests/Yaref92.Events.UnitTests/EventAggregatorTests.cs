@@ -3,6 +3,7 @@
 using FluentAssertions;
 
 using NSubstitute;
+using System.Reactive.Disposables;
 
 namespace Yaref92.Events.UnitTests;
 
@@ -12,6 +13,7 @@ internal class EventAggregatorTests
     private IEventAggregator _aggregator;
     ISubscription _subscription;
     IEventSubscriber<DummyEvent> _subscriber;
+    IDisposable _disposable;
 
     [SetUp]
     public void SetUp()
@@ -19,6 +21,16 @@ internal class EventAggregatorTests
         _aggregator = new EventAggregator();
         _subscription = Substitute.For<ISubscription>();
         _subscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
+        _disposable = Substitute.For<IDisposable>();
+        _subscription.When(x => x.AddSubscription(Arg.Any<IDisposable>()))
+            .Do(ci => _subscription.ObservableSubscription.Returns(_disposable));
+        _subscription.When(x => x.Dispose()).Do(ci =>
+        {
+            if (_subscription.ObservableSubscription != null && _subscription.ObservableSubscription != Disposable.Empty)
+            {
+                _subscription.ObservableSubscription.Dispose();
+            }
+        });
         _subscriber.Subscription.Returns(_subscription);
     }
 
@@ -142,7 +154,7 @@ internal class EventAggregatorTests
 
         // Assert
         act.Should().NotThrow();
-        _subscription.Received(1).Dispose();
+        _disposable.Received(1).Dispose();
     }
 
     [Test]
@@ -157,7 +169,7 @@ internal class EventAggregatorTests
 
         // Assert
         act.Should().NotThrow();
-        _subscription.ObservableSubscription.DidNotReceive().Dispose();
+        _disposable.DidNotReceive().Dispose();
     }
 
     [Test]

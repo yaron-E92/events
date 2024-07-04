@@ -1,8 +1,21 @@
-﻿namespace Yaref92.Events.Abstractions;
+﻿using System.Reactive.Disposables;
 
-public interface ISubscription : IDisposable
+namespace Yaref92.Events.Abstractions;
+
+public interface ISubscription
 {
     IDisposable ObservableSubscription { get; set; }
 
-    void AddSubscription(IDisposable subscription) => ObservableSubscription = subscription;
+    void AddSubscription(IDisposable subscription)
+    {
+        ObservableSubscription = subscription;
+    }
+
+    void Dispose()
+    {
+        if (ObservableSubscription != null && ObservableSubscription != Disposable.Empty)
+        {
+            ObservableSubscription.Dispose();
+        }
+    }
 }
