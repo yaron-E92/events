@@ -34,6 +34,9 @@ internal class EventAggregatorTests
         _subscriber.Subscription.Returns(_subscription);
     }
 
+    [TearDown]
+    public void TearDown() { _disposable.Dispose(); }
+
     [Test]
     public void RegisterEventType_AddsEventType_When_NotExisting()
     {
