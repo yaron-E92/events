@@ -38,7 +38,7 @@ jobs:
         useConfigFile: true
         configFilePath: '.github/GitVersion.yaml'
 
-  buildAndTestWithoutGUI:
+  buildAndTest:
     needs: [gitVersion]
     runs-on: ubuntu-latest
     permissions:
@@ -68,7 +68,7 @@ jobs:
           tests/**/TestResults/*.json
 
   tagAndRelease:
-    needs: [gitVersion, buildAndTestWithoutGUI, buildAndTestGUI]
+    needs: [gitVersion, buildAndTest]
     runs-on: ubuntu-latest
     if: contains(needs.gitVersion.outputs.branchName, 'main')
     permissions:
