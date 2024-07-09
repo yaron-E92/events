@@ -4,12 +4,9 @@ namespace Yaref92.Events.Abstractions;
 
 public interface ISubscription
 {
-    IDisposable ObservableSubscription { get; set; }
+    IDisposable ObservableSubscription { get; }
 
-    void AddSubscription(IDisposable subscription)
-    {
-        ObservableSubscription = subscription;
-    }
+    void AddSubscription(IDisposable subscription);
 
     void Dispose()
     {
