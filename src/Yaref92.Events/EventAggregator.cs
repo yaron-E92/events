@@ -1,39 +1,52 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 
 using Yaref92.Events.Abstractions;
+using System.Collections.Immutable;
 
 namespace Yaref92.Events;
 
 public class EventAggregator : IEventAggregator
 {
-
-    public ISet<Type> EventTypes { get; private set; }
+    private readonly ConcurrentDictionary<Type, byte> _eventTypes = new();
+    public ISet<Type> EventTypes => _eventTypes.Keys.ToImmutableHashSet();
 
     private readonly IObservable<IDomainEvent> _eventStream;
-    private readonly Subject<IDomainEvent> _subject;
+    private readonly ISubject<IDomainEvent> _subject;
+    private readonly ILogger<EventAggregator>? _logger;
 
-    public EventAggregator()
+    public EventAggregator() : this(null) { }
+
+    public EventAggregator(ILogger<EventAggregator>? logger)
     {
-        EventTypes = new HashSet<Type>();
-        _subject = new Subject<IDomainEvent>();
+        _logger = logger;
+        _subject = Subject.Synchronize(new Subject<IDomainEvent>());
         _eventStream = _subject.AsObservable();
     }
 
-    void IEventAggregator.RegisterEventType<T>()
+    public bool RegisterEventType<T>() where T : class, IDomainEvent
     {
-        if (!EventTypes.Add(typeof(T)))
+        var added = _eventTypes.TryAdd(typeof(T), 0);
+        if (!added)
         {
-            //TODO: When logging exists log the duplication of registration
-            return;
+            _logger?.LogWarning("Event type {EventType} is already registered.", typeof(T).FullName);
         }
+        return added;
     }
 
     void IEventAggregator.PublishEvent<T>(T domainEvent)
     {
-        if (!EventTypes.Contains(typeof(T)))
+        if (!_eventTypes.ContainsKey(typeof(T)))
         {
             throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
+        }
+
+        if (domainEvent is null)
+        {
+            _logger?.LogWarning("Attempted to publish a null event of type {EventType}.", typeof(T).FullName);
+            throw new ArgumentNullException(nameof(domainEvent), "Cannot publish a null event.");
         }
 
         _subject.OnNext(domainEvent);
@@ -41,7 +54,7 @@ public class EventAggregator : IEventAggregator
 
     void IEventAggregator.SubscribeToEventType<T>(IEventSubscriber<T> subscriber)
     {
-        if (!EventTypes.Contains(typeof(T)))
+        if (!_eventTypes.ContainsKey(typeof(T)))
         {
             throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
         }
@@ -52,7 +65,7 @@ public class EventAggregator : IEventAggregator
 
     void IEventAggregator.UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber)
     {
-        if (!EventTypes.Contains(typeof(T)))
+        if (!_eventTypes.ContainsKey(typeof(T)))
         {
             throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
         }
