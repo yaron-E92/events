@@ -4,6 +4,9 @@ using FluentAssertions;
 
 using NSubstitute;
 using System.Reactive.Disposables;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace Yaref92.Events.UnitTests;
 
@@ -14,11 +17,13 @@ internal class EventAggregatorTests
     ISubscription _subscription;
     IEventSubscriber<DummyEvent> _subscriber;
     IDisposable _disposable;
+    private ILogger<EventAggregator> _logger;
 
     [SetUp]
     public void SetUp()
     {
-        _aggregator = new EventAggregator();
+        _logger = Substitute.For<ILogger<EventAggregator>>();
+        _aggregator = new EventAggregator(_logger);
         _subscription = Substitute.For<ISubscription>();
         _subscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
         _disposable = Substitute.For<IDisposable>();
@@ -44,12 +49,12 @@ internal class EventAggregatorTests
         _aggregator.EventTypes.Should().HaveCount(0);
 
         // Act
-        _aggregator.RegisterEventType<DummyEvent>();
+        var result = _aggregator.RegisterEventType<DummyEvent>();
 
         // Assert
+        result.Should().BeTrue();
         _aggregator.EventTypes.Should().HaveCount(1);
         _aggregator.EventTypes.Should().Contain(typeof(DummyEvent));
-
     }
 
     [Test]
@@ -61,12 +66,12 @@ internal class EventAggregatorTests
         _aggregator.EventTypes.Should().OnlyContain(et => et.Equals(typeof(DummyEvent)));
 
         // Act
-        _aggregator.RegisterEventType<DummyEvent>();
+        var result = _aggregator.RegisterEventType<DummyEvent>();
 
         // Assert
+        result.Should().BeFalse();
         _aggregator.EventTypes.Should().HaveCount(1);
         _aggregator.EventTypes.Should().OnlyContain(et => et.Equals(typeof(DummyEvent)));
-
     }
 
     [Test]
@@ -187,5 +192,97 @@ internal class EventAggregatorTests
         // Assert
         act.Should().ThrowExactly<MissingEventTypeException>();
         _aggregator.EventTypes.Should().HaveCount(0);
+    }
+
+    [Test]
+    public void RegisterEventType_IsThreadSafe_When_CalledConcurrently()
+    {
+        // Arrange
+        const int threadCount = 20;
+        _aggregator.EventTypes.Should().HaveCount(0);
+        var tasks = new List<Task>();
+
+        // Act
+        for (int i = 0; i < threadCount; i++)
+        {
+            tasks.Add(Task.Run(() => _aggregator.RegisterEventType<DummyEvent>()));
+        }
+        Task.WaitAll(tasks.ToArray());
+
+        // Assert
+        _aggregator.EventTypes.Should().HaveCount(1);
+        _aggregator.EventTypes.Should().Contain(typeof(DummyEvent));
+    }
+
+    [Test]
+    public void PublishEvent_And_SubscribeToEventType_AreThreadSafe_When_CalledConcurrently()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        // Ensure at least one subscriber is present before publishing
+        _aggregator.SubscribeToEventType(_subscriber);
+        int publishCount = 100;
+        var tasks = new List<Task>();
+
+        // Act
+        for (int i = 0; i < publishCount; i++)
+        {
+            tasks.Add(Task.Run(() => _aggregator.PublishEvent(new DummyEvent())));
+            if (i % 10 == 0)
+            {
+                tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(_subscriber)));
+            }
+        }
+        Task.WaitAll(tasks.ToArray());
+
+        // Assert
+        // At least one OnNext should be received
+        _subscriber.ReceivedWithAnyArgs().OnNext(Arg.Any<DummyEvent>());
+    }
+
+    [Test]
+    public void PublishEvent_And_SubscribeToEventType_AreThreadSafe_NoExceptions_When_CalledConcurrently()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        int publishCount = 100;
+        var tasks = new List<Task>();
+
+        // Act & Assert
+        Action act = () =>
+        {
+            for (int i = 0; i < publishCount; i++)
+            {
+                tasks.Add(Task.Run(() => _aggregator.PublishEvent(new DummyEvent())));
+                if (i % 10 == 0)
+                {
+                    tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(_subscriber)));
+                }
+            }
+            Task.WaitAll(tasks.ToArray());
+        };
+
+        act.Should().NotThrow();
+    }
+
+    [Test]
+    public void PublishEvent_ThrowsArgumentNullException_And_LogsWarning_When_NullEvent()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+
+        // Act
+        Action act = () => _aggregator.PublishEvent<DummyEvent>(null);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>()
+            .And.ParamName.Should().Be("domainEvent");
+        _logger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>()
+        );
     }
 }

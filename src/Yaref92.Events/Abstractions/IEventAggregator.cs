@@ -4,7 +4,7 @@ public interface IEventAggregator
 {
     ISet<Type> EventTypes { get; }
 
-    void RegisterEventType<T>() where T : class, IDomainEvent;
+    bool RegisterEventType<T>() where T : class, IDomainEvent;
 
     void PublishEvent<T>(T domainEvent) where T : class, IDomainEvent;
 
