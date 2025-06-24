@@ -14,9 +14,7 @@ namespace Yaref92.Events.UnitTests;
 internal class EventAggregatorTests
 {
     private IEventAggregator _aggregator;
-    ISubscription _subscription;
-    IEventSubscriber<DummyEvent> _subscriber;
-    IDisposable _disposable;
+    private IEventSubscriber<DummyEvent> _subscriber;
     private ILogger<EventAggregator> _logger;
 
     [SetUp]
@@ -24,23 +22,22 @@ internal class EventAggregatorTests
     {
         _logger = Substitute.For<ILogger<EventAggregator>>();
         _aggregator = new EventAggregator(_logger);
-        _subscription = Substitute.For<ISubscription>();
         _subscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
-        _disposable = Substitute.For<IDisposable>();
-        _subscription.When(x => x.AddSubscription(Arg.Any<IDisposable>()))
-            .Do(ci => _subscription.ObservableSubscription.Returns(_disposable));
-        _subscription.When(x => x.Dispose()).Do(ci =>
-        {
-            if (_subscription.ObservableSubscription != null && _subscription.ObservableSubscription != Disposable.Empty)
-            {
-                _subscription.ObservableSubscription.Dispose();
-            }
-        });
-        _subscriber.Subscription.Returns(_subscription);
+        _subscriber.ClearReceivedCalls();
     }
 
     [TearDown]
-    public void TearDown() { _disposable.Dispose(); }
+    public void TearDown()
+    {
+        try
+        {
+            _aggregator.UnsubscribeFromEventType(_subscriber);
+        }
+        catch
+        {
+            /* ignore if not subscribed */
+        }
+    }
 
     [Test]
     public void RegisterEventType_AddsEventType_When_NotExisting()
@@ -96,6 +93,7 @@ internal class EventAggregatorTests
     {
         // Arrange
         _aggregator.RegisterEventType<DummyEvent>();
+        // Do not subscribe any subscriber for this test case.
         
         DummyEvent domainEvent = new();
 
@@ -132,7 +130,8 @@ internal class EventAggregatorTests
 
         // Assert
         act.Should().NotThrow();
-        _subscription.Received(1).AddSubscription(Arg.Any<IDisposable>());
+        _aggregator.Subscribers.Should().HaveCount(1);
+        _aggregator.Subscriptions.Should().HaveCount(1);
     }
 
     [Test]
@@ -155,14 +154,13 @@ internal class EventAggregatorTests
         // Arrange
         _aggregator.RegisterEventType<DummyEvent>();
         _aggregator.EventTypes.Should().HaveCount(1);
-        _aggregator.SubscribeToEventType<DummyEvent>(_subscriber);
+        _aggregator.SubscribeToEventType(_subscriber);
 
         // Act
         Action act = () => _aggregator.UnsubscribeFromEventType<DummyEvent>(_subscriber);
 
         // Assert
         act.Should().NotThrow();
-        _disposable.Received(1).Dispose();
     }
 
     [Test]
@@ -177,7 +175,6 @@ internal class EventAggregatorTests
 
         // Assert
         act.Should().NotThrow();
-        _disposable.DidNotReceive().Dispose();
     }
 
     [Test]
@@ -230,7 +227,7 @@ internal class EventAggregatorTests
             tasks.Add(Task.Run(() => _aggregator.PublishEvent(new DummyEvent())));
             if (i % 10 == 0)
             {
-                tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(_subscriber)));
+                tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(Substitute.For<IEventSubscriber<DummyEvent>>())));
             }
         }
         Task.WaitAll(tasks.ToArray());
@@ -256,7 +253,7 @@ internal class EventAggregatorTests
                 tasks.Add(Task.Run(() => _aggregator.PublishEvent(new DummyEvent())));
                 if (i % 10 == 0)
                 {
-                    tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(_subscriber)));
+                    tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(Substitute.For<IEventSubscriber<DummyEvent>>())));
                 }
             }
             Task.WaitAll(tasks.ToArray());
@@ -284,5 +281,37 @@ internal class EventAggregatorTests
             Arg.Any<Exception>(),
             Arg.Any<Func<object, Exception?, string>>()
         );
+    }
+
+    [Test]
+    public void SubscribeToEventType_AllowsMultipleSubscriptions_PerSubscriberAndEventType()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        var callCount = 0;
+        _aggregator.SubscribeToEventType(_subscriber);
+        _subscriber.When(x => x.OnNext(Arg.Any<DummyEvent>())).Do(_ => callCount++);
+
+        // Act
+        _aggregator.SubscribeToEventType(_subscriber);
+        _aggregator.PublishEvent(new DummyEvent());
+
+        // Assert
+        callCount.Should().Be(2, "each subscription should receive the event");
+    }
+
+    [Test]
+    public void UnsubscribeFromEventType_DisposesAllSubscriptions_ForSubscriberAndEventType()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        _aggregator.SubscribeToEventType(_subscriber);
+        _aggregator.SubscribeToEventType(_subscriber);
+        // Unsubscribe
+        _aggregator.UnsubscribeFromEventType(_subscriber);
+        // There is no direct way to access the disposables, but we can check that no further events are received
+        _aggregator.PublishEvent(new DummyEvent());
+        // Assert
+        _subscriber.DidNotReceive().OnNext(Arg.Any<DummyEvent>());
     }
 }
