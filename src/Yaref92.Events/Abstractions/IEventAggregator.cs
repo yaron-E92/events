@@ -3,6 +3,8 @@
 public interface IEventAggregator
 {
     ISet<Type> EventTypes { get; }
+    IReadOnlyCollection<IEventSubscriber> Subscribers { get; }
+    IReadOnlyCollection<IDisposable> Subscriptions { get; }
 
     bool RegisterEventType<T>() where T : class, IDomainEvent;
 
