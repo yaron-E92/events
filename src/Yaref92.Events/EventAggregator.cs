@@ -17,6 +17,11 @@ public class EventAggregator : IEventAggregator
     private readonly ISubject<IDomainEvent> _subject;
     private readonly ILogger<EventAggregator>? _logger;
 
+    private readonly ConcurrentDictionary<(Type, IEventSubscriber), List<IDisposable>> _subscriptionGroups = new();
+    public IReadOnlyCollection<IEventSubscriber> Subscribers => _subscriptionGroups.Keys.Select(k => k.Item2).ToImmutableHashSet();
+    public IReadOnlyCollection<IDisposable> Subscriptions => _subscriptionGroups.Values.SelectMany(v => v).ToImmutableHashSet();
+
+
     public EventAggregator() : this(null) { }
 
     public EventAggregator(ILogger<EventAggregator>? logger)
@@ -59,8 +64,13 @@ public class EventAggregator : IEventAggregator
             throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
         }
 
-        subscriber.Subscription.AddSubscription(_eventStream.OfType<T>()
-            .Subscribe(subscriber));
+        var subscription = _eventStream.OfType<T>().Subscribe(subscriber);
+        var key = (typeof(T), subscriber);
+        _subscriptionGroups.AddOrUpdate(
+            key,
+            _ => new List<IDisposable> { subscription },
+            (_, list) => { lock (list) { list.Add(subscription); } return list; }
+        );
     }
 
     void IEventAggregator.UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber)
@@ -70,6 +80,16 @@ public class EventAggregator : IEventAggregator
             throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
         }
 
-        subscriber.Subscription.Dispose();
+        var key = (typeof(T), subscriber);
+        if (_subscriptionGroups.TryRemove(key, out var disposables))
+        {
+            lock (disposables)
+            {
+                foreach (var d in disposables)
+                {
+                    d.Dispose();
+                }
+            }
+        }
     }
 }
