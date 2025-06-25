@@ -15,3 +15,12 @@ public interface IEventSubscriber<T> : IEventSubscriber where T : class, IDomain
 {
     void OnNext(T domainEvent);
 }
+
+/// <summary>
+/// Strongly typed asynchronous subscriber to a domain event.
+/// </summary>
+/// <typeparam name="T">A class implementing <see cref="IDomainEvent"/></typeparam>
+public interface IAsyncEventSubscriber<T> : IEventSubscriber where T : class, IDomainEvent
+{
+    Task OnNextAsync(T domainEvent);
+}
