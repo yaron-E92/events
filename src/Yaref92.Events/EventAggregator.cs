@@ -63,7 +63,7 @@ public class EventAggregator : IEventAggregator
         }
     }
 
-    void IEventAggregator.SubscribeToEventType<T>(IEventSubscriber<T> subscriber)
+    public virtual void SubscribeToEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
     {
         ValidateEventRegistration<T>();
         var dict = _subscribersByType.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<IEventSubscriber, byte>());
@@ -74,7 +74,7 @@ public class EventAggregator : IEventAggregator
         }
     }
 
-    void IEventAggregator.UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber)
+    public virtual void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
     {
         if (subscriber is null)
         {
