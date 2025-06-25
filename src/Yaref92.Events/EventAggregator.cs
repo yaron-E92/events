@@ -61,11 +61,18 @@ public class EventAggregator : IEventAggregator
             throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
         }
         var dict = _subscribersByType.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<IEventSubscriber, byte>());
-        dict.TryAdd(subscriber, 0);
+        if (!dict.TryAdd(subscriber, 0))
+        {
+            _logger?.LogWarning($"Subscriber {subscriber?.GetType().FullName} is already subscribed to event type {typeof(T).FullName}.");
+        }
     }
 
     void IEventAggregator.UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber)
     {
+        if (subscriber is null)
+        {
+            throw new ArgumentNullException(nameof(subscriber));
+        }
         if (!_eventTypes.ContainsKey(typeof(T)))
         {
             throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
