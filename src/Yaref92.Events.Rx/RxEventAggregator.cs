@@ -64,6 +64,7 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     {
         ValidateEvent(domainEvent);
         _subject.OnNext(domainEvent);
+        base.PublishEvent(domainEvent);
     }
 
     /// <summary>
