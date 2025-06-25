@@ -42,4 +42,6 @@ public interface IEventAggregator
     /// <typeparam name="T">The event type.</typeparam>
     /// <param name="subscriber">The subscriber instance.</param>
     void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent;
+
+    Task PublishEventAsync<T>(T domainEvent) where T : class, IDomainEvent;
 }
