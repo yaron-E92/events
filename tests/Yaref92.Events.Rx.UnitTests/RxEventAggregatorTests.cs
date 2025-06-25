@@ -1,9 +1,13 @@
-﻿using System.Reactive;
+﻿using System;
+using System.Reactive;
 using System.Reactive.Linq;
-
+using System.Threading.Tasks;
 using FluentAssertions;
-
+using NUnit.Framework;
+using NSubstitute;
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Rx;
+using Yaref92.Events.Rx.Abstractions;
 
 namespace Yaref92.Events.Rx.UnitTests;
 
@@ -19,84 +23,14 @@ public class RxEventAggregatorTests
         _aggregator.RegisterEventType<DummyEvent>();
     }
 
-    [Test]
-    public void SubscribeToEventTypeRx_ReceivesPublishedEvent()
+    [TearDown]
+    public void TearDown()
     {
-        // Arrange
-        DummyEvent received = null;
-        var subscription = _aggregator.SubscribeToEventTypeRx<DummyEvent>(Observer.Create<DummyEvent>(e => received = e));
-        var evt = new DummyEvent();
-
-        // Act
-        _aggregator.PublishEventRx(evt);
-
-        // Assert
-        received.Should().Be(evt);
-        subscription.Dispose();
+        _aggregator.Dispose();
     }
 
     [Test]
-    public void SubscribeToEventTypeRx_DoesNotReceiveAfterDispose()
-    {
-        // Arrange
-        DummyEvent received = null;
-        var subscription = _aggregator.SubscribeToEventTypeRx<DummyEvent>(Observer.Create<DummyEvent>(e => received = e));
-        var evt1 = new DummyEvent();
-        _aggregator.PublishEventRx(evt1);
-        subscription.Dispose();
-        var evt2 = new DummyEvent();
-
-        // Act
-        _aggregator.PublishEventRx(evt2);
-
-        // Assert
-        received.Should().Be(evt1);
-    }
-
-    [Test]
-    public void SubscribeToEventTypeRx_MultipleSubscribers_AllReceiveEvent()
-    {
-        // Arrange
-        DummyEvent received1 = null, received2 = null;
-        var sub1 = _aggregator.SubscribeToEventTypeRx<DummyEvent>(Observer.Create<DummyEvent>(e => received1 = e));
-        var sub2 = _aggregator.SubscribeToEventTypeRx<DummyEvent>(Observer.Create<DummyEvent>(e => received2 = e));
-        var evt = new DummyEvent();
-
-        // Act
-        _aggregator.PublishEventRx(evt);
-
-        // Assert
-        received1.Should().Be(evt);
-        received2.Should().Be(evt);
-        sub1.Dispose();
-        sub2.Dispose();
-    }
-
-    [Test]
-    public void SubscribeToEventTypeRx_DifferentEventTypes_Isolated()
-    {
-        // Arrange
-        _aggregator.RegisterEventType<OtherDummyEvent>();
-        DummyEvent receivedDummy = null;
-        OtherDummyEvent receivedOther = null;
-        var sub1 = _aggregator.SubscribeToEventTypeRx<DummyEvent>(Observer.Create<DummyEvent>(e => receivedDummy = e));
-        var sub2 = _aggregator.SubscribeToEventTypeRx<OtherDummyEvent>(Observer.Create<OtherDummyEvent>(e => receivedOther = e));
-        var evt1 = new DummyEvent();
-        var evt2 = new OtherDummyEvent();
-
-        // Act
-        _aggregator.PublishEventRx(evt1);
-        _aggregator.PublishEventRx(evt2);
-
-        // Assert
-        receivedDummy.Should().Be(evt1);
-        receivedOther.Should().Be(evt2);
-        sub1.Dispose();
-        sub2.Dispose();
-    }
-
-    [Test]
-    public async Task EventStream_ReceivesEvents_AsObservable()
+    public void EventStream_ReceivesEvents_AsObservable()
     {
         // Arrange
         DummyEvent received = null;
@@ -105,26 +39,127 @@ public class RxEventAggregatorTests
         var sub = _aggregator.EventStream.OfType<DummyEvent>().Subscribe(e => { received = e; tcs.SetResult(true); });
 
         // Act
-        _aggregator.PublishEventRx(evt);
-        await tcs.Task.TimeoutAfter(TimeSpan.FromSeconds(1));
+        _aggregator.PublishEvent(evt);
+        tcs.Task.Wait(TimeSpan.FromSeconds(1));
 
         // Assert
         received.Should().Be(evt);
         sub.Dispose();
+    }
+
+    public class RxDummySubscriber : IRxSubscriber<DummyEvent>
+    {
+        public DummyEvent ReceivedEvent { get; private set; }
+        public int OnNextCount { get; private set; }
+        public void OnNext(DummyEvent value)
+        {
+            ReceivedEvent = value;
+            OnNextCount++;
+        }
+        public void OnError(Exception error) { }
+        public void OnCompleted() { }
+    }
+
+    [Test]
+    public void SubscribeAndUnsubscribe_RxSubscriber_ViaUnifiedApi_Works()
+    {
+        // Arrange
+        var rxSubscriber = new RxDummySubscriber();
+
+        // Act
+        _aggregator.SubscribeToEventType(rxSubscriber);
+        var evt = new DummyEvent();
+        _aggregator.PublishEvent(evt);
+        _aggregator.UnsubscribeFromEventType(rxSubscriber);
+        _aggregator.PublishEvent(new DummyEvent());
+
+        // Assert
+        rxSubscriber.ReceivedEvent.Should().Be(evt);
+        rxSubscriber.OnNextCount.Should().Be(1);
+    }
+
+    [Test]
+    public void UnsubscribeFromEventType_RxSubscriber_IsIdempotent()
+    {
+        // Arrange
+        var rxSubscriber = new RxDummySubscriber();
+        _aggregator.SubscribeToEventType(rxSubscriber);
+        _aggregator.UnsubscribeFromEventType(rxSubscriber);
+
+        // Act & Assert
+        _aggregator.Invoking(a => a.UnsubscribeFromEventType(rxSubscriber)).Should().NotThrow();
+    }
+
+    [Test]
+    public void PublishEvent_MixedRegularAndRxSubscribers_BothReceiveEvent()
+    {
+        // Arrange
+        var rxSubscriber = new RxDummySubscriber();
+        var regularSubscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
+        _aggregator.SubscribeToEventType(rxSubscriber);
+        _aggregator.SubscribeToEventType(regularSubscriber);
+        var evt = new DummyEvent();
+
+        // Act
+        _aggregator.PublishEvent(evt);
+
+        // Assert
+        rxSubscriber.ReceivedEvent.Should().Be(evt);
+        regularSubscriber.Received(1).OnNext(evt);
+    }
+
+    [Test]
+    public void Dispose_DisposesAllRxSubscriptions()
+    {
+        // Arrange
+        var rxSubscriber = new RxDummySubscriber();
+        _aggregator.SubscribeToEventType(rxSubscriber);
+        _aggregator.Dispose();
+
+        // Act
+        // After dispose, publishing should not deliver to Rx subscriber
+        _aggregator.PublishEvent(new DummyEvent());
+
+        // Assert
+        rxSubscriber.OnNextCount.Should().Be(0);
+    }
+
+    [Test]
+    public void PublishEvent_DifferentEventTypes_AreIsolated()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<OtherDummyEvent>();
+        var dummySubscriber = new RxDummySubscriber();
+        var otherSubscriber = new OtherRxDummySubscriber();
+        _aggregator.SubscribeToEventType(dummySubscriber);
+        _aggregator.SubscribeToEventType(otherSubscriber);
+        var dummyEvent = new DummyEvent();
+        var otherEvent = new OtherDummyEvent();
+
+        // Act
+        _aggregator.PublishEvent(dummyEvent);
+        _aggregator.PublishEvent(otherEvent);
+
+        // Assert
+        dummySubscriber.ReceivedEvent.Should().Be(dummyEvent);
+        otherSubscriber.ReceivedEvent.Should().Be(otherEvent);
+    }
+
+    public class OtherRxDummySubscriber : IRxSubscriber<OtherDummyEvent>
+    {
+        public OtherDummyEvent ReceivedEvent { get; private set; }
+        public int OnNextCount { get; private set; }
+        public void OnNext(OtherDummyEvent value)
+        {
+            ReceivedEvent = value;
+            OnNextCount++;
+        }
+        public void OnError(Exception error) { }
+        public void OnCompleted() { }
     }
 }
 
 public class OtherDummyEvent : IDomainEvent
 {
     public DateTime DateTimeOccurredUtc => DateTime.UtcNow;
-}
-
-public static class TaskExtensions
-{
-    public static async Task TimeoutAfter(this Task task, TimeSpan timeout)
-    {
-        if (await Task.WhenAny(task, Task.Delay(timeout)) != task)
-            throw new TimeoutException();
-        await task;
-    }
 } 
