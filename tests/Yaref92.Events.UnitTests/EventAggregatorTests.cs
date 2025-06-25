@@ -424,6 +424,74 @@ internal class EventAggregatorTests
         // Assert
         act.Should().Throw<ArgumentNullException>();
     }
+
+    [Test]
+    public async Task PublishEventAsync_CallsOnEvent_When_EventTypeAlreadyRegisteredAndRelevantSubscriberExists()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        _aggregator.SubscribeToEventType(_subscriber);
+        DummyEvent domainEvent = new();
+
+        // Act
+        await _aggregator.PublishEventAsync(domainEvent);
+
+        // Assert
+        _subscriber.Received(1).OnNext(domainEvent);
+    }
+
+    [Test]
+    public async Task PublishEventAsync_WorksWithSubscriberDoingAsyncWorkInternally()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        var completionSource = new TaskCompletionSource<bool>();
+        var asyncSubscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
+        asyncSubscriber.When(x => x.OnNext(Arg.Any<DummyEvent>())).Do(_ =>
+        {
+            Task.Run(async () =>
+            {
+                await Task.Delay(50); // Simulate async work
+                completionSource.SetResult(true);
+            });
+        });
+        _aggregator.SubscribeToEventType(asyncSubscriber);
+        DummyEvent domainEvent = new();
+
+        // Act
+        await _aggregator.PublishEventAsync(domainEvent);
+        var completed = await Task.WhenAny(completionSource.Task, Task.Delay(500));
+
+        // Assert
+        asyncSubscriber.Received(1).OnNext(domainEvent);
+        completionSource.Task.IsCompleted.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task PublishEventAsync_ThrowsException_When_EventTypeIsNotRegistered()
+    {
+        // Arrange
+        DummyEvent domainEvent = new();
+
+        // Act
+        Func<Task> act = async () => await _aggregator.PublishEventAsync(domainEvent);
+
+        // Assert
+        await act.Should().ThrowAsync<MissingEventTypeException>();
+    }
+
+    [Test]
+    public async Task PublishEventAsync_ThrowsArgumentNullException_When_NullEvent()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+
+        // Act
+        Func<Task> act = async () => await _aggregator.PublishEventAsync<DummyEvent>(null);
+
+        // Assert
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
 }
 
 public class OtherDummyEvent : IDomainEvent
