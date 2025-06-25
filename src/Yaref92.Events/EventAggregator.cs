@@ -2,7 +2,6 @@
 using Microsoft.Extensions.Logging;
 using Yaref92.Events.Abstractions;
 using System.Collections.Immutable;
-using System.Linq;
 
 namespace Yaref92.Events;
 
@@ -32,18 +31,9 @@ public class EventAggregator : IEventAggregator
         return added;
     }
 
-    void IEventAggregator.PublishEvent<T>(T domainEvent)
+    public virtual void PublishEvent<T>(T domainEvent) where T : class, IDomainEvent
     {
-        if (!_eventTypes.ContainsKey(typeof(T)))
-        {
-            throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
-        }
-
-        if (domainEvent is null)
-        {
-            _logger?.LogWarning("Attempted to publish a null event of type {EventType}.", typeof(T).FullName);
-            throw new ArgumentNullException(nameof(domainEvent), "Cannot publish a null event.");
-        }
+        ValidateEvent(domainEvent);
 
         if (_subscribersByType.TryGetValue(typeof(T), out var subscribers))
         {
@@ -54,16 +44,33 @@ public class EventAggregator : IEventAggregator
         }
     }
 
-    void IEventAggregator.SubscribeToEventType<T>(IEventSubscriber<T> subscriber)
+    protected void ValidateEvent<T>(T domainEvent) where T : class, IDomainEvent
+    {
+        ValidateEventRegistration<T>();
+
+        if (domainEvent is null)
+        {
+            _logger?.LogError("Attempted to publish a null event of type {EventType}.", typeof(T).FullName);
+            throw new ArgumentNullException(nameof(domainEvent), "Cannot publish a null event.");
+        }
+    }
+
+    protected void ValidateEventRegistration<T>() where T : class, IDomainEvent
     {
         if (!_eventTypes.ContainsKey(typeof(T)))
         {
             throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
         }
+    }
+
+    void IEventAggregator.SubscribeToEventType<T>(IEventSubscriber<T> subscriber)
+    {
+        ValidateEventRegistration<T>();
         var dict = _subscribersByType.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<IEventSubscriber, byte>());
         if (!dict.TryAdd(subscriber, 0))
         {
-            _logger?.LogWarning($"Subscriber {subscriber?.GetType().FullName} is already subscribed to event type {typeof(T).FullName}.");
+            _logger?.LogWarning("Subscriber {SubscriberType} is already subscribed to event type {EventType}.",
+                subscriber?.GetType().FullName, typeof(T).FullName);
         }
     }
 
@@ -71,12 +78,10 @@ public class EventAggregator : IEventAggregator
     {
         if (subscriber is null)
         {
+            _logger?.LogError("Attempted to unsubscribe a null subscriber of type {SubscriberType}.", typeof(IEventSubscriber<T>).FullName);
             throw new ArgumentNullException(nameof(subscriber));
         }
-        if (!_eventTypes.ContainsKey(typeof(T)))
-        {
-            throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
-        }
+        ValidateEventRegistration<T>();
         if (_subscribersByType.TryGetValue(typeof(T), out var dict))
         {
             dict.TryRemove(subscriber, out _);
