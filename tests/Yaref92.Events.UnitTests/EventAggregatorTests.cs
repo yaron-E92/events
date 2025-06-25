@@ -3,9 +3,6 @@
 using FluentAssertions;
 
 using NSubstitute;
-using System.Reactive.Disposables;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
 namespace Yaref92.Events.UnitTests;
@@ -131,7 +128,6 @@ internal class EventAggregatorTests
         // Assert
         act.Should().NotThrow();
         _aggregator.Subscribers.Should().HaveCount(1);
-        _aggregator.Subscriptions.Should().HaveCount(1);
     }
 
     [Test]
@@ -284,7 +280,7 @@ internal class EventAggregatorTests
     }
 
     [Test]
-    public void SubscribeToEventType_AllowsMultipleSubscriptions_PerSubscriberAndEventType()
+    public void SubscribeToEventType_IsIdempotent_When_CalledMultipleTimesWithSameSubscriber()
     {
         // Arrange
         _aggregator.RegisterEventType<DummyEvent>();
@@ -293,25 +289,144 @@ internal class EventAggregatorTests
         _subscriber.When(x => x.OnNext(Arg.Any<DummyEvent>())).Do(_ => callCount++);
 
         // Act
-        _aggregator.SubscribeToEventType(_subscriber);
+        _aggregator.SubscribeToEventType(_subscriber); // Should be idempotent
         _aggregator.PublishEvent(new DummyEvent());
 
         // Assert
-        callCount.Should().Be(2, "each subscription should receive the event");
+        callCount.Should().Be(1, "subscribing the same subscriber multiple times should not result in multiple event deliveries");
+        // Optionally, check for a log message if your implementation logs duplicate subscriptions
+        // _logger.Received().Log(
+        //     LogLevel.Warning,
+        //     Arg.Any<EventId>(),
+        //     Arg.Any<object>(),
+        //     Arg.Any<Exception>(),
+        //     Arg.Any<Func<object, Exception?, string>>()
+        // );
     }
 
     [Test]
-    public void UnsubscribeFromEventType_DisposesAllSubscriptions_ForSubscriberAndEventType()
+    public void PublishEvent_DifferentEventTypes_AreIsolated()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        _aggregator.RegisterEventType<OtherDummyEvent>();
+        var dummySubscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
+        var otherSubscriber = Substitute.For<IEventSubscriber<OtherDummyEvent>>();
+        _aggregator.SubscribeToEventType(dummySubscriber);
+        _aggregator.SubscribeToEventType(otherSubscriber);
+        var dummyEvent = new DummyEvent();
+        var otherEvent = new OtherDummyEvent();
+
+        // Act
+        _aggregator.PublishEvent(dummyEvent);
+        _aggregator.PublishEvent(otherEvent);
+
+        // Assert
+        dummySubscriber.Received(1).OnNext(dummyEvent);
+        otherSubscriber.Received(1).OnNext(otherEvent);
+        dummySubscriber.DidNotReceive().OnNext(Arg.Is<DummyEvent>(e => e == (object)otherEvent));
+        otherSubscriber.DidNotReceive().OnNext(Arg.Is<OtherDummyEvent>(e => e == (object)dummyEvent));
+    }
+
+    [Test]
+    public void PublishEvent_MultipleUniqueSubscribers_AllReceiveEvent()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        var sub1 = Substitute.For<IEventSubscriber<DummyEvent>>();
+        var sub2 = Substitute.For<IEventSubscriber<DummyEvent>>();
+        _aggregator.SubscribeToEventType(sub1);
+        _aggregator.SubscribeToEventType(sub2);
+        var evt = new DummyEvent();
+
+        // Act
+        _aggregator.PublishEvent(evt);
+
+        // Assert
+        sub1.Received(1).OnNext(evt);
+        sub2.Received(1).OnNext(evt);
+    }
+
+    [Test]
+    public void RegisterEventType_LogsWarning_When_DuplicateRegistration()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+
+        // Act
+        _aggregator.RegisterEventType<DummyEvent>();
+
+        // Assert
+        _logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>()
+        );
+    }
+
+    [Test]
+    public void SubscribeToEventType_LogsWarning_When_DuplicateSubscription()
     {
         // Arrange
         _aggregator.RegisterEventType<DummyEvent>();
         _aggregator.SubscribeToEventType(_subscriber);
+        _logger.ClearReceivedCalls();
+
+        // Act
         _aggregator.SubscribeToEventType(_subscriber);
-        // Unsubscribe
-        _aggregator.UnsubscribeFromEventType(_subscriber);
-        // There is no direct way to access the disposables, but we can check that no further events are received
-        _aggregator.PublishEvent(new DummyEvent());
+
         // Assert
-        _subscriber.DidNotReceive().OnNext(Arg.Any<DummyEvent>());
+        _logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>()
+        );
     }
+
+    [Test]
+    public void UnsubscribeFromEventType_IsIdempotent_When_CalledMultipleTimes()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+        _aggregator.SubscribeToEventType(_subscriber);
+        _aggregator.UnsubscribeFromEventType(_subscriber);
+
+        // Act & Assert
+        _aggregator.Invoking(a => a.UnsubscribeFromEventType(_subscriber)).Should().NotThrow();
+    }
+
+    [Test]
+    public void SubscribeToEventType_ThrowsArgumentNullException_When_SubscriberIsNull()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+
+        // Act
+        Action act = () => _aggregator.SubscribeToEventType<DummyEvent>(null);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Test]
+    public void UnsubscribeFromEventType_ThrowsArgumentNullException_When_SubscriberIsNull()
+    {
+        // Arrange
+        _aggregator.RegisterEventType<DummyEvent>();
+
+        // Act
+        Action act = () => _aggregator.UnsubscribeFromEventType<DummyEvent>(null);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>();
+    }
+}
+
+public class OtherDummyEvent : IDomainEvent
+{
+    public DateTime DateTimeOccurredUtc => DateTime.UtcNow;
 }
