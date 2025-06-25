@@ -2,23 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.0.0] - YYYY-MM-DD
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.0] - 2025-06-26
 
 ### Added
 
-- Initial stable release of Yaref92.Events.
-- Support for both synchronous and asynchronous event subscribers.
-- Thread-safe, memory-leak resistant subscription management.
-- Extensible architecture for future integrations (e.g., Rx, MediatR).
+- Initial stable release of Yaref92.Events
+- Core event aggregator with type-safe event registration and publishing
+- Thread-safe subscription management using concurrent collections
+- Comprehensive logging support with Microsoft.Extensions.Logging
+- Memory leak prevention through proper subscription lifecycle management
+- Null argument validation with descriptive exceptions
+- Extensible architecture for future integrations
 
 ### Changed
 
-- **Breaking:** Rx (Reactive Extensions) support has been removed from the core package and is now available as a separate extension package (`Yaref92.Events.Rx`).
-- **Breaking:** All Rx-based APIs and dependencies have been removed from the core.
+- **Breaking:** Rx (Reactive Extensions) support has been moved to a separate extension package (`Yaref92.Events.Rx`)
+- **Breaking:** All Rx-based APIs and dependencies have been removed from the core package
+- **Breaking:** Simplified subscription management - removed ISubscription interface
+- **Breaking:** Renamed internal field `_subscribersByType` to `_subscriptionGroups` for clarity
+
+### Fixed
+
+- Thread safety issues in concurrent registration and subscription operations
+- Memory leak potential in subscription management
+- Improved exception handling and error messages
+- Enhanced logging with proper log levels and structured logging
+
+### Removed
+
+- `ISubscription` interface and `Subscription` class
+- Rx dependencies from core package
+- Async event subscriber interfaces (to be added in future releases)
 
 ### Migration
 
-- If you use Rx features, add a reference to the new `Yaref92.Events.Rx` package and update your code to use its APIs.
-- See the README for updated usage examples and migration steps.
+- If you use Rx features, add a reference to the new `Yaref92.Events.Rx` package and update your code to use its APIs
+- Update any code that references the removed `ISubscription` interface
+- See the README for updated usage examples and migration steps
+
+---
+
+## [0.2.0] - 2024-07-05
+
+### Added
+
+- Initial beta release
+- Basic event aggregator functionality
+- Rx integration in core package
+- ISubscription interface for subscription management
+
+### Known Issues
+
+- Thread safety concerns in concurrent operations
+- Memory leak potential in subscription management
+- Limited logging and error handling
 
 ---

@@ -11,6 +11,7 @@ public interface IEventSubscriber
 /// Strongly typed synchronous subscriber to a domain event.
 /// </summary>
 /// <typeparam name="T">A class implementing <see cref="IDomainEvent"/></typeparam>
-public interface IEventSubscriber<T> : IEventSubscriber, IObserver<T> where T : class, IDomainEvent
+public interface IEventSubscriber<T> : IEventSubscriber where T : class, IDomainEvent
 {
+    void OnNext(T domainEvent);
 }

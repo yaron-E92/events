@@ -16,11 +16,6 @@ public interface IEventAggregator
     IReadOnlyCollection<IEventSubscriber> Subscribers { get; }
 
     /// <summary>
-    /// Gets the collection of all current subscriptions.
-    /// </summary>
-    IReadOnlyCollection<IDisposable> Subscriptions { get; }
-
-    /// <summary>
     /// Registers a new event type.
     /// </summary>
     /// <typeparam name="T">The event type to register.</typeparam>
