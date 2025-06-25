@@ -81,8 +81,14 @@ jobs:
       run: |
           git config --global user.name "Github actions: gitversion"
           git config --global user.email "gitversion@github-actions.com"
-          git tag -a "${{ needs.gitVersion.outputs.semVer}}" -m "Version ${{ needs.gitVersion.outputs.semVer}}"
-          git push --tags
+          # Check if tag already exists
+          if git rev-parse "${{ needs.gitVersion.outputs.semVer}}" >/dev/null 2>&1; then
+            echo "Tag ${{ needs.gitVersion.outputs.semVer}} already exists, skipping tag creation"
+          else
+            echo "Creating tag ${{ needs.gitVersion.outputs.semVer}}"
+            git tag -a "${{ needs.gitVersion.outputs.semVer}}" -m "Version ${{ needs.gitVersion.outputs.semVer}}"
+            git push --tags
+          fi
     - name: Pack Nuget
       run: dotnet pack -c Release -o out ./Yaref92.Events.sln
     - name: Release NuGet package
