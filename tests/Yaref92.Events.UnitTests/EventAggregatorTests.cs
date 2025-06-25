@@ -259,7 +259,7 @@ internal class EventAggregatorTests
     }
 
     [Test]
-    public void PublishEvent_ThrowsArgumentNullException_And_LogsWarning_When_NullEvent()
+    public void PublishEvent_ThrowsArgumentNullException_And_LogsError_When_NullEvent()
     {
         // Arrange
         _aggregator.RegisterEventType<DummyEvent>();
@@ -271,7 +271,7 @@ internal class EventAggregatorTests
         act.Should().Throw<ArgumentNullException>()
             .And.ParamName.Should().Be("domainEvent");
         _logger.Received(1).Log(
-            LogLevel.Warning,
+            LogLevel.Error,
             Arg.Any<EventId>(),
             Arg.Any<object>(),
             Arg.Any<Exception>(),
