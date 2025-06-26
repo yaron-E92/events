@@ -77,6 +77,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Fetch all tags
+      run: git fetch --tags --force
     - name: Tag on main
       run: |
           git config --global user.name "Github actions: gitversion"
