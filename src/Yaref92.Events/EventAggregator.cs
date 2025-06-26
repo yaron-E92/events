@@ -2,6 +2,8 @@
 using Microsoft.Extensions.Logging;
 using Yaref92.Events.Abstractions;
 using System.Collections.Immutable;
+using System.Threading.Tasks;
+using System.Collections.Generic;
 
 namespace Yaref92.Events;
 
@@ -195,6 +197,66 @@ public class EventAggregator : IEventAggregator
             foreach (var subscriber in subscribers.Keys.OfType<IEventSubscriber<T>>())
             {
                 subscriber.OnNext(domainEvent);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Publishes an event asynchronously to all registered subscribers of the specified event type.
+    /// </summary>
+    /// <typeparam name="T">The event type. Must be a registered event type.</typeparam>
+    /// <param name="domainEvent">The event instance to publish. Cannot be null.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="domainEvent"/> is null.
+    /// </exception>
+    /// <exception cref="MissingEventTypeException">
+    /// Thrown when the event type <typeparamref name="T"/> has not been registered.
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// This method publishes the event to all subscribers that have subscribed to the specified
+    /// event type. The event is delivered asynchronously to each subscriber.
+    /// </para>
+    /// <para>
+    /// If any subscriber throws an exception during event processing, the exception will not
+    /// be caught by this method. It is the responsibility of the subscriber to handle its own
+    /// exceptions appropriately.
+    /// </para>
+    /// <para>
+    /// This method is thread-safe and can be called concurrently from multiple threads.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// var aggregator = new EventAggregator();
+    /// aggregator.RegisterEventType&lt;UserRegisteredEvent&gt;();
+    /// aggregator.SubscribeToEventType(new WelcomeEmailSender());
+    /// 
+    /// // Publish the event
+    /// await aggregator.PublishEventAsync(new UserRegisteredEvent("user-123"));
+    /// </code>
+    /// </example>
+    public virtual async Task PublishEventAsync<T>(T domainEvent) where T : class, IDomainEvent
+    {
+        ValidateEvent(domainEvent);
+
+        if (_subscribersByType.TryGetValue(typeof(T), out var subscribers))
+        {
+            var tasks = new List<Task>();
+            foreach (var subscriber in subscribers.Keys)
+            {
+                if (subscriber is IAsyncEventSubscriber<T> asyncSubscriber)
+                {
+                    tasks.Add(asyncSubscriber.OnNextAsync(domainEvent));
+                }
+                else if (subscriber is IEventSubscriber<T> syncSubscriber)
+                {
+                    syncSubscriber.OnNext(domainEvent);
+                }
+            }
+            if (tasks.Count > 0)
+            {
+                await Task.WhenAll(tasks);
             }
         }
     }
