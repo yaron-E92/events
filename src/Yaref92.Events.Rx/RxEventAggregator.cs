@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Threading.Tasks;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Rx.Abstractions;
@@ -146,35 +147,51 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// </example>
     public override void SubscribeToEventType<T>(IEventSubscriber<T> subscriber)
     {
+        ValidateEventRegistration<T>();
         if (subscriber is IRxSubscriber<T> rxSubscriber)
         {
-            SubscribeToEventTypeRx(rxSubscriber);
+            SubscribeRxSubscriber<T>(rxSubscriber);
         }
         else
         {
-            base.SubscribeToEventType(subscriber);
+            SubscribeSubscriber<T>(subscriber);
         }
     }
 
     /// <summary>
-    /// Subscribes an Rx subscriber to the event stream for a specific event type.
+    /// Subscribes an asynchronous subscriber to an event type, with special handling for Rx async subscribers.
+    /// </summary>
+    /// <typeparam name="T">The event type to subscribe to. Must be a registered event type.</typeparam>
+    /// <param name="subscriber">The async subscriber instance. Cannot be null.</param>
+    /// <remarks>
+    /// If the subscriber implements <see cref="IAsyncRxSubscriber{T}"/>, it will be subscribed to the Rx event stream and managed for disposal.
+    /// Otherwise, it will be handled by the base EventAggregator logic.
+    /// </remarks>
+    public override void SubscribeToEventType<T>(IAsyncEventSubscriber<T> subscriber)
+    {
+        ValidateEventRegistration<T>();
+        if (subscriber is IAsyncRxSubscriber<T> rxSubscriber)
+        {
+            SubscribeRxSubscriber<T>(rxSubscriber);
+        }
+        else
+        {
+            SubscribeSubscriber<T>(subscriber);
+        }
+    }
+
+    /// <summary>
+    /// Subscribes an Rx subscriber (sync or async) to the event stream for a specific event type.
     /// </summary>
     /// <typeparam name="T">The event type to subscribe to.</typeparam>
-    /// <param name="observer">The Rx subscriber to subscribe.</param>
+    /// <param name="subscriber">The Rx subscriber to subscribe.</param>
     /// <remarks>
-    /// <para>
-    /// This method creates an Rx subscription that filters the event stream for the
-    /// specified event type and forwards events to the Rx subscriber.
-    /// </para>
-    /// <para>
-    /// The subscription is tracked internally and will be automatically disposed
-    /// when the aggregator is disposed or when the subscriber is unsubscribed.
-    /// </para>
+    /// The subscription is tracked internally and will be automatically disposed when the aggregator is disposed or when the subscriber is unsubscribed.
     /// </remarks>
-    private void SubscribeToEventTypeRx<T>(IRxSubscriber<T> observer) where T : class, IDomainEvent
+    private void SubscribeRxSubscriber<T>(IRxSubscriber subscriber) where T : class, IDomainEvent
     {
-        var subscription = _eventStream.OfType<T>().Subscribe(observer);
-        _rxSubscriptions.TryAdd((typeof(T), observer), subscription);
+        var subscription = _eventStream.OfType<T>().Subscribe((IObserver<T>) subscriber);
+        _rxSubscriptions.TryAdd((typeof(T), subscriber), subscription);
     }
 
     /// <summary>
@@ -191,31 +208,50 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// </remarks>
     public override void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber)
     {
-        
         if (subscriber is IRxSubscriber<T> rxSubscriber)
         {
-            UnsubscribeRx(rxSubscriber);
+            UnsubscribeRxSubscriber<T>(rxSubscriber);
         }
         else
         {
-            base.UnsubscribeFromEventType(subscriber);
+            UnsubscribeSubscriber<T>(subscriber);
         }
     }
 
     /// <summary>
-    /// Unsubscribes an Rx subscriber and disposes its Rx subscription.
+    /// Unsubscribes an asynchronous subscriber from an event type, with special handling for Rx async subscribers.
+    /// </summary>
+    /// <typeparam name="T">The event type to unsubscribe from. Must be a registered event type.</typeparam>
+    /// <param name="subscriber">The async subscriber instance to unsubscribe. Cannot be null.</param>
+    /// <remarks>
+    /// If the subscriber implements <see cref="IAsyncRxSubscriber{T}"/>, its Rx subscription will be disposed.
+    /// Otherwise, it will be handled by the base EventAggregator logic.
+    /// </remarks>
+    public override void UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T> subscriber)
+    {
+        if (subscriber is IAsyncRxSubscriber<T> rxSubscriber)
+        {
+            UnsubscribeRxSubscriber<T>(rxSubscriber);
+        }
+        else
+        {
+            UnsubscribeSubscriber<T>(subscriber);
+        }
+    }
+
+    /// <summary>
+    /// Unsubscribes an Rx subscriber (sync or async) and disposes its Rx subscription.
     /// </summary>
     /// <typeparam name="T">The event type to unsubscribe from.</typeparam>
-    /// <param name="observer">The Rx subscriber to unsubscribe.</param>
+    /// <param name="subscriber">The Rx subscriber to unsubscribe.</param>
     /// <remarks>
-    /// <para>
-    /// This method removes the Rx subscription from the tracking dictionary and
-    /// disposes it to prevent memory leaks.
-    /// </para>
+    /// This method removes the Rx subscription from the tracking dictionary and disposes it to prevent memory leaks.
     /// </remarks>
-    private void UnsubscribeRx<T>(IRxSubscriber<T> observer) where T : class, IDomainEvent
+    private void UnsubscribeRxSubscriber<T>(IRxSubscriber subscriber) where T : class, IDomainEvent
     {
-        if (_rxSubscriptions.TryRemove((typeof(T), observer), out var disposable))
+        ValidateSubscriber((IEventSubscriber) subscriber, typeof(IEventSubscriber<T>));
+        ValidateEventRegistration<T>();
+        if (_rxSubscriptions.TryRemove((typeof(T), subscriber), out var disposable))
         {
             disposable.Dispose();
         }
@@ -242,6 +278,29 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
         ValidateEvent(domainEvent);
         _subject.OnNext(domainEvent);
         base.PublishEvent(domainEvent);
+    }
+
+    /// <summary>
+    /// Publishes an event to both the Rx event stream and traditional subscribers asynchronously.
+    /// </summary>
+    /// <typeparam name="T">The event type. Must be a registered event type.</typeparam>
+    /// <param name="domainEvent">The event instance to publish. Cannot be null.</param>
+    /// <remarks>
+    /// <para>
+    /// This method extends the base publishing behavior to also publish events to
+    /// the Rx event stream. Events are first validated, then published to the Rx
+    /// stream, and finally delivered to traditional subscribers.
+    /// </para>
+    /// <para>
+    /// This ensures that both Rx subscribers and traditional subscribers receive
+    /// the same events in a consistent manner.
+    /// </para>
+    /// </remarks>
+    public override async Task PublishEventAsync<T>(T domainEvent)
+    {
+        ValidateEvent(domainEvent);
+        _subject.OnNext(domainEvent);
+        await base.PublishEventAsync(domainEvent);
     }
 
     /// <summary>
