@@ -406,7 +406,7 @@ internal class EventAggregatorTests
         _aggregator.RegisterEventType<DummyEvent>();
 
         // Act
-        Action act = () => _aggregator.SubscribeToEventType<DummyEvent>(null);
+        Action act = () => _aggregator.SubscribeToEventType(null as IEventSubscriber<DummyEvent>);
 
         // Assert
         act.Should().Throw<ArgumentNullException>();
@@ -419,7 +419,7 @@ internal class EventAggregatorTests
         _aggregator.RegisterEventType<DummyEvent>();
 
         // Act
-        Action act = () => _aggregator.UnsubscribeFromEventType<DummyEvent>(null);
+        Action act = () => _aggregator.UnsubscribeFromEventType(null as IEventSubscriber<DummyEvent>);
 
         // Assert
         act.Should().Throw<ArgumentNullException>();
@@ -491,6 +491,84 @@ internal class EventAggregatorTests
 
         // Assert
         await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    private class DummyAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+    {
+        public TaskCompletionSource<DummyEvent> Received { get; } = new();
+        public Task OnNextAsync(DummyEvent domainEvent)
+        {
+            Received.TrySetResult(domainEvent);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Test]
+    public async Task AsyncSubscriber_ReceivesEvent_OnPublishEventAsync()
+    {
+        _aggregator.RegisterEventType<DummyEvent>();
+        var asyncSubscriber = new DummyAsyncSubscriber();
+        _aggregator.SubscribeToEventType(asyncSubscriber);
+        var evt = new DummyEvent();
+        await _aggregator.PublishEventAsync(evt);
+        (await asyncSubscriber.Received.Task).Should().Be(evt);
+    }
+
+    [Test]
+    public async Task MultipleAsyncSubscribers_AllReceiveEvent()
+    {
+        _aggregator.RegisterEventType<DummyEvent>();
+        var sub1 = new DummyAsyncSubscriber();
+        var sub2 = new DummyAsyncSubscriber();
+        _aggregator.SubscribeToEventType(sub1);
+        _aggregator.SubscribeToEventType(sub2);
+        var evt = new DummyEvent();
+        await _aggregator.PublishEventAsync(evt);
+        (await sub1.Received.Task).Should().Be(evt);
+        (await sub2.Received.Task).Should().Be(evt);
+    }
+
+    [Test]
+    public async Task MixedSyncAndAsyncSubscribers_AllReceiveEvent()
+    {
+        _aggregator.RegisterEventType<DummyEvent>();
+        var asyncSub = new DummyAsyncSubscriber();
+        _aggregator.SubscribeToEventType(asyncSub);
+        _aggregator.SubscribeToEventType(_subscriber);
+        var evt = new DummyEvent();
+        await _aggregator.PublishEventAsync(evt);
+        (await asyncSub.Received.Task).Should().Be(evt);
+        _subscriber.Received(1).OnNext(evt);
+    }
+
+    [Test]
+    public void AsyncSubscriber_Unsubscribed_DoesNotReceiveEvent()
+    {
+        _aggregator.RegisterEventType<DummyEvent>();
+        var asyncSubscriber = new DummyAsyncSubscriber();
+        _aggregator.SubscribeToEventType(asyncSubscriber);
+        _aggregator.UnsubscribeFromEventType(asyncSubscriber);
+        Func<Task> act = async () =>
+        {
+            await _aggregator.PublishEventAsync(new DummyEvent());
+            await Task.Delay(100);
+        };
+        asyncSubscriber.Received.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task AsyncSubscriber_Exception_IsPropagated()
+    {
+        _aggregator.RegisterEventType<DummyEvent>();
+        var subscriber = new FailingAsyncSubscriber();
+        _aggregator.SubscribeToEventType(subscriber);
+        Func<Task> act = async () => await _aggregator.PublishEventAsync(new DummyEvent());
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    private class FailingAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+    {
+        public Task OnNextAsync(DummyEvent value) => throw new InvalidOperationException("fail");
     }
 }
 
