@@ -22,5 +22,5 @@ public interface IEventSubscriber<T> : IEventSubscriber where T : class, IDomain
 /// <typeparam name="T">A class implementing <see cref="IDomainEvent"/></typeparam>
 public interface IAsyncEventSubscriber<T> : IEventSubscriber where T : class, IDomainEvent
 {
-    Task OnNextAsync(T domainEvent);
+    Task OnNextAsync(T domainEvent, CancellationToken cancellationToken = default);
 }

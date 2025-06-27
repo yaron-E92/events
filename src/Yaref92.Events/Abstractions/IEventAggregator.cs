@@ -47,5 +47,5 @@ public interface IEventAggregator
 
     void UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent;
 
-    Task PublishEventAsync<T>(T domainEvent) where T : class, IDomainEvent;
+    Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent;
 }
