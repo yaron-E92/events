@@ -8,7 +8,7 @@ namespace Yaref92.Events.Rx.UnitTests;
 public class DummyAsyncRxSubscriber : AsyncRxSubscriber<DummyEvent>
 {
     public TaskCompletionSource<DummyEvent> Received { get; } = new();
-    public override Task OnNextAsync(DummyEvent value)
+    public override Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default)
     {
         Received.TrySetResult(value);
         return Task.CompletedTask;
@@ -26,9 +26,27 @@ public class DummySyncRxSubscriber : IRxSubscriber<DummyEvent>
 public class DummyAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
 {
     public TaskCompletionSource<DummyEvent> Received { get; } = new();
-    public Task OnNextAsync(DummyEvent value)
+    public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default)
     {
         Received.TrySetResult(value);
+        return Task.CompletedTask;
+    }
+}
+
+public class CancellableAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+{
+    public TaskCompletionSource<DummyEvent> Received { get; } = new();
+    public TaskCompletionSource<bool> Cancelled { get; } = new();
+    
+    public Task OnNextAsync(DummyEvent domainEvent, CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            Cancelled.TrySetResult(true);
+            return Task.FromCanceled(cancellationToken);
+        }
+        
+        Received.TrySetResult(domainEvent);
         return Task.CompletedTask;
     }
 }
@@ -117,7 +135,7 @@ public class RxEventAggregatorAsyncTests
 
     private class FailingAsyncRxSubscriber : AsyncRxSubscriber<DummyEvent>
     {
-        public override Task OnNextAsync(DummyEvent value) => throw new InvalidOperationException("fail");
+        public override Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default) => throw new InvalidOperationException("fail");
     }
 
     [Test]
@@ -191,6 +209,23 @@ public class RxEventAggregatorAsyncTests
 
     private class FailingAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
     {
-        public Task OnNextAsync(DummyEvent value) => throw new InvalidOperationException("fail");
+        public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default) => throw new InvalidOperationException("fail");
+    }
+
+    [Test]
+    public async Task AsyncSubscriber_Cancellation_IsRespected()
+    {
+        var aggregator = new RxEventAggregator();
+        aggregator.RegisterEventType<DummyEvent>();
+        var subscriber = new CancellableAsyncSubscriber();
+        aggregator.SubscribeToEventType(subscriber);
+        
+        using var cts = new CancellationTokenSource();
+        cts.Cancel(); // Cancel immediately
+        
+        Func<Task> act = async () => await aggregator.PublishEventAsync(new DummyEvent(), cts.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        
+        subscriber.Cancelled.Task.IsCompleted.Should().BeTrue();
     }
 } 

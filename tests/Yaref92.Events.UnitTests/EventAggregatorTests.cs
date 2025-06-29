@@ -496,8 +496,26 @@ internal class EventAggregatorTests
     private class DummyAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
     {
         public TaskCompletionSource<DummyEvent> Received { get; } = new();
-        public Task OnNextAsync(DummyEvent domainEvent)
+        public Task OnNextAsync(DummyEvent domainEvent, CancellationToken cancellationToken = default)
         {
+            Received.TrySetResult(domainEvent);
+            return Task.CompletedTask;
+        }
+    }
+
+    private class CancellableAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+    {
+        public TaskCompletionSource<DummyEvent> Received { get; } = new();
+        public TaskCompletionSource<bool> Cancelled { get; } = new();
+        
+        public Task OnNextAsync(DummyEvent domainEvent, CancellationToken cancellationToken = default)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                Cancelled.TrySetResult(true);
+                return Task.FromCanceled(cancellationToken);
+            }
+            
             Received.TrySetResult(domainEvent);
             return Task.CompletedTask;
         }
@@ -566,9 +584,25 @@ internal class EventAggregatorTests
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
+    [Test]
+    public async Task AsyncSubscriber_Cancellation_IsRespected()
+    {
+        _aggregator.RegisterEventType<DummyEvent>();
+        var subscriber = new CancellableAsyncSubscriber();
+        _aggregator.SubscribeToEventType(subscriber);
+        
+        using var cts = new CancellationTokenSource();
+        cts.Cancel(); // Cancel immediately
+        
+        Func<Task> act = async () => await _aggregator.PublishEventAsync(new DummyEvent(), cts.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        
+        subscriber.Cancelled.Task.IsCompleted.Should().BeTrue();
+    }
+
     private class FailingAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
     {
-        public Task OnNextAsync(DummyEvent value) => throw new InvalidOperationException("fail");
+        public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default) => throw new InvalidOperationException("fail");
     }
 }
 
