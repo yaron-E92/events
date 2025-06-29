@@ -8,6 +8,7 @@ Designed for decoupled communication in modern applications.
 ![Latest Release](https://img.shields.io/github/v/release/yaron-E92/events)
 [![Build Status](https://github.com/yaron-E92/events/actions/workflows/ci-pipeline.yaml/badge.svg)](https://github.com/yaron-E92/events/actions/workflows/ci-pipeline.yaml)
 [![License](https://img.shields.io/github/license/yaron-E92/events)](https://github.com/yaron-E92/events/blob/main/LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/yaron-E92/events)](https://github.com/yaron-E92/events/commits/main)
 
 ---
 
