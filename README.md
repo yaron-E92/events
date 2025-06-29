@@ -36,6 +36,13 @@ Designed for decoupled communication in modern applications.
   - [Rx Integration](#rx-integration)
     - [Basic Rx Usage](#basic-rx-usage)
     - [Rx Subscribers](#rx-subscribers)
+  - [Async Support](#async-support)
+    - [Async Subscribers](#async-subscribers)
+    - [Async Event Publishing](#async-event-publishing)
+    - [Cancellation Support](#cancellation-support)
+    - [Mixed Sync and Async Subscribers](#mixed-sync-and-async-subscribers)
+    - [Async Rx Subscribers](#async-rx-subscribers)
+    - [Performance Benefits](#performance-benefits)
   - [Thread Safety](#thread-safety)
   - [Memory Management](#memory-management)
     - [Subscription Lifecycle](#subscription-lifecycle)
@@ -57,6 +64,9 @@ Designed for decoupled communication in modern applications.
 - **No external dependencies in the core package**
 - **Optional Rx integration via separate package**
 - **Extensible architecture for future integrations**
+- **Full async/await support with parallel execution**
+- **Cancellation support for long-running async operations**
+- **Mixed sync and async subscriber support**
 
 ---
 
@@ -134,6 +144,9 @@ aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 - `IEventSubscriber<T>`  
   Synchronous event subscriber. Implements `void OnNext(T @event)`.
 
+- `IAsyncEventSubscriber<T>`  
+  Asynchronous event subscriber. Implements `Task OnNextAsync(T @event, CancellationToken cancellationToken = default)`.
+
 - `IEventAggregator`  
   Main interface for registering event types, subscribing, unsubscribing, and publishing events.
 
@@ -142,9 +155,12 @@ aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 | Method                                      | Description                                 |
 |----------------------------------------------|---------------------------------------------|
 | `RegisterEventType<T>()`                     | Register an event type                      |
-| `SubscribeToEventType<T>(IEventSubscriber<T>)` | Subscribe a handler                    |
-| `UnsubscribeFromEventType<T>(IEventSubscriber<T>)` | Unsubscribe a handler                  |
+| `SubscribeToEventType<T>(IEventSubscriber<T>)` | Subscribe a synchronous handler        |
+| `SubscribeToEventType<T>(IAsyncEventSubscriber<T>)` | Subscribe an asynchronous handler   |
+| `UnsubscribeFromEventType<T>(IEventSubscriber<T>)` | Unsubscribe a synchronous handler    |
+| `UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T>)` | Unsubscribe an asynchronous handler |
 | `PublishEvent<T>(T domainEvent)`             | Publish event synchronously                 |
+| `PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default)` | Publish event asynchronously |
 
 ---
 
@@ -199,13 +215,109 @@ public class AuditLogger : IRxSubscriber<UserRegisteredEvent>
 {
     public void OnNext(UserRegisteredEvent @event) => Console.WriteLine($"Audit: {@event.UserId}");
     public void OnError(Exception error) => Console.WriteLine($"Error: {error.Message}");
-    public void OnCompleted() => Console.WriteLine("Completed");
+    public void OnCompleted() => Console.WriteLine("Audit logging completed");
 }
 
 var aggregator = new RxEventAggregator();
 aggregator.RegisterEventType<UserRegisteredEvent>();
 aggregator.SubscribeToEventType(new AuditLogger());
 ```
+
+---
+
+## Async Support
+
+Yaref92.Events supports both synchronous and asynchronous event handling, with full cancellation support for async operations.
+
+### Async Subscribers
+
+Implement `IAsyncEventSubscriber<T>` for asynchronous event handling:
+
+```csharp
+public class EmailService : IAsyncEventSubscriber<UserRegisteredEvent>
+{
+    public async Task OnNextAsync(UserRegisteredEvent @event, CancellationToken cancellationToken = default)
+    {
+        // Simulate async email sending
+        await Task.Delay(100, cancellationToken);
+        Console.WriteLine($"Welcome email sent to: {@event.UserId}");
+    }
+}
+```
+
+### Async Event Publishing
+
+Use `PublishEventAsync` for asynchronous event publishing:
+
+```csharp
+var aggregator = new EventAggregator();
+aggregator.RegisterEventType<UserRegisteredEvent>();
+
+var emailService = new EmailService();
+aggregator.SubscribeToEventType(emailService);
+
+// Publish asynchronously
+await aggregator.PublishEventAsync(new UserRegisteredEvent("user-123"));
+```
+
+### Cancellation Support
+
+Async operations support cancellation via `CancellationToken`:
+
+```csharp
+using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5)); // 5 second timeout
+
+try
+{
+    await aggregator.PublishEventAsync(new UserRegisteredEvent("user-123"), cts.Token);
+}
+catch (OperationCanceledException)
+{
+    Console.WriteLine("Event publishing was cancelled");
+}
+```
+
+### Mixed Sync and Async Subscribers
+
+You can mix synchronous and asynchronous subscribers for the same event type:
+
+```csharp
+var aggregator = new EventAggregator();
+aggregator.RegisterEventType<UserRegisteredEvent>();
+
+// Sync subscriber
+var logger = new ConsoleLogger();
+aggregator.SubscribeToEventType(logger);
+
+// Async subscriber
+var emailService = new EmailService();
+aggregator.SubscribeToEventType(emailService);
+
+// Both will receive the event
+await aggregator.PublishEventAsync(new UserRegisteredEvent("user-123"));
+```
+
+### Async Rx Subscribers
+
+For Rx integration with async support, use `AsyncRxSubscriber<T>`:
+
+```csharp
+public class AsyncAuditLogger : AsyncRxSubscriber<UserRegisteredEvent>
+{
+    public override async Task OnNextAsync(UserRegisteredEvent @event, CancellationToken cancellationToken = default)
+    {
+        await Task.Delay(50, cancellationToken); // Simulate async work
+        Console.WriteLine($"Async audit: {@event.UserId}");
+    }
+}
+```
+
+### Performance Benefits
+
+- **Parallel execution**: Async subscribers are executed in parallel using `Task.WhenAll`
+- **Non-blocking**: Sync subscribers are called directly, async subscribers are awaited
+- **Cancellation**: Full support for cancelling long-running async operations
+- **Memory efficient**: No additional allocations for cancellation tokens (default parameter)
 
 ---
 

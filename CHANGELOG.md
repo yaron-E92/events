@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-06-29
+
+### Added
+
+- **Async event publishing and subscription support**
+  - New `IAsyncEventSubscriber<T>` interface for asynchronous event handling
+  - `PublishEventAsync<T>()` method for asynchronous event publishing
+  - Parallel execution of async subscribers using `Task.WhenAll`
+  - Mixed sync and async subscriber support for the same event type
+- **Cancellation support for async operations**
+  - Optional `CancellationToken` parameter in async methods
+  - Full cancellation propagation to async subscribers
+  - Proper `OperationCanceledException` handling
+- **Enhanced Rx integration with async support**
+  - `AsyncRxSubscriber<T>` base class for async Rx subscribers
+  - Async support in `RxEventAggregator` with cancellation
+  - Fire-and-forget async handling for Rx subscribers
+- **Comprehensive async testing**
+  - Tests for async subscriber subscription and unsubscription
+  - Cancellation scenario testing
+  - Mixed sync/async subscriber testing
+  - Exception propagation testing
+
+### Changed
+
+- **Enhanced API surface** - Added overloads for async subscriber management
+- **Improved performance** - Async subscribers execute in parallel
+- **Better error handling** - Cancellation exceptions are properly propagated
+
+### Migration
+
+- No breaking changes - all new features are additive
+- Existing sync subscribers continue to work unchanged
+- To use async features, implement `IAsyncEventSubscriber<T>` and use `PublishEventAsync<T>()`
+- See the README for comprehensive async usage examples
+
+---
+
 ## [1.0.0] - 2025-06-26
 
 ### Added

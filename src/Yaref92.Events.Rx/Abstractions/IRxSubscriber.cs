@@ -75,3 +75,6 @@ public interface IRxSubscriber
 public interface IRxSubscriber<T> : IRxSubscriber, IEventSubscriber<T>, IObserver<T> where T : class, IDomainEvent
 {
 }
+public interface IAsyncRxSubscriber<T> : IRxSubscriber, IAsyncEventSubscriber<T>, IObserver<T> where T : class, IDomainEvent
+{
+}
