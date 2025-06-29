@@ -4,6 +4,7 @@ using Yaref92.Events.Abstractions;
 using System.Collections.Immutable;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace Yaref92.Events;
 
@@ -206,6 +207,7 @@ public class EventAggregator : IEventAggregator
     /// </summary>
     /// <typeparam name="T">The event type. Must be a registered event type.</typeparam>
     /// <param name="domainEvent">The event instance to publish. Cannot be null.</param>
+    /// <param name="cancellationToken">The cancellation token to use for the asynchronous operation.</param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="domainEvent"/> is null.
     /// </exception>
@@ -236,7 +238,7 @@ public class EventAggregator : IEventAggregator
     /// await aggregator.PublishEventAsync(new UserRegisteredEvent("user-123"));
     /// </code>
     /// </example>
-    public virtual async Task PublishEventAsync<T>(T domainEvent) where T : class, IDomainEvent
+    public virtual async Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
     {
         ValidateEvent(domainEvent);
 
@@ -247,7 +249,7 @@ public class EventAggregator : IEventAggregator
             {
                 if (subscriber is IAsyncEventSubscriber<T> asyncSubscriber)
                 {
-                    tasks.Add(asyncSubscriber.OnNextAsync(domainEvent));
+                    tasks.Add(asyncSubscriber.OnNextAsync(domainEvent, cancellationToken));
                 }
                 else if (subscriber is IEventSubscriber<T> syncSubscriber)
                 {

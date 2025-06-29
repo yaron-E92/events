@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading.Tasks;
+using System.Threading;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Rx.Abstractions;
@@ -285,6 +286,7 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// </summary>
     /// <typeparam name="T">The event type. Must be a registered event type.</typeparam>
     /// <param name="domainEvent">The event instance to publish. Cannot be null.</param>
+    /// <param name="cancellationToken">The cancellation token to use for the asynchronous operation.</param>
     /// <remarks>
     /// <para>
     /// This method extends the base publishing behavior to also publish events to
@@ -296,11 +298,11 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// the same events in a consistent manner.
     /// </para>
     /// </remarks>
-    public override async Task PublishEventAsync<T>(T domainEvent)
+    public override async Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default)
     {
         ValidateEvent(domainEvent);
         _subject.OnNext(domainEvent);
-        await base.PublishEventAsync(domainEvent);
+        await base.PublishEventAsync(domainEvent, cancellationToken);
     }
 
     /// <summary>
