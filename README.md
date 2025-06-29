@@ -5,9 +5,10 @@ Designed for decoupled communication in modern applications.
 
 ---
 
-[![NuGet](https://img.shields.io/nuget/v/Yaref92.Events.svg)](https://github.com/yaron-E92/events/pkgs/nuget/Yaref92.Events)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/yaref92/Yaref92.Events/ci.yml?branch=main)](https://github.com/yaref92/Yaref92.Events/actions)
-[![License](https://img.shields.io/github/license/yaref92/Yaref92.Events)](LICENSE)
+![Latest Release](https://img.shields.io/github/v/release/yaron-E92/events)
+[![Build Status](https://github.com/yaron-E92/events/actions/workflows/ci-pipeline.yaml/badge.svg)](https://github.com/yaron-E92/events/actions/workflows/ci-pipeline.yaml)
+[![License](https://img.shields.io/github/license/yaron-E92/events)](https://github.com/yaron-E92/events/blob/main/LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/yaron-E92/events)](https://github.com/yaron-E92/events/commits/main)
 
 ---
 
