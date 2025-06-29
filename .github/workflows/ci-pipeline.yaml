@@ -115,6 +115,6 @@ jobs:
       run: dotnet pack -c Release -o out /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }} /p:Version=${{ needs.gitVersion.outputs.semVer }} /p:PackageVersion=${{ needs.gitVersion.outputs.nugetVersion }} ./Yaref92.Events.sln
     - name: Release NuGet package
       if: steps.check-package.outputs.skip == 'false'
-      run: dotnet nuget push ./out/$(ls ./out) -s https://nuget.pkg.github.com/yaron-E92/index.json -k ${GITHUB_TOKEN}  
+      run: dotnet nuget push ./out/*.nupkg -s https://nuget.pkg.github.com/yaron-E92/index.json -k ${GITHUB_TOKEN}  
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
