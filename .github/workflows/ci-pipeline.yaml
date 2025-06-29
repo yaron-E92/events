@@ -55,7 +55,7 @@ jobs:
         dotnet-version: 8.0.x
     - name: Build
       id: build
-      run: dotnet build
+      run: dotnet build /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }} /p:Version=${{ needs.gitVersion.outputs.semVer }} /p:PackageVersion=${{ needs.gitVersion.outputs.nugetVersion }}
     - name: Test
       run: dotnet test --logger "trx" --no-build --verbosity normal /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }}
     - name: Publish Test Results
@@ -112,7 +112,7 @@ jobs:
         fi
     - name: Pack Nuget
       if: steps.check-package.outputs.skip == 'false'
-      run: dotnet pack -c Release -o out ./Yaref92.Events.sln
+      run: dotnet pack -c Release -o out /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }} /p:Version=${{ needs.gitVersion.outputs.semVer }} /p:PackageVersion=${{ needs.gitVersion.outputs.nugetVersion }} ./Yaref92.Events.sln
     - name: Release NuGet package
       if: steps.check-package.outputs.skip == 'false'
       run: dotnet nuget push ./out/$(ls ./out) -s https://nuget.pkg.github.com/yaron-E92/index.json -k ${GITHUB_TOKEN}  
