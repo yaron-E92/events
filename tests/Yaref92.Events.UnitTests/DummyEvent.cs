@@ -1,4 +1,5 @@
 ﻿using Yaref92.Events.Abstractions;
+using System;
 
 namespace Yaref92.Events.UnitTests;
 
@@ -7,5 +8,5 @@ namespace Yaref92.Events.UnitTests;
 /// </summary>
 public class DummyEvent : IDomainEvent
 {
-    public DateTime DateTimeOccurredUtc => throw new NotImplementedException();
+    public DateTime DateTimeOccurredUtc => DateTime.UtcNow;
 }
