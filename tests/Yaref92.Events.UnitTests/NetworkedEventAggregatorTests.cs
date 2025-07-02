@@ -1,10 +1,8 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
-using FluentAssertions;
+﻿using FluentAssertions;
+
 using NSubstitute;
+
 using Yaref92.Events.Abstractions;
-using NUnit.Framework;
 
 namespace Yaref92.Events.UnitTests;
 
