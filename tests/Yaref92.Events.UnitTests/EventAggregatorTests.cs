@@ -604,9 +604,19 @@ internal class EventAggregatorTests
     {
         public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default) => throw new InvalidOperationException("fail");
     }
+
+    [Test]
+    public void PublishEvent_Preserves_Existing_EventId()
+    {
+        _aggregator.RegisterEventType<DummyEvent>();
+        var id = Guid.NewGuid();
+        var evt = new DummyEvent("test", eventId: id);
+        _aggregator.SubscribeToEventType(_subscriber);
+        _aggregator.PublishEvent(evt);
+        evt.EventId.Should().Be(id);
+    }
 }
 
-public class OtherDummyEvent : IDomainEvent
+public class OtherDummyEvent : DomainEventBase
 {
-    public DateTime DateTimeOccurredUtc => DateTime.UtcNow;
 }

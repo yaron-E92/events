@@ -1,5 +1,6 @@
 ﻿using Yaref92.Events.Abstractions;
 using System.Collections.Concurrent;
+using Timer = System.Timers.Timer;
 
 namespace Yaref92.Events;
 
@@ -7,17 +8,24 @@ namespace Yaref92.Events;
 /// An event aggregator that bridges local in-memory event delivery with networked event propagation via an <see cref="IEventTransport"/>.
 /// Publishes events both locally and over the network, and dispatches received network events to local subscribers.
 /// </summary>
-public class NetworkedEventAggregator : IEventAggregator
+public class NetworkedEventAggregator : IEventAggregator, IDisposable
 {
     private readonly IEventAggregator _localAggregator;
     private readonly IEventTransport _transport;
-    private readonly ConcurrentDictionary<string, byte> _recentEventIds = new();
-    private readonly TimeSpan _deduplicationWindow = TimeSpan.FromMinutes(5); // Placeholder for future config
+    private readonly ConcurrentDictionary<Guid, DateTime> _recentEventIds = new();
+    private readonly TimeSpan _deduplicationWindow;
+    private readonly Timer _cleanupTimer;
+    private bool _disposed;
 
-    public NetworkedEventAggregator(IEventAggregator localAggregator, IEventTransport transport)
+    public NetworkedEventAggregator(IEventAggregator localAggregator, IEventTransport transport, TimeSpan? deduplicationWindow = null)
     {
         _localAggregator = localAggregator ?? throw new ArgumentNullException(nameof(localAggregator));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _deduplicationWindow = deduplicationWindow ?? TimeSpan.FromMinutes(15);
+        _cleanupTimer = new Timer(_deduplicationWindow.TotalMilliseconds / 2);
+        _cleanupTimer.Elapsed += (s, e) => CleanupOldEventIds();
+        _cleanupTimer.AutoReset = true;
+        _cleanupTimer.Start();
     }
 
     public ISet<Type> EventTypes => _localAggregator.EventTypes;
@@ -29,9 +37,8 @@ public class NetworkedEventAggregator : IEventAggregator
         var registered = _localAggregator.RegisterEventType<T>();
         _transport.Subscribe<T>(async (evt, ct) =>
         {
-            if (!IsDuplicate(evt))
+            if (TryMarkSeen(evt))
             {
-                MarkSeen(evt);
                 await _localAggregator.PublishEventAsync(evt, ct).ConfigureAwait(false);
             }
         });
@@ -75,18 +82,29 @@ public class NetworkedEventAggregator : IEventAggregator
         _localAggregator.UnsubscribeFromEventType(subscriber);
     }
 
-    // Basic deduplication placeholder (to be improved with event IDs)
-    private bool IsDuplicate(IDomainEvent evt)
+    // Deduplication: returns true if this is the first time the event is seen (not a duplicate)
+    private bool TryMarkSeen(IDomainEvent evt)
     {
-        // For now, use timestamp+type as a naive key
-        var key = evt.GetType().FullName + ":" + evt.DateTimeOccurredUtc.Ticks;
-        return !_recentEventIds.TryAdd(key, 0);
+        return _recentEventIds.TryAdd(evt.EventId, DateTime.UtcNow);
     }
 
-    private void MarkSeen(IDomainEvent evt)
+    private void CleanupOldEventIds()
     {
-        var key = evt.GetType().FullName + ":" + evt.DateTimeOccurredUtc.Ticks;
-        _recentEventIds[key] = 0;
-        // TODO: Cleanup old keys periodically
+        DateTime threshold = DateTime.UtcNow - _deduplicationWindow;
+        foreach (var kvp in _recentEventIds)
+        {
+            if (kvp.Value < threshold)
+            {
+                _recentEventIds.TryRemove(kvp.Key, out _);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _cleanupTimer?.Stop();
+        _cleanupTimer?.Dispose();
+        _disposed = true;
     }
 } 

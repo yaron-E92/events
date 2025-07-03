@@ -130,4 +130,10 @@ internal class NetworkedEventAggregatorTests
         // Assert
         await _localAggregator.Received(1).PublishEventAsync(evt, Arg.Any<CancellationToken>());
     }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _networkedAggregator?.Dispose();
+    }
 } 
