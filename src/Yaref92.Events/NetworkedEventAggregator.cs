@@ -11,8 +11,8 @@ public class NetworkedEventAggregator : IEventAggregator
 {
     private readonly IEventAggregator _localAggregator;
     private readonly IEventTransport _transport;
-    private readonly ConcurrentDictionary<string, byte> _recentEventIds = new();
-    private readonly TimeSpan _deduplicationWindow = TimeSpan.FromMinutes(5); // Placeholder for future config
+    private readonly ConcurrentDictionary<Guid, DateTime> _recentEventIds = new();
+    private readonly TimeSpan _deduplicationWindow = TimeSpan.FromMinutes(15); // Placeholder for future config
 
     public NetworkedEventAggregator(IEventAggregator localAggregator, IEventTransport transport)
     {
@@ -75,18 +75,15 @@ public class NetworkedEventAggregator : IEventAggregator
         _localAggregator.UnsubscribeFromEventType(subscriber);
     }
 
-    // Basic deduplication placeholder (to be improved with event IDs)
+    // Basic deduplication using EventId
     private bool IsDuplicate(IDomainEvent evt)
     {
-        // For now, use timestamp+type as a naive key
-        var key = evt.GetType().FullName + ":" + evt.DateTimeOccurredUtc.Ticks;
-        return !_recentEventIds.TryAdd(key, 0);
+        return !_recentEventIds.TryAdd(evt.EventId, DateTime.UtcNow);
     }
 
     private void MarkSeen(IDomainEvent evt)
     {
-        var key = evt.GetType().FullName + ":" + evt.DateTimeOccurredUtc.Ticks;
-        _recentEventIds[key] = 0;
+        _recentEventIds[evt.EventId] = DateTime.UtcNow;
         // TODO: Cleanup old keys periodically
     }
 } 
