@@ -107,7 +107,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
             }
             if (received < length) break;
             var payload = System.Text.Encoding.UTF8.GetString(data);
-            (Type? type, IDomainEvent? domainEvent) = _serializer.DeserializeFromEventEnvelope(payload);
+            (Type? type, IDomainEvent? domainEvent) = _serializer.Deserialize(payload);
             if (type != null && _handlers.TryGetValue(type, out var handlersForType))
             {
                 foreach (var handler in handlersForType)
