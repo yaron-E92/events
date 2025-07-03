@@ -7,5 +7,13 @@ namespace Yaref92.Events.IntegrationTests;
 /// </summary>
 public class DummyEvent : IDomainEvent
 {
-    public DateTime DateTimeOccurredUtc => DateTime.UtcNow;
+    public DateTime DateTimeOccurredUtc { get; }
+
+    public string? Text { get; }
+
+    public DummyEvent(DateTime? dateTimeOccurredUtc = null, string? text = null)
+    {
+        DateTimeOccurredUtc = dateTimeOccurredUtc ?? DateTime.UtcNow;
+        Text = text;
+    }
 }

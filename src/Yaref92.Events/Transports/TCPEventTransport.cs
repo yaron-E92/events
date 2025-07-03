@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Serialization;
 
 namespace Yaref92.Events.Transports;
 
@@ -19,10 +20,12 @@ public class TCPEventTransport : IEventTransport, IDisposable
     private TcpListener? _listener;
     private readonly ConcurrentBag<TcpClient> _clients = new();
     private CancellationTokenSource? _cts;
+    private readonly IEventSerializer _serializer;
 
-    public TCPEventTransport(int listenPort)
+    public TCPEventTransport(int listenPort, IEventSerializer? serializer = null)
     {
         _listenPort = listenPort;
+        _serializer = serializer ?? new JsonEventSerializer();
     }
 
     /// <summary>
@@ -49,9 +52,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
 
     public async Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
     {
-        var json = JsonSerializer.Serialize(domainEvent, domainEvent.GetType());
-        var typeName = typeof(T).AssemblyQualifiedName;
-        var payload = JsonSerializer.Serialize(new TcpEventEnvelope { TypeName = typeName!, Json = json });
+        var payload = _serializer.Serialize(domainEvent);
         var bytes = System.Text.Encoding.UTF8.GetBytes(payload);
         var lengthPrefix = BitConverter.GetBytes(bytes.Length);
 
@@ -93,30 +94,25 @@ public class TCPEventTransport : IEventTransport, IDisposable
         while (!cancellationToken.IsCancellationRequested)
         {
             // Read length prefix
-            int read = await stream.ReadAsync(buffer.AsMemory(0, 4), cancellationToken);
-            if (read < 4) break;
+            int readLength = await stream.ReadAsync(buffer.AsMemory(0, 4), cancellationToken);
+            if (readLength < 4) break;
             int length = BitConverter.ToInt32(buffer, 0);
             var data = new byte[length];
             int received = 0;
             while (received < length)
             {
-                int r = await stream.ReadAsync(data.AsMemory(received, length - received), cancellationToken);
-                if (r == 0) break;
-                received += r;
+                readLength = await stream.ReadAsync(data.AsMemory(received, length - received), cancellationToken);
+                if (readLength == 0) break;
+                received += readLength;
             }
             if (received < length) break;
             var payload = System.Text.Encoding.UTF8.GetString(data);
-            var envelope = JsonSerializer.Deserialize<TcpEventEnvelope>(payload);
-            if (envelope != null && envelope.TypeName != null)
+            (Type? type, IDomainEvent? domainEvent) = _serializer.Deserialize(payload);
+            if (type != null && _handlers.TryGetValue(type, out var handlersForType))
             {
-                var type = Type.GetType(envelope.TypeName);
-                if (type != null && _handlers.TryGetValue(type, out var handlers))
+                foreach (var handler in handlersForType)
                 {
-                    var evt = JsonSerializer.Deserialize(envelope.Json, type);
-                    foreach (var h in handlers)
-                    {
-                        await h(evt!, cancellationToken);
-                    }
+                    await handler(domainEvent!, cancellationToken);
                 }
             }
         }
@@ -130,11 +126,5 @@ public class TCPEventTransport : IEventTransport, IDisposable
         {
             client.Dispose();
         }
-    }
-
-    private class TcpEventEnvelope
-    {
-        public string? TypeName { get; set; }
-        public string? Json { get; set; }
     }
 } 
