@@ -17,6 +17,7 @@ Designed for decoupled communication in modern applications.
 - [Yaref92.Events](#yaref92events)
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
+  - [Networked Event Aggregation](#networked-event-aggregation)
   - [Installation](#installation)
     - [Core Package](#core-package)
     - [Rx Integration (Optional)](#rx-integration-optional)
@@ -67,6 +68,100 @@ Designed for decoupled communication in modern applications.
 - **Full async/await support with parallel execution**
 - **Cancellation support for long-running async operations**
 - **Mixed sync and async subscriber support**
+- **Distributed/networked event propagation with pluggable transports**
+- **Event deduplication and memory-safe cleanup**
+
+---
+
+## Networked Event Aggregation
+
+Yaref92.Events supports distributed event-driven applications via pluggable network transports.
+
+### Features
+- Pluggable transport abstraction (`IEventTransport`)
+- TCP transport implementation (`TCPEventTransport`)
+- Networked event aggregator (`NetworkedEventAggregator`)
+- Event deduplication and memory-safe cleanup
+- Envelope-based serialization with type safety
+
+### Basic Usage Example
+
+```csharp
+using Yaref92.Events;
+using Yaref92.Events.Abstractions;
+using Yaref92.Events.Transports;
+using Yaref92.Events.Serialization;
+
+// 1. Create a local in-memory aggregator
+var localAggregator = new EventAggregator();
+
+// 2. Create a TCP transport (listening on port 9000)
+var transport = new TCPEventTransport(9000, new JsonEventSerializer());
+
+// 3. Create a networked aggregator
+var networkedAggregator = new NetworkedEventAggregator(localAggregator, transport);
+
+// 4. Register your event types
+networkedAggregator.RegisterEventType<MyEvent>();
+
+// 5. Subscribe to events as usual
+networkedAggregator.SubscribeToEventType(new MyEventHandler());
+
+// 6. Publish events (locally and over the network)
+networkedAggregator.PublishEvent(new MyEvent("Hello, world!"));
+
+// 7. (Optional) Connect to peers
+await transport.ConnectToPeerAsync("remotehost", 9000);
+```
+
+### Event Type Requirements
+
+All events must inherit from `DomainEventBase`:
+
+```csharp
+public class MyEvent : DomainEventBase
+{
+    public string Message { get; }
+    public MyEvent(string message, DateTime? occurred = null, Guid? eventId = null)
+        : base(occurred, eventId)
+    {
+        Message = message;
+    }
+}
+```
+
+### Deduplication & Memory Management
+
+- The `NetworkedEventAggregator` deduplicates events using a unique `EventId` on each event.
+- The deduplication window is configurable (default: 15 minutes).
+- Old event IDs are periodically cleaned up to prevent memory bloat.
+
+**Example:**
+```csharp
+// Set a custom deduplication window (e.g., 5 minutes)
+var networkedAggregator = new NetworkedEventAggregator(localAggregator, transport, TimeSpan.FromMinutes(5));
+```
+
+### Security & Hardening
+
+- The TCP transport is suitable for trusted networks.
+- For production, consider:
+  - Limiting simultaneous connections
+  - Enabling idle timeouts
+  - Adding authentication or encryption
+  - Handling malformed messages robustly
+
+### API Reference
+
+- **`IEventTransport`**: Abstraction for network transports.
+- **`TCPEventTransport`**: TCP-based implementation.
+- **`NetworkedEventAggregator`**: Aggregator that bridges local and networked event delivery.
+- **`DomainEventBase`**: Base class for all events, ensures unique `EventId`.
+
+### Migration Notes
+
+- All event types must now inherit from `DomainEventBase`.
+- Existing in-memory usage is unaffected unless you opt-in to networked features.
 
 ---
 
@@ -95,12 +190,13 @@ dotnet add package Yaref92.Events.Rx
 ### 1. Define an Event
 
 ```csharp
-public class UserRegisteredEvent : IDomainEvent
+public class UserRegisteredEvent : DomainEventBase
 {
     public string UserId { get; }
-    public DateTime DateTimeOccurredUtc { get; } = DateTime.UtcNow;
-
-    public UserRegisteredEvent(string userId) => UserId = userId;
+    public UserRegisteredEvent(string userId) : base()
+    {
+        UserId = userId;
+    }
 }
 ```
 
@@ -139,7 +235,7 @@ aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 ### Core Interfaces
 
 - `IDomainEvent`  
-  Marker interface for events. Requires `DateTime DateTimeOccurredUtc`.
+  Marker interface for events. Requires `DateTime DateTimeOccurredUtc` and `Guid EventId` (via `DomainEventBase`).
 
 - `IEventSubscriber<T>`  
   Synchronous event subscriber. Implements `void OnNext(T @event)`.

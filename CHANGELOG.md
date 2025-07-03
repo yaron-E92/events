@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2024-06-29
+
+### Added
+
+- **Networked event aggregation**
+  - New `IEventTransport` abstraction for pluggable network transports
+  - `TCPEventTransport` implementation for peer-to-peer and client/server event propagation
+  - `NetworkedEventAggregator` for bridging local and networked event delivery
+  - Envelope-based JSON serialization with type safety
+- **Event deduplication and memory management**
+  - Deduplication of events using unique `EventId` on each event
+  - Configurable deduplication window (default: 15 minutes)
+  - Periodic cleanup of old event IDs to prevent memory bloat
+- **Event identity enforcement**
+  - All events must now inherit from `DomainEventBase`, which guarantees a unique `EventId` and UTC timestamp
+- **Documentation**
+  - Comprehensive README updates for networked usage, event requirements, deduplication, and security
+
+### Changed
+
+- Improved naming and clarity of deduplication methods
+- Removed redundant deduplication logic
+- Added proper resource disposal in tests to address analyzer warnings
+
+### Migration
+
+- All event types must now inherit from `DomainEventBase`
+- Existing in-memory usage is unaffected unless you opt-in to networked features
+- See the README for updated usage and migration notes
+
+---
+
 ## [1.1.0] - 2025-06-29
 
 ### Added
