@@ -1,11 +1,11 @@
-﻿using Yaref92.Events.Abstractions;
-
-namespace Yaref92.Events.Rx.UnitTests;
+﻿namespace Yaref92.Events.Rx.UnitTests;
 
 /// <summary>
 /// This event is only a dummy to be used in tests
 /// </summary>
-public class DummyEvent : IDomainEvent
+public class DummyEvent : DomainEventBase
 {
-    public DateTime DateTimeOccurredUtc => throw new NotImplementedException();
+    public DummyEvent() : base()
+    {
+    }
 }
