@@ -1,12 +1,10 @@
-﻿using System;
-using System.Reactive;
-using System.Reactive.Linq;
-using System.Threading.Tasks;
+﻿using System.Reactive.Linq;
+
 using FluentAssertions;
-using NUnit.Framework;
+
 using NSubstitute;
+
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Rx;
 using Yaref92.Events.Rx.Abstractions;
 
 namespace Yaref92.Events.Rx.UnitTests;
@@ -49,7 +47,7 @@ public class RxEventAggregatorTests
 
     public class RxDummySubscriber : IRxSubscriber<DummyEvent>
     {
-        public DummyEvent ReceivedEvent { get; private set; }
+        public DummyEvent ReceivedEvent { get; private set; } = new DummyEvent();
         public int OnNextCount { get; private set; }
         public void OnNext(DummyEvent value)
         {
@@ -147,7 +145,7 @@ public class RxEventAggregatorTests
 
     public class OtherRxDummySubscriber : IRxSubscriber<OtherDummyEvent>
     {
-        public OtherDummyEvent ReceivedEvent { get; private set; }
+        public OtherDummyEvent ReceivedEvent { get; private set; } = new OtherDummyEvent();
         public int OnNextCount { get; private set; }
         public void OnNext(OtherDummyEvent value)
         {
@@ -159,7 +157,6 @@ public class RxEventAggregatorTests
     }
 }
 
-public class OtherDummyEvent : IDomainEvent
+public class OtherDummyEvent : DomainEventBase
 {
-    public DateTime DateTimeOccurredUtc => DateTime.UtcNow;
 } 

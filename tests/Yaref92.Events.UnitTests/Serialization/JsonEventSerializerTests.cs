@@ -14,7 +14,7 @@ public class JsonEventSerializerTests
     {
         // Arrange
         var serializer = new JsonEventSerializer();
-        var evt = new DummyEvent(DateTime.UtcNow, "test");
+        var evt = new DummyEvent("test");
 
         // Act
         var json = serializer.Serialize(evt);
@@ -41,5 +41,24 @@ public class JsonEventSerializerTests
         var serializer = new JsonEventSerializer();
         Action act = () => serializer.Deserialize("not a json");
         act.Should().Throw<JsonException>();
+    }
+
+    [Test]
+    public void Serialize_And_Deserialize_Preserves_EventId()
+    {
+        var serializer = new JsonEventSerializer();
+        DummyEvent evt = new("test");
+        var json = serializer.Serialize(evt);
+        (Type? type, Abstractions.IDomainEvent? domainEvent) = serializer.Deserialize(json);
+        type.Should().Be(typeof(DummyEvent));
+        domainEvent.Should().NotBeNull();
+        domainEvent!.EventId.Should().Be(evt.EventId);
+    }
+
+    [Test]
+    public void New_DummyEvent_Has_NonEmpty_EventId()
+    {
+        var evt = new DummyEvent();
+        evt.EventId.Should().NotBe(Guid.Empty);
     }
 } 
