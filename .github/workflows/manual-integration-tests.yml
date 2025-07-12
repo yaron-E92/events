@@ -23,10 +23,10 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Run integration tests
-        run: dotnet test tests/Yaref92.Events.IntegrationTests --configuration Release --logger "trx;LogFileName=test_results.trx"
+        run: dotnet test tests/Yaref92.Events.IntegrationTests --configuration Release --logger "trx;LogFileName=test_results.trx" --explicit
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-results
-          path: tests/Yaref92.Events.IntegrationTests/TestResults/ 
+          path: tests/Yaref92.Events.IntegrationTests/TestResults/*.trx
