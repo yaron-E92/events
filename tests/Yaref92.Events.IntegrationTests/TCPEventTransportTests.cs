@@ -5,6 +5,7 @@ using Yaref92.Events.Transports;
 namespace Yaref92.Events.IntegrationTests;
 
 [TestFixture, Explicit("Integration test, requires open ports and async timing.")]
+[Category("Integration")]
 public class TCPEventTransportTests
 {
     [Test]
