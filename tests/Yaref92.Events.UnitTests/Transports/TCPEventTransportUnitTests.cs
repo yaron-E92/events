@@ -9,6 +9,8 @@ using System.Threading.Tasks;
 
 using FluentAssertions;
 
+using Yaref92.Events;
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.UnitTests.Transports;
@@ -60,12 +62,13 @@ public class TCPEventTransportUnitTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
-        using var transport = new TCPEventTransport(0);
+        var aggregator = new EventAggregator();
+        using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
 
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
-        var publishFailureTcs = new TaskCompletionSource<(EndPoint? Endpoint, Exception Exception)>(TaskCreationOptions.RunContinuationsAsynchronously);
-        transport.PublishFailure += (endpoint, exception) => publishFailureTcs.TrySetResult((endpoint, exception));
+        var publishFailureTcs = new TaskCompletionSource<PublishFailed>(TaskCreationOptions.RunContinuationsAsynchronously);
+        aggregator.SubscribeToEventType(new CapturePublishFailedSubscriber(publishFailureTcs));
 
         var connectTask = transport.ConnectToPeerAsync(IPAddress.Loopback.ToString(), port);
         var serverClient = await listener.AcceptTcpClientAsync();
@@ -102,7 +105,8 @@ public class TCPEventTransportUnitTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
-        using var transport = new TCPEventTransport(0);
+        var aggregator = new EventAggregator();
+        using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
 
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
@@ -114,6 +118,9 @@ public class TCPEventTransportUnitTests
         var serverClient2 = await listener.AcceptTcpClientAsync();
         await connectTask2.ConfigureAwait(false);
 
+        var publishFailures = new CountingPublishFailedSubscriber(expectedCount: 2);
+        aggregator.SubscribeToEventType(publishFailures);
+
         try
         {
             serverClient1.Client.LingerState = new LingerOption(enable: true, seconds: 0);
@@ -121,14 +128,11 @@ public class TCPEventTransportUnitTests
             serverClient2.Client.LingerState = new LingerOption(enable: true, seconds: 0);
             serverClient2.Close();
 
-            var failureCount = 0;
-            transport.PublishFailure += (_, __) => Interlocked.Increment(ref failureCount);
-
             Func<Task> act = () => transport.PublishAsync(new DummyEvent());
             var aggregateException = await act.Should().ThrowAsync<AggregateException>();
             aggregateException.Which.InnerExceptions.Should().HaveCount(2);
 
-            SpinWait.SpinUntil(() => Volatile.Read(ref failureCount) == 2, TimeSpan.FromSeconds(5)).Should().BeTrue();
+            await publishFailures.WaitForCountAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
             var clientsField = typeof(TCPEventTransport).GetField("_clients", BindingFlags.NonPublic | BindingFlags.Instance);
             var clients = (ConcurrentDictionary<TcpClient, byte>)clientsField!.GetValue(transport)!;
@@ -145,5 +149,46 @@ public class TCPEventTransportUnitTests
     {
         public string? TypeName { get; set; }
         public string? Json { get; set; }
+    }
+
+    private sealed class CapturePublishFailedSubscriber : IEventSubscriber<PublishFailed>
+    {
+        private readonly TaskCompletionSource<PublishFailed> _tcs;
+
+        public CapturePublishFailedSubscriber(TaskCompletionSource<PublishFailed> tcs)
+        {
+            _tcs = tcs;
+        }
+
+        public void OnNext(PublishFailed domainEvent)
+        {
+            _tcs.TrySetResult(domainEvent);
+        }
+    }
+
+    private sealed class CountingPublishFailedSubscriber : IEventSubscriber<PublishFailed>
+    {
+        private readonly TaskCompletionSource<bool> _tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly int _expectedCount;
+        private int _count;
+
+        public CountingPublishFailedSubscriber(int expectedCount)
+        {
+            _expectedCount = expectedCount;
+        }
+
+        public void OnNext(PublishFailed domainEvent)
+        {
+            if (Interlocked.Increment(ref _count) >= _expectedCount)
+            {
+                _tcs.TrySetResult(true);
+            }
+        }
+
+        public async Task WaitForCountAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            await _tcs.Task.WaitAsync(cts.Token).ConfigureAwait(false);
+        }
     }
 }

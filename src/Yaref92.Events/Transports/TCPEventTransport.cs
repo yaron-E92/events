@@ -26,11 +26,15 @@ public class TCPEventTransport : IEventTransport, IDisposable
     private Task? _acceptConnectionsTask;
     private CancellationTokenSource? _cts;
     private readonly IEventSerializer _serializer;
+    private readonly IEventAggregator? _eventAggregator;
 
-    public TCPEventTransport(int listenPort, IEventSerializer? serializer = null)
+    public TCPEventTransport(int listenPort, IEventSerializer? serializer = null, IEventAggregator? eventAggregator = null)
     {
         _listenPort = listenPort;
         _serializer = serializer ?? new JsonEventSerializer();
+        _eventAggregator = eventAggregator;
+
+        _eventAggregator?.RegisterEventType<PublishFailed>();
     }
 
     /// <summary>
@@ -102,8 +106,6 @@ public class TCPEventTransport : IEventTransport, IDisposable
 
         StartReceiveLoopForClient(client, cancellationToken);
     }
-
-    public event Action<EndPoint?, Exception>? PublishFailure;
 
     public async Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
     {
@@ -394,7 +396,19 @@ public class TCPEventTransport : IEventTransport, IDisposable
     private void HandlePublishFailure(TcpClient client, Exception exception, ref List<Exception>? exceptions)
     {
         Console.Error.WriteLine($"{nameof(PublishAsync)} failed for client {client.Client?.RemoteEndPoint}: {exception}");
-        PublishFailure?.Invoke(client.Client?.RemoteEndPoint, exception);
+        if (_eventAggregator is not null)
+        {
+            try
+            {
+                var publishFailed = new PublishFailed(client.Client?.RemoteEndPoint, exception);
+                var publishTask = _eventAggregator.PublishEventAsync(publishFailed);
+                TrackBackgroundTask(publishTask, nameof(PublishFailed));
+            }
+            catch (Exception aggregatorException)
+            {
+                Console.Error.WriteLine($"{nameof(HandlePublishFailure)} failed to publish {nameof(PublishFailed)}: {aggregatorException}");
+            }
+        }
 
         CleanupClient(client);
 
