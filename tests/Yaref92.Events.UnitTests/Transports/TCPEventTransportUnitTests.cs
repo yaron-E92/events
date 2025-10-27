@@ -73,6 +73,7 @@ public class TCPEventTransportUnitTests
 
         try
         {
+            serverClient.Client.LingerState = new LingerOption(enable: true, seconds: 0);
             serverClient.Close();
 
             Func<Task> act = () => transport.PublishAsync(new DummyEvent());
@@ -115,7 +116,9 @@ public class TCPEventTransportUnitTests
 
         try
         {
+            serverClient1.Client.LingerState = new LingerOption(enable: true, seconds: 0);
             serverClient1.Close();
+            serverClient2.Client.LingerState = new LingerOption(enable: true, seconds: 0);
             serverClient2.Close();
 
             var failureCount = 0;
