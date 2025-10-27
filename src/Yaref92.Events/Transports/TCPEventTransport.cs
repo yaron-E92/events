@@ -45,7 +45,26 @@ public class TCPEventTransport : IEventTransport, IDisposable
     public async Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default)
     {
         var client = new TcpClient();
-        await client.ConnectAsync(host, port, cancellationToken);
+        try
+        {
+            await client.ConnectAsync(host, port, cancellationToken);
+        }
+        catch (SocketException ex)
+        {
+            client.Dispose();
+            throw new InvalidOperationException($"Failed to connect to {host}:{port}.", ex);
+        }
+        catch (OperationCanceledException ex)
+        {
+            client.Dispose();
+            throw new OperationCanceledException($"Connection attempt to {host}:{port} was canceled.", ex, cancellationToken);
+        }
+
+        if (!client.Connected)
+        {
+            client.Dispose();
+            throw new InvalidOperationException($"Failed to connect to {host}:{port}: the TCP client is not connected.");
+        }
         _clients.Add(client);
         _ = ReceiveMessagesLoopAsync(client, cancellationToken);
     }
