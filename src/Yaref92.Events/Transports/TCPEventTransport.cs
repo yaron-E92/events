@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -102,12 +103,15 @@ public class TCPEventTransport : IEventTransport, IDisposable
         StartReceiveLoopForClient(client, cancellationToken);
     }
 
+    public event Action<EndPoint?, Exception>? PublishFailure;
+
     public async Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
     {
         var payload = _serializer.Serialize(domainEvent);
         var bytes = System.Text.Encoding.UTF8.GetBytes(payload);
         var lengthPrefix = BitConverter.GetBytes(bytes.Length);
 
+        List<Exception>? exceptions = null;
         foreach (var client in _clients.Keys)
         {
             try
@@ -116,11 +120,19 @@ public class TCPEventTransport : IEventTransport, IDisposable
                 await stream.WriteAsync(lengthPrefix, cancellationToken);
                 await stream.WriteAsync(bytes, cancellationToken);
             }
-            catch
+            catch (IOException ex)
             {
-                // TODO: Handle broken connections
-                CleanupClient(client);
+                HandlePublishFailure(client, ex, ref exceptions);
             }
+            catch (SocketException ex)
+            {
+                HandlePublishFailure(client, ex, ref exceptions);
+            }
+        }
+
+        if (exceptions is { Count: > 0 })
+        {
+            throw new AggregateException("One or more TCP clients failed to receive the published event.", exceptions);
         }
     }
 
@@ -377,5 +389,16 @@ public class TCPEventTransport : IEventTransport, IDisposable
                 client.Dispose();
             }
         }
+    }
+
+    private void HandlePublishFailure(TcpClient client, Exception exception, ref List<Exception>? exceptions)
+    {
+        Console.Error.WriteLine($"{nameof(PublishAsync)} failed for client {client.Client?.RemoteEndPoint}: {exception}");
+        PublishFailure?.Invoke(client.Client?.RemoteEndPoint, exception);
+
+        CleanupClient(client);
+
+        exceptions ??= new List<Exception>();
+        exceptions.Add(exception);
     }
 }
