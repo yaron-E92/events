@@ -1,4 +1,11 @@
-﻿using System.Text.Json;
+﻿using System;
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
 using FluentAssertions;
 
@@ -45,6 +52,90 @@ public class TCPEventTransportUnitTests
 
         // Assert
         evt.Should().BeOfType<DummyEvent>();
+    }
+
+    [Test]
+    public async Task PublishAsync_WhenWriteFails_RaisesPublishFailureAndRemovesClient()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        using var transport = new TCPEventTransport(0);
+
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        var publishFailureTcs = new TaskCompletionSource<(EndPoint? Endpoint, Exception Exception)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.PublishFailure += (endpoint, exception) => publishFailureTcs.TrySetResult((endpoint, exception));
+
+        var connectTask = transport.ConnectToPeerAsync(IPAddress.Loopback.ToString(), port);
+        var serverClient = await listener.AcceptTcpClientAsync();
+        await connectTask.ConfigureAwait(false);
+
+        try
+        {
+            serverClient.Close();
+
+            Func<Task> act = () => transport.PublishAsync(new DummyEvent());
+            var aggregateException = await act.Should().ThrowAsync<AggregateException>();
+            aggregateException.Which.InnerExceptions.Should().NotBeEmpty();
+
+            var completed = await Task.WhenAny(publishFailureTcs.Task, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+            completed.Should().Be(publishFailureTcs.Task);
+            var failure = await publishFailureTcs.Task.ConfigureAwait(false);
+            failure.Endpoint.Should().NotBeNull();
+            failure.Exception.Should().NotBeNull();
+
+            var clientsField = typeof(TCPEventTransport).GetField("_clients", BindingFlags.NonPublic | BindingFlags.Instance);
+            var clients = (ConcurrentDictionary<TcpClient, byte>)clientsField!.GetValue(transport)!;
+            clients.Should().BeEmpty();
+        }
+        finally
+        {
+            serverClient.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task PublishAsync_WhenMultipleClientsFail_AggregatesAllExceptions()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        using var transport = new TCPEventTransport(0);
+
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        var connectTask1 = transport.ConnectToPeerAsync(IPAddress.Loopback.ToString(), port);
+        var serverClient1 = await listener.AcceptTcpClientAsync();
+        await connectTask1.ConfigureAwait(false);
+
+        var connectTask2 = transport.ConnectToPeerAsync(IPAddress.Loopback.ToString(), port);
+        var serverClient2 = await listener.AcceptTcpClientAsync();
+        await connectTask2.ConfigureAwait(false);
+
+        try
+        {
+            serverClient1.Close();
+            serverClient2.Close();
+
+            var failureCount = 0;
+            transport.PublishFailure += (_, __) => Interlocked.Increment(ref failureCount);
+
+            Func<Task> act = () => transport.PublishAsync(new DummyEvent());
+            var aggregateException = await act.Should().ThrowAsync<AggregateException>();
+            aggregateException.Which.InnerExceptions.Should().HaveCount(2);
+
+            SpinWait.SpinUntil(() => Volatile.Read(ref failureCount) == 2, TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+            var clientsField = typeof(TCPEventTransport).GetField("_clients", BindingFlags.NonPublic | BindingFlags.Instance);
+            var clients = (ConcurrentDictionary<TcpClient, byte>)clientsField!.GetValue(transport)!;
+            clients.Should().BeEmpty();
+        }
+        finally
+        {
+            serverClient1.Dispose();
+            serverClient2.Dispose();
+        }
     }
 
     private class TcpEventEnvelope
