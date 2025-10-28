@@ -112,15 +112,15 @@ public class TCPEventTransport : IEventTransport, IDisposable
         var payload = _serializer.Serialize(domainEvent);
         var bytes = System.Text.Encoding.UTF8.GetBytes(payload);
         var lengthPrefix = BitConverter.GetBytes(bytes.Length);
+        var lengthMemory = new ReadOnlyMemory<byte>(lengthPrefix);
+        var payloadMemory = new ReadOnlyMemory<byte>(bytes);
 
         List<Exception>? exceptions = null;
         foreach (var client in _clients.Keys)
         {
             try
             {
-                var stream = client.GetStream();
-                await stream.WriteAsync(lengthPrefix, cancellationToken);
-                await stream.WriteAsync(bytes, cancellationToken);
+                await WriteToClientAsync(client, lengthMemory, payloadMemory, cancellationToken).ConfigureAwait(false);
             }
             catch (IOException ex)
             {
@@ -130,12 +130,36 @@ public class TCPEventTransport : IEventTransport, IDisposable
             {
                 HandlePublishFailure(client, ex, ref exceptions);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
         }
 
         if (exceptions is { Count: > 0 })
         {
             throw new AggregateException("One or more TCP clients failed to receive the published event.", exceptions);
         }
+    }
+
+    /// <summary>
+    /// Writes the serialized payload to the specified TCP client.
+    /// Extracted as a separate method to enable deterministic failure injection in tests.
+    /// </summary>
+    /// <param name="client">The client to write to.</param>
+    /// <param name="lengthPrefix">The length prefix for the payload.</param>
+    /// <param name="payload">The serialized payload.</param>
+    /// <param name="cancellationToken">Cancellation token for the asynchronous operation.</param>
+    /// <returns>A <see cref="Task"/> that completes when the write finishes.</returns>
+    protected virtual async Task WriteToClientAsync(
+        TcpClient client,
+        ReadOnlyMemory<byte> lengthPrefix,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken)
+    {
+        var stream = client.GetStream();
+        await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
     public void Subscribe<T>(Func<T, CancellationToken, Task> handler) where T : class, IDomainEvent
