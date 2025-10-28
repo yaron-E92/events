@@ -71,6 +71,8 @@ public class TCPEventTransportUnitTests
         var endpoint = failingClient.Client.RemoteEndPoint;
         transport.AddFailingClient(failingClient, new IOException("Simulated write failure."));
 
+        GetClientsDictionary(transport).Count.Should().Be(1, "the tracked client should still be present before publishing");
+
         try
         {
             Func<Task> act = () => transport.PublishAsync(new DummyEvent());
@@ -106,6 +108,8 @@ public class TCPEventTransportUnitTests
 
         var publishFailures = new CountingPublishFailedSubscriber(expectedCount: 2);
         aggregator.SubscribeToEventType(publishFailures);
+
+        GetClientsDictionary(transport).Count.Should().Be(2, "both clients should be tracked before the publish attempt");
 
         try
         {

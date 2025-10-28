@@ -124,10 +124,14 @@ public class TCPEventTransport : IEventTransport, IDisposable
             }
             catch (IOException ex)
             {
+                // HandlePublishFailure immediately cleans up the client entry, so observers that
+                // inspect _clients during debugging will see the dictionary shrink while the loop
+                // is still iterating over the snapshot captured at the start of the foreach.
                 HandlePublishFailure(client, ex, ref exceptions);
             }
             catch (SocketException ex)
             {
+                // See comment above regarding immediate cleanup during failure handling.
                 HandlePublishFailure(client, ex, ref exceptions);
             }
             catch (OperationCanceledException)
