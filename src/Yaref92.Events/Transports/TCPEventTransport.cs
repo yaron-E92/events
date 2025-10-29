@@ -235,10 +235,12 @@ public class TCPEventTransport : IEventTransport, IDisposable
             var buffer = new byte[4];
             while (!cancellationToken.IsCancellationRequested)
             {
-                int readLength;
                 try
                 {
-                    readLength = await stream.ReadAsync(buffer.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
+                    if (!await ReadExactAsync(stream, buffer.AsMemory(0, 4), cancellationToken).ConfigureAwait(false))
+                    {
+                        break;
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -255,49 +257,28 @@ public class TCPEventTransport : IEventTransport, IDisposable
                     break;
                 }
 
-                if (readLength < 4)
-                {
-                    break;
-                }
-
                 int length = BitConverter.ToInt32(buffer, 0);
                 var data = new byte[length];
-                int received = 0;
-                while (received < length && !cancellationToken.IsCancellationRequested)
+                try
                 {
-                    try
-                    {
-                        readLength = await stream.ReadAsync(data.AsMemory(received, length - received), cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    if (!await ReadExactAsync(stream, data, cancellationToken).ConfigureAwait(false))
                     {
                         break;
                     }
-                    catch (IOException ex)
-                    {
-                        Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} I/O error while reading payload: {ex}");
-                        received = 0;
-                        break;
-                    }
-                    catch (SocketException ex)
-                    {
-                        Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} socket error while reading payload: {ex}");
-                        received = 0;
-                        break;
-                    }
-
-                    if (readLength == 0)
-                    {
-                        received = 0;
-                        break;
-                    }
-
-                    received += readLength;
                 }
-
-                if (received < length)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     break;
+                }
+                catch (IOException ex)
+                {
+                    Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} I/O error while reading payload: {ex}");
+                    continue;
+                }
+                catch (SocketException ex)
+                {
+                    Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} socket error while reading payload: {ex}");
+                    continue;
                 }
 
                 var payload = System.Text.Encoding.UTF8.GetString(data);
@@ -323,6 +304,23 @@ public class TCPEventTransport : IEventTransport, IDisposable
         {
             CleanupClient(client);
         }
+    }
+
+    private static async Task<bool> ReadExactAsync(NetworkStream stream, Memory<byte> buffer, CancellationToken cancellationToken)
+    {
+        var totalRead = 0;
+        while (totalRead < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.Slice(totalRead), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return false;
+            }
+
+            totalRead += read;
+        }
+
+        return true;
     }
 
     public void Dispose()
