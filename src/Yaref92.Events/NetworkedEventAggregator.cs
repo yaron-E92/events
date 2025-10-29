@@ -59,7 +59,7 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
             _localAggregator.PublishEventAsync(domainEvent, cancellationToken),
             _transport.PublishAsync(domainEvent, cancellationToken),
         ];
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     public void SubscribeToEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent

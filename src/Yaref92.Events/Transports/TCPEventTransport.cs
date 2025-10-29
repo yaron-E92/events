@@ -78,7 +78,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
         var client = new TcpClient();
         try
         {
-            await client.ConnectAsync(host, port, cancellationToken);
+            await client.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
         }
         catch (SocketException ex)
         {
