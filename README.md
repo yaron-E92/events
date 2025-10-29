@@ -114,6 +114,8 @@ networkedAggregator.PublishEvent(new MyEvent("Hello, world!"));
 await transport.ConnectToPeerAsync("remotehost", 9000);
 ```
 
+> **Note:** If you plan to call `transport.ConnectToPeerAsync` later, keep a reference to the original `TCPEventTransport` instance. `NetworkedEventAggregator` only depends on the `IEventTransport` abstraction, so it cannot initiate new peer connections once the transport reference goes out of scope.
+
 ### Event Type Requirements
 
 All events must inherit from `DomainEventBase`:
