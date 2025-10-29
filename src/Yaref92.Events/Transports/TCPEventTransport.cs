@@ -169,7 +169,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
     public void Subscribe<T>(Func<T, CancellationToken, Task> handler) where T : class, IDomainEvent
     {
         var bag = _handlers.GetOrAdd(typeof(T), _ => new ConcurrentBag<Func<object, CancellationToken, Task>>());
-        bag.Add(async (obj, ct) => await handler((T)obj, ct));
+        bag.Add(async (obj, ct) => await handler((T)obj, ct).ConfigureAwait(false));
     }
 
     private async Task AcceptConnectionsLoopAsync(CancellationToken cancellationToken)
@@ -186,7 +186,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
                         throw new InvalidOperationException("TCP listener is not initialized.");
                     }
 
-                    client = await _listener.AcceptTcpClientAsync(cancellationToken);
+                    client = await _listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -238,7 +238,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
                 int readLength;
                 try
                 {
-                    readLength = await stream.ReadAsync(buffer.AsMemory(0, 4), cancellationToken);
+                    readLength = await stream.ReadAsync(buffer.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -267,7 +267,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
                 {
                     try
                     {
-                        readLength = await stream.ReadAsync(data.AsMemory(received, length - received), cancellationToken);
+                        readLength = await stream.ReadAsync(data.AsMemory(received, length - received), cancellationToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -306,7 +306,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
                 {
                     foreach (var handler in handlersForType)
                     {
-                        await handler(domainEvent!, cancellationToken);
+                        await handler(domainEvent!, cancellationToken).ConfigureAwait(false);
                     }
                 }
             }
