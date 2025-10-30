@@ -325,7 +325,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
         }
     }
 
-    private async Task<EnvelopeReadResult> TryReadEnvelopeAsync(NetworkStream stream, byte[] lengthBuffer, CancellationToken cancellationToken)
+    private static async Task<EnvelopeReadResult> TryReadEnvelopeAsync(NetworkStream stream, byte[] lengthBuffer, CancellationToken cancellationToken)
     {
         var lengthStatus = await TryReadLengthPrefixAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
         if (lengthStatus != EnvelopeReadStatus.Success)
