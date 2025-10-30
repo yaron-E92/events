@@ -62,7 +62,7 @@ internal static class SessionFrameIO
         return true;
     }
 
-    internal readonly record struct FrameReadResult(bool Success, SessionFrame? Frame)
+    internal readonly record struct FrameReadResult(bool IsSuccess, SessionFrame? Frame)
     {
         public static FrameReadResult Success(SessionFrame frame) => new(true, frame);
 

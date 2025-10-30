@@ -228,7 +228,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
             while (!cancellationToken.IsCancellationRequested)
             {
                 var result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
-                if (!result.Success)
+                if (!result.IsSuccess)
                 {
                     break;
                 }

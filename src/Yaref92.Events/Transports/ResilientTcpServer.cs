@@ -166,7 +166,7 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
         try
         {
             var initialization = await InitializeSessionAsync(client, stream, lengthBuffer, serverToken).ConfigureAwait(false);
-            if (!initialization.Success)
+            if (!initialization.IsSuccess)
             {
                 return;
             }
@@ -215,7 +215,7 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
         CancellationToken serverToken)
     {
         var firstFrameResult = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, serverToken).ConfigureAwait(false);
-        if (!firstFrameResult.Success)
+        if (!firstFrameResult.IsSuccess)
         {
             return SessionInitializationResult.Failed();
         }
@@ -278,7 +278,7 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
         while (!cancellationToken.IsCancellationRequested)
         {
             var result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
-            if (!result.Success)
+            if (!result.IsSuccess)
             {
                 break;
             }
@@ -413,7 +413,7 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
     }
 
     private readonly record struct SessionInitializationResult(
-        bool Success,
+        bool IsSuccess,
         SessionState? Session,
         SessionConnection? Connection,
         CancellationTokenSource? ConnectionCancellation,
