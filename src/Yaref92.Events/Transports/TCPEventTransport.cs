@@ -108,8 +108,8 @@ public class TCPEventTransport : IEventTransport, IDisposable
                     port,
                     RegisterPersistentClient,
                     _heartbeatInterval,
-                    _authenticationToken);
-                persistentSession.SendFailed += ex => HandlePersistentPublishFailure(persistentSession, ex);
+                    _authenticationToken,
+                    _eventAggregator);
                 return persistentSession;
             });
 
@@ -617,21 +617,4 @@ public class TCPEventTransport : IEventTransport, IDisposable
         exceptions.Add(exception);
     }
 
-    private void HandlePersistentPublishFailure(PersistentSessionClient session, Exception exception)
-    {
-        Console.Error.WriteLine($"{nameof(PublishAsync)} failed for persistent session {session.RemoteEndPoint}: {exception}");
-        if (_eventAggregator is not null)
-        {
-            try
-            {
-                var publishFailed = new PublishFailed(session.RemoteEndPoint, exception);
-                var publishTask = _eventAggregator.PublishEventAsync(publishFailed);
-                TrackBackgroundTask(publishTask, nameof(PublishFailed));
-            }
-            catch (Exception aggregatorException)
-            {
-                Console.Error.WriteLine($"{nameof(HandlePersistentPublishFailure)} failed to publish {nameof(PublishFailed)}: {aggregatorException}");
-            }
-        }
-    }
 }

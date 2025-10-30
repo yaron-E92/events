@@ -8,6 +8,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Yaref92.Events.Abstractions;
+
 namespace Yaref92.Events.Transports;
 
 internal sealed class PersistentSessionClient : IAsyncDisposable
@@ -21,6 +23,7 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
     private readonly Func<PersistentSessionClient, TcpClient, CancellationToken, Task> _onClientConnected;
     private readonly TimeSpan _heartbeatInterval;
     private readonly string? _authenticationToken;
+    private readonly IEventAggregator? _eventAggregator;
 
     private readonly ConcurrentQueue<TransportEnvelope> _controlQueue = new();
     private readonly ConcurrentQueue<TransportEnvelope> _eventQueue = new();
@@ -45,19 +48,19 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         int port,
         Func<PersistentSessionClient, TcpClient, CancellationToken, Task> onClientConnected,
         TimeSpan? heartbeatInterval = null,
-        string? authenticationToken = null)
+        string? authenticationToken = null,
+        IEventAggregator? eventAggregator = null)
     {
         _host = host;
         _port = port;
         _onClientConnected = onClientConnected ?? throw new ArgumentNullException(nameof(onClientConnected));
         _heartbeatInterval = heartbeatInterval ?? TimeSpan.FromSeconds(30);
         _authenticationToken = authenticationToken;
+        _eventAggregator = eventAggregator;
         _sessionKey = $"{host}:{port}";
         _outboxPath = Path.Combine(AppContext.BaseDirectory, OutboxFileName);
         _lastRemoteActivityTicks = DateTime.UtcNow.Ticks;
     }
-
-    public event Action<Exception>? SendFailed;
 
     public DnsEndPoint RemoteEndPoint => new(_host, _port);
 
@@ -315,12 +318,12 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
             }
             catch (IOException ex)
             {
-                SendFailed?.Invoke(ex);
+                NotifySendFailure(ex);
                 throw;
             }
             catch (SocketException ex)
             {
-                SendFailed?.Invoke(ex);
+                NotifySendFailure(ex);
                 throw;
             }
         }
@@ -368,6 +371,33 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         {
             _eventQueue.Enqueue(envelope);
             _sendSignal.Release();
+        }
+    }
+
+    private void NotifySendFailure(Exception exception)
+    {
+        Console.Error.WriteLine($"{nameof(PersistentSessionClient)} send failed for {RemoteEndPoint}: {exception}");
+
+        if (_eventAggregator is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var publishFailed = new PublishFailed(RemoteEndPoint, exception);
+            var publishTask = _eventAggregator.PublishEventAsync(publishFailed);
+            publishTask.ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception is not null)
+                {
+                    Console.Error.WriteLine($"{nameof(PersistentSessionClient)} failed to publish {nameof(PublishFailed)}: {t.Exception.Flatten()}");
+                }
+            }, TaskContinuationOptions.ExecuteSynchronously);
+        }
+        catch (Exception aggregatorException)
+        {
+            Console.Error.WriteLine($"{nameof(PersistentSessionClient)} threw while publishing {nameof(PublishFailed)}: {aggregatorException}");
         }
     }
 
