@@ -79,13 +79,8 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
             throw new ArgumentNullException(nameof(payload));
         }
 
-        foreach (var session in _sessions.Values)
+        foreach (var session in _sessions.Values.Where(static session => session.HasAuthenticated))
         {
-            if (!session.HasAuthenticated)
-            {
-                continue;
-            }
-
             session.EnqueueMessage(payload);
         }
     }
@@ -356,7 +351,7 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
         return string.Equals(_options.AuthenticationToken, secret ?? token, StringComparison.Ordinal);
     }
 
-    private async Task RunSendLoopAsync(SessionState session, NetworkStream stream, CancellationToken cancellationToken)
+    private static async Task RunSendLoopAsync(SessionState session, NetworkStream stream, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -402,12 +397,9 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
             }
 
             var now = DateTime.UtcNow;
-            foreach (var session in _sessions.Values)
+            foreach (var session in _sessions.Values.Where(session => session.IsExpired(now, _options.HeartbeatTimeout)))
             {
-                if (session.IsExpired(now, _options.HeartbeatTimeout))
-                {
-                    await session.CloseConnectionAsync().ConfigureAwait(false);
-                }
+                await session.CloseConnectionAsync().ConfigureAwait(false);
             }
         }
     }
@@ -650,7 +642,7 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
                 // expected on disposal
             }
 
-            Stream.Dispose();
+            await Stream.DisposeAsync().ConfigureAwait(false);
             Client.Dispose();
             Cancellation.Dispose();
         }
