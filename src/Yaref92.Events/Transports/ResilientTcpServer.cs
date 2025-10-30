@@ -171,16 +171,21 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
                 return;
             }
 
-            session = initialization.Session;
-            connection = initialization.Connection;
-            connectionCts = initialization.ConnectionCancellation;
+            var initializedSession = initialization.Session ?? throw new InvalidOperationException("Initialization succeeded without a session.");
+            var initializedConnection = initialization.Connection ?? throw new InvalidOperationException("Initialization succeeded without a connection.");
+            var initializedCancellation = initialization.ConnectionCancellation ?? throw new InvalidOperationException("Initialization succeeded without a cancellation token source.");
 
-            if (initialization.PendingFrame is not null)
+            session = initializedSession;
+            connection = initializedConnection;
+            connectionCts = initializedCancellation;
+
+            var pendingFrame = initialization.PendingFrame;
+            if (pendingFrame is not null)
             {
-                await ProcessFrameAsync(session, initialization.PendingFrame, connectionCts.Token).ConfigureAwait(false);
+                await ProcessFrameAsync(initializedSession, pendingFrame, initializedCancellation.Token).ConfigureAwait(false);
             }
 
-            await ProcessIncomingFramesAsync(session, stream, lengthBuffer, connectionCts.Token).ConfigureAwait(false);
+            await ProcessIncomingFramesAsync(initializedSession, stream, lengthBuffer, initializedCancellation.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
         {
