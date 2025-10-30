@@ -256,9 +256,11 @@ public class EventAggregator : IEventAggregator
                     syncSubscriber.OnNext(domainEvent);
                 }
             }
+
+                await Task.WhenAll(tasks).ConfigureAwait(false);
             if (tasks.Count > 0)
             {
-                await Task.WhenAll(tasks);
+                await Task.WhenAll(tasks).ConfigureAwait(false);
             }
         }
     }
