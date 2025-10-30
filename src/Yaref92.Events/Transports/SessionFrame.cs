@@ -84,16 +84,23 @@ internal static class SessionFrameSerializer
 
     private sealed class SessionFrameKindConverter : JsonConverter<SessionFrameKind>
     {
+        private const string AuthKind = "AUTH";
+        private const string PingKind = "PING";
+        private const string PongKind = "PONG";
+        private const string MessageKind = "MSG";
+        private const string MessageKindLong = "MESSAGE";
+        private const string AckKind = "ACK";
+
         public override SessionFrameKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             var value = reader.GetString();
             return value?.ToUpperInvariant() switch
             {
-                "AUTH" => SessionFrameKind.Auth,
-                "PING" => SessionFrameKind.Ping,
-                "PONG" => SessionFrameKind.Pong,
-                "MSG" or "MESSAGE" => SessionFrameKind.Message,
-                "ACK" => SessionFrameKind.Ack,
+                AuthKind => SessionFrameKind.Auth,
+                PingKind => SessionFrameKind.Ping,
+                PongKind => SessionFrameKind.Pong,
+                MessageKind or MessageKindLong => SessionFrameKind.Message,
+                AckKind => SessionFrameKind.Ack,
                 _ => throw new JsonException($"Unsupported session frame kind '{value}'."),
             };
         }
@@ -102,11 +109,11 @@ internal static class SessionFrameSerializer
         {
             var stringValue = value switch
             {
-                SessionFrameKind.Auth => "AUTH",
-                SessionFrameKind.Ping => "PING",
-                SessionFrameKind.Pong => "PONG",
-                SessionFrameKind.Message => "MSG",
-                SessionFrameKind.Ack => "ACK",
+                SessionFrameKind.Auth => AuthKind,
+                SessionFrameKind.Ping => PingKind,
+                SessionFrameKind.Pong => PongKind,
+                SessionFrameKind.Message => MessageKind,
+                SessionFrameKind.Ack => AckKind,
                 _ => throw new ArgumentOutOfRangeException(nameof(value), value, null),
             };
             writer.WriteStringValue(stringValue);
