@@ -1,17 +1,10 @@
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
 
 using FluentAssertions;
-
-using NUnit.Framework;
 
 using Yaref92.Events.Transports;
 
@@ -333,8 +326,8 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                var result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
-                if (!result.Success || result.Frame is null)
+                SessionFrameIO.FrameReadResult result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
+                if (!result.IsSuccess || result.Frame is null)
                 {
                     break;
                 }
@@ -440,7 +433,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         field.SetValue(client, path);
     }
 
-    private static void NotifyWaiters(List<(int Target, TaskCompletionSource Completion)> waiters, int current)
+    private void NotifyWaiters(List<(int Target, TaskCompletionSource Completion)> waiters, int current)
     {
         if (waiters.Count == 0)
         {

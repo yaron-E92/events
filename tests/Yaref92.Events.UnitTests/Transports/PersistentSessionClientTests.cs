@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -45,7 +45,7 @@ public class PersistentSessionClientTests
             snapshot.Should().ContainKey(secondId).WhoseValue.Should().Be("second");
 
             var nextMessageId = PersistentSessionClientTestHelper.GetNextMessageId(reader);
-            nextMessageId.Should().BeGreaterOrEqualTo(secondId);
+            nextMessageId.Should().BeGreaterThanOrEqualTo(secondId);
         }
         finally
         {

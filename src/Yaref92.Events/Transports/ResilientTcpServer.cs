@@ -1,17 +1,11 @@
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Yaref92.Events.Transports;
 
-internal sealed class ResilientTcpServer : IAsyncDisposable
+public sealed class ResilientTcpServer : IAsyncDisposable
 {
     private readonly int _port;
     private readonly ResilientSessionOptions _options;

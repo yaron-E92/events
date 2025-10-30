@@ -1,18 +1,13 @@
-using System;
-using System.Collections.Concurrent;
-using System.IO;
-using System.Linq;
+﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 
 using Yaref92.Events.Abstractions;
 
 namespace Yaref92.Events.Transports;
 
-internal sealed class PersistentSessionClient : IAsyncDisposable
+public sealed class PersistentSessionClient : IAsyncDisposable
 {
     private const string OutboxFileName = "outbox.json";
     private static readonly SemaphoreSlim OutboxFileLock = new(1, 1);

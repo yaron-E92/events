@@ -197,7 +197,7 @@ public class TCPEventTransportUnitTests
             _failures[client] = exception;
         }
 
-        protected override Task WriteToClientAsync(
+        protected Task WriteToClientAsync(
             TcpClient client,
             ReadOnlyMemory<byte> lengthPrefix,
             ReadOnlyMemory<byte> payload,

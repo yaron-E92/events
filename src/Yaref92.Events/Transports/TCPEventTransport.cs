@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -158,36 +158,31 @@ public class TCPEventTransport : IEventTransport, IDisposable
 
     private Task DispatchEventAsync(string payload, CancellationToken cancellationToken)
     {
-        EventEnvelope? envelope;
+        Type? eventType;
+        IDomainEvent? domainEvent;
         try
         {
-            envelope = JsonSerializer.Deserialize<EventEnvelope>(payload);
+
+            (eventType, domainEvent) = _serializer.Deserialize(payload);
         }
         catch (JsonException ex)
         {
             return Console.Error.WriteLineAsync($"Failed to deserialize event envelope: {ex}");
         }
 
-        if (envelope?.TypeName is null || envelope.EventJson is null)
-        {
-            return Task.CompletedTask;
-        }
-
-        var eventType = Type.GetType(envelope.TypeName, throwOnError: false);
         if (eventType is null)
         {
-            return Console.Error.WriteLineAsync($"Unknown event type '{envelope.TypeName}'.");
+            return Console.Error.WriteLineAsync($"Unknown or missing event type.");
+        }
+
+        if (domainEvent is null)
+        {
+            return Console.Error.WriteLineAsync($"missing event.");
         }
 
         if (!_handlers.TryGetValue(eventType, out var handlers) || handlers.Count == 0)
         {
-            return Task.CompletedTask;
-        }
-
-        var domainEvent = _serializer.Deserialize(envelope.EventJson, eventType);
-        if (domainEvent is null)
-        {
-            return Task.CompletedTask;
+            return Console.Error.WriteLineAsync($"No handlers found for the event type {eventType}");
         }
 
         return InvokeHandlersAsync(handlers, domainEvent, cancellationToken);

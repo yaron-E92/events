@@ -1,14 +1,11 @@
-using System;
-using System.Buffers;
+﻿using System.Buffers;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Yaref92.Events.Transports;
 
-internal static class SessionFrameIO
+public static class SessionFrameIO
 {
     public static async Task<FrameReadResult> ReadFrameAsync(NetworkStream stream, byte[] lengthBuffer, CancellationToken cancellationToken)
     {
@@ -62,7 +59,7 @@ internal static class SessionFrameIO
         return true;
     }
 
-    internal readonly record struct FrameReadResult(bool IsSuccess, SessionFrame? Frame)
+    public readonly record struct FrameReadResult(bool IsSuccess, SessionFrame? Frame)
     {
         public static FrameReadResult Success(SessionFrame frame) => new(true, frame);
 

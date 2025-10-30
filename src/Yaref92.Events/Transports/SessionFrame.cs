@@ -1,10 +1,10 @@
-using System;
+﻿using System;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Yaref92.Events.Transports;
 
-internal enum SessionFrameKind
+public enum SessionFrameKind
 {
     Auth,
     Ping,
@@ -13,7 +13,7 @@ internal enum SessionFrameKind
     Ack,
 }
 
-internal sealed class SessionFrame
+public sealed class SessionFrame
 {
     [JsonPropertyName("kind")]
     public SessionFrameKind Kind { get; init; }

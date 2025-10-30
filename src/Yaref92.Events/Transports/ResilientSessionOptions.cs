@@ -1,8 +1,6 @@
-using System;
+﻿namespace Yaref92.Events.Transports;
 
-namespace Yaref92.Events.Transports;
-
-internal sealed class ResilientSessionOptions
+public sealed class ResilientSessionOptions
 {
     public bool RequireAuthentication { get; init; }
 
