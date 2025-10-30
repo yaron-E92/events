@@ -18,6 +18,13 @@ Designed for decoupled communication in modern applications.
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
   - [Networked Event Aggregation](#networked-event-aggregation)
+    - [Features](#features-1)
+    - [Basic Usage Example](#basic-usage-example)
+    - [Event Type Requirements](#event-type-requirements)
+    - [Deduplication & Memory Management](#deduplication--memory-management)
+    - [Security & Hardening](#security--hardening)
+    - [Resilient TCP Transport](#resilient-tcp-transport)
+    - [API Reference](#api-reference)
   - [Installation](#installation)
     - [Core Package](#core-package)
     - [Rx Integration (Optional)](#rx-integration-optional)
@@ -152,6 +159,26 @@ var networkedAggregator = new NetworkedEventAggregator(localAggregator, transpor
   - Enabling idle timeouts
   - Adding authentication or encryption
   - Handling malformed messages robustly
+
+### Resilient TCP Transport
+
+The built-in TCP transport ships with a resilient session layer that manages authentication, heartbeats, reconnection backoff, and an on-disk outbox for at-least-once delivery. Configure it when constructing `TCPEventTransport`:
+
+```csharp
+var transport = new TCPEventTransport(
+    listenPort: 9000,
+    serializer: new JsonEventSerializer(),
+    eventAggregator: localAggregator,
+    heartbeatInterval: TimeSpan.FromSeconds(15),
+    authenticationToken: "shared-secret");
+```
+
+- **Authentication:** Set `authenticationToken` to require peers to present the matching `AUTH` frame.
+- **Heartbeats:** Omit `heartbeatInterval` to use the 30s default. The timeout automatically scales to 90s.
+- **Outbox:** Events are durably staged in `<AppContext.BaseDirectory>/outbox.json` until acknowledged by a peer.
+- **Reconnection:** Exponential backoff starts at 1s and caps at 30s. Adjust `heartbeatInterval` to tune detection speed.
+
+See [docs/networking/resilient-tcp.md](docs/networking/resilient-tcp.md) for a deeper dive into the frame format, configuration options, and integration guidance.
 
 ### API Reference
 
