@@ -34,7 +34,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
     private bool _initialized;
 
     private readonly TaskCompletionSource _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource _cts = new();
     private Task? _runTask;
     private readonly object _runLock = new();
 
@@ -96,10 +96,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
 
     public void EnqueueControlMessage(SessionFrame frame)
     {
-        if (frame is null)
-        {
-            throw new ArgumentNullException(nameof(frame));
-        }
+        ArgumentNullException.ThrowIfNull(frame);
 
         _controlQueue.Enqueue(frame);
         _sendSignal.Release();
@@ -131,7 +128,19 @@ public sealed class PersistentSessionClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _cts.CancelAsync().ConfigureAwait(false);
+        if (_cts is not null)
+        {
+            try
+            {
+                await _cts.CancelAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                await Console.Error.WriteLineAsync($"{nameof(PersistentSessionClient)} CTS already disposed");
+                _cts = null!;
+            }
+        }
+
         Task? runTask;
         lock (_runLock)
         {
@@ -152,7 +161,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
 
         _sendSignal.Dispose();
         _stateLock.Dispose();
-        _cts.Dispose();
+        _cts?.Dispose();
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)

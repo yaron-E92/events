@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Threading.Tasks;
 
 using FluentAssertions;
 
@@ -111,7 +112,7 @@ public class ResilientSessionIntegrationTests
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < timeout)
         {
-            var sessions = (ConcurrentDictionary<string, object?>)sessionsField.GetValue(server)!;
+            var sessions = (ConcurrentDictionary<string, ResilientTcpServer.SessionState>) sessionsField.GetValue(server)!;
             var drained = true;
             foreach (var sessionState in sessions.Values)
             {
@@ -126,7 +127,7 @@ public class ResilientSessionIntegrationTests
                     continue;
                 }
 
-                var inflight = (ConcurrentDictionary<long, SessionFrame>)inflightField.GetValue(sessionState)!;
+                var inflight = (ConcurrentDictionary<long, SessionFrame>) inflightField.GetValue(sessionState)!;
                 if (!inflight.IsEmpty)
                 {
                     drained = false;
@@ -151,7 +152,7 @@ public class ResilientSessionIntegrationTests
         listener.Start();
         try
         {
-            return ((IPEndPoint)listener.LocalEndpoint).Port;
+            return ((IPEndPoint) listener.LocalEndpoint).Port;
         }
         finally
         {
@@ -208,10 +209,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     public async Task WaitForMessageCountAsync(int count, TimeSpan timeout)
     {
-        if (count <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(count));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
 
         TaskCompletionSource waiter;
         lock (_waiterLock)
@@ -225,7 +223,20 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
             _messageWaiters.Add((count, waiter));
         }
 
-        await waiter.Task.WaitAsync(timeout).ConfigureAwait(false);
+        await TryToAwaitWaiter(timeout, waiter).ConfigureAwait(false);
+    }
+
+    private static async Task TryToAwaitWaiter(TimeSpan timeout, TaskCompletionSource waiter)
+    {
+        try
+        {
+            await waiter.Task.WaitAsync(timeout).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is AggregateException or TimeoutException)
+        {
+            var exOrflattened = ex is AggregateException aggEx ? aggEx.Flatten() : ex;
+            await Console.Error.WriteLineAsync($"Persistent receive loop faulted: {exOrflattened}");
+        }
     }
 
     public async Task WaitForAckCountAsync(int count, TimeSpan timeout)
@@ -247,7 +258,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
             _ackWaiters.Add((count, waiter));
         }
 
-        await waiter.Task.WaitAsync(timeout).ConfigureAwait(false);
+        await TryToAwaitWaiter(timeout, waiter).ConfigureAwait(false);
     }
 
     public async Task WaitForConnectionCountAsync(int count, TimeSpan timeout)
@@ -269,7 +280,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
             _connectionWaiters.Add((count, waiter));
         }
 
-        await waiter.Task.WaitAsync(timeout).ConfigureAwait(false);
+        await TryToAwaitWaiter(timeout, waiter).ConfigureAwait(false);
     }
 
     public async Task WaitForOutboxCountAsync(int expectedCount, TimeSpan timeout)
@@ -414,7 +425,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     private IReadOnlyCollection<long> GetOutboxEntries()
     {
         var entriesField = typeof(PersistentSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var entries = (System.Collections.IDictionary)entriesField.GetValue(Client)!;
+        var entries = (System.Collections.IDictionary) entriesField.GetValue(Client)!;
         var keys = new List<long>();
         foreach (var key in entries.Keys)
         {

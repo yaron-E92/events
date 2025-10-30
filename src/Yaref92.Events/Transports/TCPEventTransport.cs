@@ -13,7 +13,7 @@ using Yaref92.Events.Serialization;
 
 namespace Yaref92.Events.Transports;
 
-public class TCPEventTransport : IEventTransport, IDisposable
+public class TCPEventTransport : IEventTransport, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<Type, ConcurrentBag<Func<object, CancellationToken, Task>>> _handlers = new();
     private readonly ConcurrentDictionary<string, PersistentSessionClient> _persistentSessions = new();
@@ -118,19 +118,23 @@ public class TCPEventTransport : IEventTransport, IDisposable
         bag.Add(async (obj, ct) => await handler((T)obj, ct).ConfigureAwait(false));
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        _cts?.Cancel();
+        if (_cts is not null)
+        {
+            await _cts.CancelAsync().ConfigureAwait(false);
+        }
 
         foreach (var task in _receiveTasks.Values)
         {
             try
             {
-                task.Wait();
+                await task.WaitAsync(TimeSpan.FromSeconds(5));
             }
-            catch (AggregateException ex)
+            catch (Exception ex) when (ex is AggregateException or TimeoutException)
             {
-                Console.Error.WriteLine($"Persistent receive loop faulted: {ex.Flatten()}");
+                var exOrflattened = ex is AggregateException aggEx ? aggEx.Flatten() : ex;
+                await Console.Error.WriteLineAsync($"Persistent receive loop faulted: {exOrflattened}");
             }
         }
 
@@ -138,19 +142,22 @@ public class TCPEventTransport : IEventTransport, IDisposable
 
         foreach (var session in _persistentSessions.Values)
         {
-            session.DisposeAsync().AsTask().Wait();
+            await session.DisposeAsync();
         }
 
         _persistentSessions.Clear();
 
         if (_server is not null)
         {
-            _server.DisposeAsync().AsTask().Wait();
+            await _server.DisposeAsync();
             _server = null;
         }
 
-        _cts?.Dispose();
-        _cts = null;
+        if (_cts is not null)
+        {
+            _cts.Dispose();
+            _cts = null;
+        }
     }
 
     private Task HandleInboundMessageAsync(string sessionKey, string payload, CancellationToken cancellationToken)

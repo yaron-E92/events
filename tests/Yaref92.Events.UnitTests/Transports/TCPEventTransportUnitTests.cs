@@ -60,7 +60,7 @@ public class TCPEventTransportUnitTests
     public async Task PublishAsync_WithPersistentSessions_EnqueuesPayload_ForEachSession()
     {
         // Arrange
-        using var transport = new TCPEventTransport(0);
+        await using var transport = new TCPEventTransport(0);
         var sessions = GetPersistentSessionsDictionary(transport);
 
         var tempDirectory = CreateTempDirectory();
@@ -92,7 +92,7 @@ public class TCPEventTransportUnitTests
     [Test]
     public async Task PublishAsync_WhenPersistentSessionThrows_PropagatesException()
     {
-        using var transport = new TCPEventTransport(0);
+        await using var transport = new TCPEventTransport(0);
         var sessions = GetPersistentSessionsDictionary(transport);
 
         var tempDirectory = CreateTempDirectory();

@@ -427,7 +427,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable
         public static SessionInitializationResult Failed() => new(false, null, null, null, null);
     }
 
-    private sealed class SessionState : IAsyncDisposable
+    public sealed class SessionState : IAsyncDisposable
     {
         private readonly ConcurrentQueue<SessionFrame> _outbound = new();
         private readonly ConcurrentDictionary<long, SessionFrame> _inflight = new();
@@ -607,7 +607,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable
         }
     }
 
-    private sealed class SessionConnection : IAsyncDisposable
+    public sealed class SessionConnection : IAsyncDisposable
     {
         public SessionConnection(TcpClient client, NetworkStream stream, CancellationTokenSource cancellation, Task sendTask)
         {
