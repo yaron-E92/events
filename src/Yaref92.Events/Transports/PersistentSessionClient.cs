@@ -21,12 +21,12 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
     private readonly string _host;
     private readonly int _port;
     private readonly Func<PersistentSessionClient, TcpClient, CancellationToken, Task> _onClientConnected;
-    private readonly TimeSpan _heartbeatInterval;
-    private readonly string? _authenticationToken;
+    private readonly ResilientSessionOptions _options;
+    private readonly string? _authenticationSecret;
     private readonly IEventAggregator? _eventAggregator;
 
-    private readonly ConcurrentQueue<TransportEnvelope> _controlQueue = new();
-    private readonly ConcurrentQueue<TransportEnvelope> _eventQueue = new();
+    private readonly ConcurrentQueue<SessionFrame> _controlQueue = new();
+    private readonly ConcurrentQueue<SessionFrame> _eventQueue = new();
     private readonly SemaphoreSlim _sendSignal = new(0, int.MaxValue);
     private readonly SemaphoreSlim _stateLock = new(1, 1);
 
@@ -47,15 +47,14 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         string host,
         int port,
         Func<PersistentSessionClient, TcpClient, CancellationToken, Task> onClientConnected,
-        TimeSpan? heartbeatInterval = null,
-        string? authenticationToken = null,
+        ResilientSessionOptions? options = null,
         IEventAggregator? eventAggregator = null)
     {
         _host = host;
         _port = port;
         _onClientConnected = onClientConnected ?? throw new ArgumentNullException(nameof(onClientConnected));
-        _heartbeatInterval = heartbeatInterval ?? TimeSpan.FromSeconds(30);
-        _authenticationToken = authenticationToken;
+        _options = options ?? new ResilientSessionOptions();
+        _authenticationSecret = _options.AuthenticationToken;
         _eventAggregator = eventAggregator;
         _sessionKey = $"{host}:{port}";
         _outboxPath = Path.Combine(AppContext.BaseDirectory, OutboxFileName);
@@ -88,7 +87,7 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
                 IsQueued = true,
             };
             _outboxEntries[messageId] = entry;
-            _eventQueue.Enqueue(TransportEnvelope.CreateEvent(messageId, payload));
+            _eventQueue.Enqueue(SessionFrame.CreateMessage(messageId, payload));
         }
         finally
         {
@@ -100,14 +99,14 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         return messageId;
     }
 
-    public void EnqueueControlMessage(TransportEnvelope envelope)
+    public void EnqueueControlMessage(SessionFrame frame)
     {
-        if (envelope is null)
+        if (frame is null)
         {
-            throw new ArgumentNullException(nameof(envelope));
+            throw new ArgumentNullException(nameof(frame));
         }
 
-        _controlQueue.Enqueue(envelope);
+        _controlQueue.Enqueue(frame);
         _sendSignal.Release();
     }
 
@@ -283,10 +282,7 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
 
         await ReplayPendingEntriesAsync(connectionToken).ConfigureAwait(false);
 
-        if (_authenticationToken is not null)
-        {
-            await WriteEnvelopeAsync(client.GetStream(), TransportEnvelope.CreateAuth(_authenticationToken), connectionToken).ConfigureAwait(false);
-        }
+        await WriteFrameAsync(client.GetStream(), SessionFrame.CreateAuth(_sessionKey, _authenticationSecret), connectionToken).ConfigureAwait(false);
 
         var sendTask = RunSendLoopAsync(client, connectionToken);
         var heartbeatTask = RunHeartbeatLoopAsync(connectionToken);
@@ -315,21 +311,21 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         var stream = client.GetStream();
         while (!cancellationToken.IsCancellationRequested)
         {
-            TransportEnvelope? envelope;
-            if (!_controlQueue.TryDequeue(out envelope) && !_eventQueue.TryDequeue(out envelope))
+            SessionFrame? frame;
+            if (!_controlQueue.TryDequeue(out frame) && !_eventQueue.TryDequeue(out frame))
             {
                 await _sendSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
-            if (envelope.MessageType == TransportMessageType.Event && envelope.MessageId is long eventId && !TryMarkEventDequeued(eventId))
+            if (frame.Kind == SessionFrameKind.Message && frame.Id is long eventId && !TryMarkEventDequeued(eventId))
             {
                 continue;
             }
 
             try
             {
-                await WriteEnvelopeAsync(stream, envelope, cancellationToken).ConfigureAwait(false);
+                await WriteFrameAsync(stream, frame, cancellationToken).ConfigureAwait(false);
             }
             catch (IOException ex)
             {
@@ -346,11 +342,14 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
 
     private async Task RunHeartbeatLoopAsync(CancellationToken cancellationToken)
     {
-        var timeout = TimeSpan.FromTicks(_heartbeatInterval.Ticks * 2);
+        var heartbeatInterval = _options.HeartbeatInterval;
+        var timeout = _options.HeartbeatTimeout <= TimeSpan.Zero
+            ? heartbeatInterval * 2
+            : _options.HeartbeatTimeout;
         while (!cancellationToken.IsCancellationRequested)
         {
-            await Task.Delay(_heartbeatInterval, cancellationToken).ConfigureAwait(false);
-            EnqueueControlMessage(TransportEnvelope.CreatePing());
+            await Task.Delay(heartbeatInterval, cancellationToken).ConfigureAwait(false);
+            EnqueueControlMessage(SessionFrame.CreatePing());
 
             var lastTicks = Volatile.Read(ref _lastRemoteActivityTicks);
             var lastActivity = new DateTime(lastTicks, DateTimeKind.Utc);
@@ -363,17 +362,17 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
 
     private async Task ReplayPendingEntriesAsync(CancellationToken cancellationToken)
     {
-        List<TransportEnvelope> envelopes;
+        List<SessionFrame> frames;
         await _stateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            envelopes = _outboxEntries.Values
+            frames = _outboxEntries.Values
                 .Where(entry => !entry.IsQueued)
                 .OrderBy(entry => entry.MessageId)
                 .Select(entry =>
                 {
                     entry.IsQueued = true;
-                    return TransportEnvelope.CreateEvent(entry.MessageId, entry.Payload);
+                    return SessionFrame.CreateMessage(entry.MessageId, entry.Payload);
                 })
                 .ToList();
         }
@@ -382,9 +381,9 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
             _stateLock.Release();
         }
 
-        foreach (var envelope in envelopes)
+        foreach (var frame in frames)
         {
-            _eventQueue.Enqueue(envelope);
+            _eventQueue.Enqueue(frame);
             _sendSignal.Release();
         }
     }
@@ -547,15 +546,23 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
     }
 
-    private static TimeSpan GetBackoffDelay(int attempt)
+    private TimeSpan GetBackoffDelay(int attempt)
     {
-        var seconds = Math.Min(Math.Pow(2, attempt), 30);
-        return TimeSpan.FromSeconds(seconds);
+        var initial = _options.BackoffInitialDelay <= TimeSpan.Zero
+            ? TimeSpan.FromSeconds(1)
+            : _options.BackoffInitialDelay;
+        var max = _options.BackoffMaxDelay <= TimeSpan.Zero
+            ? TimeSpan.FromSeconds(30)
+            : _options.BackoffMaxDelay;
+
+        var multiplier = Math.Pow(2, Math.Max(0, attempt - 1));
+        var candidate = TimeSpan.FromMilliseconds(initial.TotalMilliseconds * multiplier);
+        return candidate > max ? max : candidate;
     }
 
-    private static async Task WriteEnvelopeAsync(NetworkStream stream, TransportEnvelope envelope, CancellationToken cancellationToken)
+    private static async Task WriteFrameAsync(NetworkStream stream, SessionFrame frame, CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.SerializeToUtf8Bytes(envelope, TransportEnvelopeSerializer.Options);
+        var payload = JsonSerializer.SerializeToUtf8Bytes(frame, SessionFrameSerializer.Options);
         var lengthPrefix = BitConverter.GetBytes(payload.Length);
         await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
