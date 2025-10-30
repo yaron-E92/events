@@ -363,7 +363,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
         }
     }
 
-    private async Task<EnvelopeReadStatus> TryReadLengthPrefixAsync(NetworkStream stream, byte[] lengthBuffer, CancellationToken cancellationToken)
+    private static async Task<EnvelopeReadStatus> TryReadLengthPrefixAsync(NetworkStream stream, byte[] lengthBuffer, CancellationToken cancellationToken)
     {
         try
         {
@@ -387,7 +387,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
         }
     }
 
-    private async Task<EnvelopeReadStatus> TryReadPayloadAsync(NetworkStream stream, Memory<byte> buffer, CancellationToken cancellationToken)
+    private static async Task<EnvelopeReadStatus> TryReadPayloadAsync(NetworkStream stream, Memory<byte> buffer, CancellationToken cancellationToken)
     {
         try
         {
@@ -454,22 +454,7 @@ public class TCPEventTransport : IEventTransport, IDisposable
         switch (envelope.MessageType)
         {
             case TransportMessageType.Event:
-                if (!string.IsNullOrWhiteSpace(envelope.Payload))
-                {
-                    (Type? type, IDomainEvent? domainEvent) = _serializer.Deserialize(envelope.Payload);
-                    if (type != null && _handlers.TryGetValue(type, out var handlersForType))
-                    {
-                        foreach (var handler in handlersForType)
-                        {
-                            await handler(domainEvent!, cancellationToken).ConfigureAwait(false);
-                        }
-                    }
-                }
-
-                if (envelope.MessageId.HasValue)
-                {
-                    await SendAckAsync(client, session, envelope.MessageId.Value, cancellationToken).ConfigureAwait(false);
-                }
+                await HandleEventEnvelopeAsync(client, session, envelope, cancellationToken).ConfigureAwait(false);
                 break;
             case TransportMessageType.Ack:
                 if (session is not null && envelope.MessageId.HasValue)
@@ -489,6 +474,39 @@ public class TCPEventTransport : IEventTransport, IDisposable
                 break;
             default:
                 break;
+        }
+    }
+
+    private async Task HandleEventEnvelopeAsync(
+        TcpClient client,
+        PersistentSessionClient? session,
+        TransportEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        await DispatchEventAsync(envelope, cancellationToken).ConfigureAwait(false);
+
+        if (envelope.MessageId.HasValue)
+        {
+            await SendAckAsync(client, session, envelope.MessageId.Value, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task DispatchEventAsync(TransportEnvelope envelope, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(envelope.Payload))
+        {
+            return;
+        }
+
+        (Type? type, IDomainEvent? domainEvent) = _serializer.Deserialize(envelope.Payload);
+        if (type is null || !_handlers.TryGetValue(type, out var handlersForType))
+        {
+            return;
+        }
+
+        foreach (var handler in handlersForType)
+        {
+            await handler(domainEvent!, cancellationToken).ConfigureAwait(false);
         }
     }
 

@@ -292,7 +292,7 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         var heartbeatTask = RunHeartbeatLoopAsync(connectionToken);
 
         var completed = await Task.WhenAny(sendTask, heartbeatTask).ConfigureAwait(false);
-        connectionCts.Cancel();
+        await connectionCts.CancelAsync().ConfigureAwait(false);
 
         try
         {
@@ -322,12 +322,9 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
                 continue;
             }
 
-            if (envelope.MessageType == TransportMessageType.Event && envelope.MessageId is long eventId)
+            if (envelope.MessageType == TransportMessageType.Event && envelope.MessageId is long eventId && !TryMarkEventDequeued(eventId))
             {
-                if (!TryMarkEventDequeued(eventId))
-                {
-                    continue;
-                }
+                continue;
             }
 
             try
