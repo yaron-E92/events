@@ -218,12 +218,12 @@ public class TCPEventTransport : IEventTransport, IDisposable
                 }
                 catch (SocketException ex)
                 {
-                    Console.Error.WriteLine($"{nameof(AcceptConnectionsLoopAsync)} socket error: {ex}");
+                    await Console.Error.WriteLineAsync($"{nameof(AcceptConnectionsLoopAsync)} socket error: {ex}").ConfigureAwait(false);
                     continue;
                 }
                 catch (IOException ex)
                 {
-                    Console.Error.WriteLine($"{nameof(AcceptConnectionsLoopAsync)} I/O error: {ex}");
+                    await Console.Error.WriteLineAsync($"{nameof(AcceptConnectionsLoopAsync)} I/O error: {ex}").ConfigureAwait(false);
                     continue;
                 }
                 catch (ObjectDisposedException)
@@ -283,100 +283,166 @@ public class TCPEventTransport : IEventTransport, IDisposable
             var lengthBuffer = new byte[4];
             while (!cancellationToken.IsCancellationRequested)
             {
-                try
+                if (!await ProcessNextEnvelopeAsync(client, session, stream, lengthBuffer, cancellationToken).ConfigureAwait(false))
                 {
-                    if (!await ReadExactAsync(stream, lengthBuffer.AsMemory(0, 4), cancellationToken).ConfigureAwait(false))
-                    {
-                        break;
-                    }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (IOException ex)
-                {
-                    Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} I/O error while reading length prefix: {ex}");
-                    break;
-                }
-                catch (SocketException ex)
-                {
-                    Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} socket error while reading length prefix: {ex}");
-                    break;
-                }
-
-                var length = BitConverter.ToInt32(lengthBuffer, 0);
-                var payloadBuffer = ArrayPool<byte>.Shared.Rent(length);
-                try
-                {
-                    if (!await ReadExactAsync(stream, payloadBuffer.AsMemory(0, length), cancellationToken).ConfigureAwait(false))
-                    {
-                        break;
-                    }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    ArrayPool<byte>.Shared.Return(payloadBuffer);
-                    break;
-                }
-                catch (IOException ex)
-                {
-                    ArrayPool<byte>.Shared.Return(payloadBuffer);
-                    Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} I/O error while reading payload: {ex}");
-                    continue;
-                }
-                catch (SocketException ex)
-                {
-                    ArrayPool<byte>.Shared.Return(payloadBuffer);
-                    Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} socket error while reading payload: {ex}");
-                    continue;
-                }
-
-                TransportEnvelope? envelope = null;
-                try
-                {
-                    var json = Encoding.UTF8.GetString(payloadBuffer, 0, length);
-                    envelope = JsonSerializer.Deserialize<TransportEnvelope>(json, TransportEnvelopeSerializer.Options);
-                }
-                catch (JsonException ex)
-                {
-                    Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} failed to deserialize transport envelope: {ex}");
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(payloadBuffer);
-                }
-
-                if (envelope is null)
-                {
-                    continue;
-                }
-
-                session?.RecordRemoteActivity();
-
-                try
-                {
-                    await HandleTransportEnvelopeAsync(client, session, envelope, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is IOException or SocketException)
-                {
-                    Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} failed to handle envelope: {ex}");
                     break;
                 }
             }
         }
         catch (IOException ex)
         {
-            Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} encountered an I/O error: {ex}");
+            await Console.Error.WriteLineAsync($"{nameof(ReceiveMessagesLoopAsync)} encountered an I/O error: {ex}").ConfigureAwait(false);
         }
         catch (SocketException ex)
         {
-            Console.Error.WriteLine($"{nameof(ReceiveMessagesLoopAsync)} encountered a socket error: {ex}");
+            await Console.Error.WriteLineAsync($"{nameof(ReceiveMessagesLoopAsync)} encountered a socket error: {ex}").ConfigureAwait(false);
         }
         finally
         {
             CleanupClient(client);
         }
+    }
+
+    private async Task<bool> ProcessNextEnvelopeAsync(
+        TcpClient client,
+        PersistentSessionClient? session,
+        NetworkStream stream,
+        byte[] lengthBuffer,
+        CancellationToken cancellationToken)
+    {
+        var readResult = await TryReadEnvelopeAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
+        switch (readResult.Status)
+        {
+            case EnvelopeReadStatus.Break:
+                return false;
+            case EnvelopeReadStatus.Continue:
+                return true;
+            case EnvelopeReadStatus.Success:
+                session?.RecordRemoteActivity();
+                return await TryHandleEnvelopeAsync(client, session, readResult.Envelope!, cancellationToken).ConfigureAwait(false);
+            default:
+                return false;
+        }
+    }
+
+    private async Task<EnvelopeReadResult> TryReadEnvelopeAsync(NetworkStream stream, byte[] lengthBuffer, CancellationToken cancellationToken)
+    {
+        var lengthStatus = await TryReadLengthPrefixAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
+        if (lengthStatus != EnvelopeReadStatus.Success)
+        {
+            return EnvelopeReadResult.FromStatus(lengthStatus);
+        }
+
+        var length = BitConverter.ToInt32(lengthBuffer, 0);
+        var payloadBuffer = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            var payloadStatus = await TryReadPayloadAsync(stream, payloadBuffer.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
+            if (payloadStatus != EnvelopeReadStatus.Success)
+            {
+                return EnvelopeReadResult.FromStatus(payloadStatus);
+            }
+
+            try
+            {
+                var json = Encoding.UTF8.GetString(payloadBuffer, 0, length);
+                var envelope = JsonSerializer.Deserialize<TransportEnvelope>(json, TransportEnvelopeSerializer.Options);
+                return envelope is null
+                    ? EnvelopeReadResult.Continue()
+                    : EnvelopeReadResult.Success(envelope);
+            }
+            catch (JsonException ex)
+            {
+                await Console.Error.WriteLineAsync($"{nameof(ReceiveMessagesLoopAsync)} failed to deserialize transport envelope: {ex}").ConfigureAwait(false);
+                return EnvelopeReadResult.Continue();
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(payloadBuffer);
+        }
+    }
+
+    private async Task<EnvelopeReadStatus> TryReadLengthPrefixAsync(NetworkStream stream, byte[] lengthBuffer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ReadExactAsync(stream, lengthBuffer.AsMemory(0, 4), cancellationToken).ConfigureAwait(false)
+                ? EnvelopeReadStatus.Success
+                : EnvelopeReadStatus.Break;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return EnvelopeReadStatus.Break;
+        }
+        catch (IOException ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(ReceiveMessagesLoopAsync)} I/O error while reading length prefix: {ex}").ConfigureAwait(false);
+            return EnvelopeReadStatus.Break;
+        }
+        catch (SocketException ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(ReceiveMessagesLoopAsync)} socket error while reading length prefix: {ex}").ConfigureAwait(false);
+            return EnvelopeReadStatus.Break;
+        }
+    }
+
+    private async Task<EnvelopeReadStatus> TryReadPayloadAsync(NetworkStream stream, Memory<byte> buffer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ReadExactAsync(stream, buffer, cancellationToken).ConfigureAwait(false)
+                ? EnvelopeReadStatus.Success
+                : EnvelopeReadStatus.Break;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return EnvelopeReadStatus.Break;
+        }
+        catch (IOException ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(ReceiveMessagesLoopAsync)} I/O error while reading payload: {ex}").ConfigureAwait(false);
+            return EnvelopeReadStatus.Continue;
+        }
+        catch (SocketException ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(ReceiveMessagesLoopAsync)} socket error while reading payload: {ex}").ConfigureAwait(false);
+            return EnvelopeReadStatus.Continue;
+        }
+    }
+
+    private async Task<bool> TryHandleEnvelopeAsync(
+        TcpClient client,
+        PersistentSessionClient? session,
+        TransportEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await HandleTransportEnvelopeAsync(client, session, envelope, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or SocketException)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(ReceiveMessagesLoopAsync)} failed to handle envelope: {ex}").ConfigureAwait(false);
+            return false;
+        }
+    }
+
+    private enum EnvelopeReadStatus
+    {
+        Success,
+        Continue,
+        Break,
+    }
+
+    private readonly record struct EnvelopeReadResult(EnvelopeReadStatus Status, TransportEnvelope? Envelope)
+    {
+        public static EnvelopeReadResult Success(TransportEnvelope envelope) => new(EnvelopeReadStatus.Success, envelope);
+
+        public static EnvelopeReadResult Continue() => new(EnvelopeReadStatus.Continue, null);
+
+        public static EnvelopeReadResult FromStatus(EnvelopeReadStatus status) => new(status, null);
     }
 
     private async Task HandleTransportEnvelopeAsync(

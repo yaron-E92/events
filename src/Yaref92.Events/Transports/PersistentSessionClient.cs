@@ -137,7 +137,7 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel();
+        await _cts.CancelAsync().ConfigureAwait(false);
         Task? runTask;
         lock (_runLock)
         {
@@ -235,6 +235,37 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         }
     }
 
+    private void SignalFirstConnectionSuccess()
+    {
+        if (_firstConnectionCompletion.Task.IsCompleted)
+        {
+            return;
+        }
+
+        _firstConnectionCompletion.TrySetResult();
+    }
+
+    private static void ThrowIfConnectionFailed(Task completedTask)
+    {
+        if (!completedTask.IsFaulted)
+        {
+            return;
+        }
+
+        throw completedTask.Exception?.GetBaseException()
+            ?? new IOException("Persistent session terminated unexpectedly.");
+    }
+
+    private static void ThrowIfSessionEndedUnexpectedly(CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        throw new IOException("Persistent session terminated unexpectedly.");
+    }
+
     private async Task RunConnectionOnceAsync(CancellationToken cancellationToken)
     {
         using var client = new TcpClient();
@@ -248,10 +279,7 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
 
         await _onClientConnected(this, client, connectionToken).ConfigureAwait(false);
 
-        if (!_firstConnectionCompletion.Task.IsCompleted)
-        {
-            _firstConnectionCompletion.TrySetResult();
-        }
+        SignalFirstConnectionSuccess();
 
         await ReplayPendingEntriesAsync(connectionToken).ConfigureAwait(false);
 
@@ -278,15 +306,8 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
             }
         }
 
-        if (completed.IsFaulted)
-        {
-            throw completed.Exception?.GetBaseException() ?? new IOException("Persistent session terminated unexpectedly.");
-        }
-
-        if (!cancellationToken.IsCancellationRequested)
-        {
-            throw new IOException("Persistent session terminated unexpectedly.");
-        }
+        ThrowIfConnectionFailed(completed);
+        ThrowIfSessionEndedUnexpectedly(cancellationToken);
     }
 
     private async Task RunSendLoopAsync(TcpClient client, CancellationToken cancellationToken)
@@ -294,14 +315,11 @@ internal sealed class PersistentSessionClient : IAsyncDisposable
         var stream = client.GetStream();
         while (!cancellationToken.IsCancellationRequested)
         {
-            TransportEnvelope? envelope = null;
-            if (!_controlQueue.TryDequeue(out envelope))
+            TransportEnvelope? envelope;
+            if (!_controlQueue.TryDequeue(out envelope) && !_eventQueue.TryDequeue(out envelope))
             {
-                if (!_eventQueue.TryDequeue(out envelope))
-                {
-                    await _sendSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
+                await _sendSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
+                continue;
             }
 
             if (envelope.MessageType == TransportMessageType.Event && envelope.MessageId is long eventId)
