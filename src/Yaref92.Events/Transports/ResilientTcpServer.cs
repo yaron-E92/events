@@ -92,7 +92,7 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        _cts.Cancel();
+        await _cts.CancelAsync().ConfigureAwait(false);
         _listener?.Stop();
 
         var tasks = _clientTasks.Values.ToArray();
@@ -170,70 +170,22 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
 
         try
         {
-            var firstFrameResult = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, serverToken).ConfigureAwait(false);
-            if (!firstFrameResult.Success)
+            var initialization = await InitializeSessionAsync(client, stream, lengthBuffer, serverToken).ConfigureAwait(false);
+            if (!initialization.Success)
             {
                 return;
             }
 
-            var firstFrame = firstFrameResult.Frame!;
-            SessionFrame? pendingFrame = null;
-            if (firstFrame.Kind == SessionFrameKind.Auth)
-            {
-                var token = firstFrame.Token;
-                if (string.IsNullOrWhiteSpace(token))
-                {
-                    return;
-                }
+            session = initialization.Session;
+            connection = initialization.Connection;
+            connectionCts = initialization.ConnectionCancellation;
 
-                if (_options.RequireAuthentication && !IsTokenAccepted(token, firstFrame.Payload))
-                {
-                    return;
-                }
-
-                session = _sessions.GetOrAdd(token, key => new SessionState(key, _options));
-                session.RegisterAuthentication(firstFrame.Payload);
-            }
-            else if (_options.RequireAuthentication)
+            if (initialization.PendingFrame is not null)
             {
-                return;
-            }
-            else
-            {
-                var remoteKey = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString("N");
-                session = _sessions.GetOrAdd(remoteKey, key => new SessionState(key, _options));
-                pendingFrame = firstFrame;
-                session.RegisterAuthentication(null);
+                await ProcessFrameAsync(session, initialization.PendingFrame, connectionCts.Token).ConfigureAwait(false);
             }
 
-            if (session is null)
-            {
-                return;
-            }
-
-            if (_pendingPersistentClients.TryRemove(session.Key, out var persistent))
-            {
-                session.AttachPersistentClient(persistent);
-            }
-
-            connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-            connection = await session.AttachAsync(client, connectionCts.Token, stream, RunSendLoopAsync).ConfigureAwait(false);
-
-            if (pendingFrame is not null)
-            {
-                await ProcessFrameAsync(session, pendingFrame, connectionCts.Token).ConfigureAwait(false);
-            }
-
-            while (!connectionCts.Token.IsCancellationRequested)
-            {
-                var result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, connectionCts.Token).ConfigureAwait(false);
-                if (!result.Success)
-                {
-                    break;
-                }
-
-                await ProcessFrameAsync(session, result.Frame!, connectionCts.Token).ConfigureAwait(false);
-            }
+            await ProcessIncomingFramesAsync(session, stream, lengthBuffer, connectionCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
         {
@@ -258,6 +210,85 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
 
             session?.Detach();
             client.Dispose();
+        }
+    }
+
+    private async Task<SessionInitializationResult> InitializeSessionAsync(
+        TcpClient client,
+        NetworkStream stream,
+        byte[] lengthBuffer,
+        CancellationToken serverToken)
+    {
+        var firstFrameResult = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, serverToken).ConfigureAwait(false);
+        if (!firstFrameResult.Success)
+        {
+            return SessionInitializationResult.Failed();
+        }
+
+        var firstFrame = firstFrameResult.Frame!;
+        var (session, pendingFrame) = ResolveSession(client, firstFrame);
+        if (session is null)
+        {
+            return SessionInitializationResult.Failed();
+        }
+
+        if (_pendingPersistentClients.TryRemove(session.Key, out var persistent))
+        {
+            session.AttachPersistentClient(persistent);
+        }
+
+        var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
+        var connection = await session.AttachAsync(client, connectionCts.Token, stream, RunSendLoopAsync).ConfigureAwait(false);
+
+        return SessionInitializationResult.Success(session, connection, connectionCts, pendingFrame);
+    }
+
+    private (SessionState? Session, SessionFrame? PendingFrame) ResolveSession(TcpClient client, SessionFrame firstFrame)
+    {
+        if (firstFrame.Kind == SessionFrameKind.Auth)
+        {
+            var token = firstFrame.Token;
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return default;
+            }
+
+            if (_options.RequireAuthentication && !IsTokenAccepted(token, firstFrame.Payload))
+            {
+                return default;
+            }
+
+            var session = _sessions.GetOrAdd(token, key => new SessionState(key));
+            session.RegisterAuthentication();
+            return (session, null);
+        }
+
+        if (_options.RequireAuthentication)
+        {
+            return default;
+        }
+
+        var remoteKey = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString("N");
+        var existing = _sessions.GetOrAdd(remoteKey, key => new SessionState(key));
+        existing.RegisterAuthentication();
+        return (existing, firstFrame);
+    }
+
+    private async Task ProcessIncomingFramesAsync(
+        SessionState session,
+        NetworkStream stream,
+        byte[] lengthBuffer,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
+            if (!result.Success)
+            {
+                break;
+            }
+
+            await ProcessFrameAsync(session, result.Frame!, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -389,6 +420,22 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
+    private readonly record struct SessionInitializationResult(
+        bool Success,
+        SessionState? Session,
+        SessionConnection? Connection,
+        CancellationTokenSource? ConnectionCancellation,
+        SessionFrame? PendingFrame)
+    {
+        public static SessionInitializationResult Success(
+            SessionState session,
+            SessionConnection connection,
+            CancellationTokenSource cancellation,
+            SessionFrame? pendingFrame) => new(true, session, connection, cancellation, pendingFrame);
+
+        public static SessionInitializationResult Failed() => new(false, null, null, null, null);
+    }
+
     private sealed class SessionState : IAsyncDisposable
     {
         private readonly ConcurrentQueue<SessionFrame> _outbound = new();
@@ -401,21 +448,18 @@ internal sealed class ResilientTcpServer : IAsyncDisposable
         private long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
         private long _nextMessageId;
 
-        public SessionState(string key, ResilientSessionOptions options)
+        public SessionState(string key)
         {
             Key = key;
-            Options = options;
         }
 
         public string Key { get; }
-
-        public ResilientSessionOptions Options { get; }
 
         public bool HasAuthenticated { get; private set; }
 
         public PersistentSessionClient? PersistentClient => _persistentClient;
 
-        public void RegisterAuthentication(string? secret)
+        public void RegisterAuthentication()
         {
             HasAuthenticated = true;
             Touch();
