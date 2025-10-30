@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Documentation for the resilient TCP transport, covering session frames, authentication, heartbeats/backoff, persistent outbox handling, and integrating with `NetworkedEventAggregator`.
+- Resilient TCP transport reference documentation that walks through session frames, authentication modes, default heartbeat/backoff values, durable outbox artifacts, and how to integrate the transport with `NetworkedEventAggregator`.
 - README guidance on configuring heartbeat intervals, authentication tokens, and durable outbox behavior for `TCPEventTransport`.
 
 ## [1.2.1] - 2025-10-23
