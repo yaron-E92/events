@@ -42,6 +42,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         };
 
         _eventAggregator?.RegisterEventType<PublishFailed>();
+        _eventAggregator?.SubscribeToEventType(new PublishFailedHandler());
     }
 
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
