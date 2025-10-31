@@ -140,6 +140,34 @@ public class TCPEventTransportUnitTests
         failure.Exception.Should().Be(exception);
     }
 
+    [Test]
+    public async Task Subscribe_MessageReceived_InvokesHandlers_ForInboundPayloads()
+    {
+        // Arrange
+        await using var transport = new TCPEventTransport(0);
+        MessageReceived? received = null;
+        var invocationCount = 0;
+        transport.Subscribe<MessageReceived>(async (evt, ct) =>
+        {
+            invocationCount++;
+            received = evt;
+            await Task.CompletedTask;
+        });
+
+        var serializerField = typeof(TCPEventTransport).GetField("_serializer", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var serializer = (IEventSerializer)serializerField.GetValue(transport)!;
+        var payload = serializer.Serialize(new DummyEvent());
+
+        var method = typeof(TCPEventTransport).GetMethod("HandleInboundMessageAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var task = (Task)method.Invoke(transport, new object[] { "session", payload, CancellationToken.None })!;
+        await task.ConfigureAwait(false);
+
+        invocationCount.Should().Be(1);
+        received.Should().NotBeNull();
+        received!.SessionKey.Should().Be("session");
+        received.Payload.Should().Be(payload);
+    }
+
     private static ConcurrentDictionary<string, PersistentSessionClient> GetPersistentSessionsDictionary(TCPEventTransport transport)
     {
         var field = typeof(TCPEventTransport).GetField("_persistentSessions", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -198,10 +226,12 @@ public class TCPEventTransportUnitTests
     {
         private readonly List<IEventSubscriber> _subscribers = new();
         private readonly List<IAsyncEventSubscriber<PublishFailed>> _publishFailedSubscribers = new();
+        private readonly List<IAsyncEventSubscriber<MessageReceived>> _messageReceivedSubscribers = new();
 
         public bool PublishFailedHandlerExecuted { get; private set; }
 
         public List<PublishFailed> PublishedFailures { get; } = new();
+        public List<MessageReceived> PublishedMessages { get; } = new();
 
         public ISet<Type> EventTypes { get; } = new HashSet<Type>();
 
@@ -238,6 +268,11 @@ public class TCPEventTransportUnitTests
             {
                 _publishFailedSubscribers.Add(publishFailedSubscriber);
             }
+
+            if (subscriber is IAsyncEventSubscriber<MessageReceived> messageReceivedSubscriber)
+            {
+                _messageReceivedSubscribers.Add(messageReceivedSubscriber);
+            }
         }
 
         public void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
@@ -256,6 +291,11 @@ public class TCPEventTransportUnitTests
             {
                 _publishFailedSubscribers.Remove(publishFailedSubscriber);
             }
+
+            if (subscriber is IAsyncEventSubscriber<MessageReceived> messageReceivedSubscriber)
+            {
+                _messageReceivedSubscribers.Remove(messageReceivedSubscriber);
+            }
         }
 
         public Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
@@ -269,6 +309,16 @@ public class TCPEventTransportUnitTests
                     await subscriber.OnNextAsync(publishFailed, cancellationToken).ConfigureAwait(false);
                     PublishFailedHandlerExecuted = true;
                 });
+
+                return Task.WhenAll(tasks);
+            }
+
+            if (domainEvent is MessageReceived messageReceived)
+            {
+                PublishedMessages.Add(messageReceived);
+
+                var tasks = _messageReceivedSubscribers
+                    .Select(subscriber => subscriber.OnNextAsync(messageReceived, cancellationToken));
 
                 return Task.WhenAll(tasks);
             }

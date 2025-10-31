@@ -33,7 +33,7 @@ public class ResilientSessionIntegrationTests
         var firstDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        server.MessageReceived += async (_, payload, _) =>
+        server.SetMessageReceivedHandler((_, payload, _) =>
         {
             deliveries.Add(payload);
             if (deliveries.Count == 1)
@@ -45,8 +45,8 @@ public class ResilientSessionIntegrationTests
                 replayDeliveryTcs.TrySetResult();
             }
 
-            await Task.CompletedTask;
-        };
+            return Task.CompletedTask;
+        });
 
         await server.StartAsync().ConfigureAwait(false);
 
