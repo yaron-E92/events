@@ -47,7 +47,7 @@ public static class SessionFrameIO
         var total = 0;
         while (total < buffer.Length)
         {
-            var read = await stream.ReadAsync(buffer.Slice(total, buffer.Length - total), cancellationToken).ConfigureAwait(false);
+            var read = await stream.ReadAsync(buffer[total..], cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {
                 return false;

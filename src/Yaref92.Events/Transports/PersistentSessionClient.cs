@@ -2,6 +2,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using System;
 
 using Yaref92.Events.Abstractions;
 
@@ -27,6 +28,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
 
     private readonly Dictionary<long, OutboxEntry> _outboxEntries = new();
     private readonly string _sessionKey;
+    private readonly string _sessionToken;
     private readonly string _outboxPath;
 
     private long _nextMessageId;
@@ -52,11 +54,15 @@ public sealed class PersistentSessionClient : IAsyncDisposable
         _authenticationSecret = _options.AuthenticationToken;
         _eventAggregator = eventAggregator;
         _sessionKey = $"{host}:{port}";
+        _sessionToken = _options.RequireAuthentication
+            ? _sessionKey
+            : $"{_sessionKey}-{Guid.NewGuid():N}";
         _outboxPath = Path.Combine(AppContext.BaseDirectory, OutboxFileName);
         _lastRemoteActivityTicks = DateTime.UtcNow.Ticks;
     }
 
     public DnsEndPoint RemoteEndPoint => new(_host, _port);
+    public string SessionToken => _sessionToken;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -286,7 +292,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
 
         await ReplayPendingEntriesAsync(connectionToken).ConfigureAwait(false);
 
-        await WriteFrameAsync(client.GetStream(), SessionFrame.CreateAuth(_sessionKey, _authenticationSecret), connectionToken).ConfigureAwait(false);
+        await WriteFrameAsync(client.GetStream(), SessionFrame.CreateAuth(_sessionToken, _authenticationSecret), connectionToken).ConfigureAwait(false);
 
         var sendTask = RunSendLoopAsync(client, connectionToken);
         var heartbeatTask = RunHeartbeatLoopAsync(connectionToken);
@@ -559,7 +565,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
             ? TimeSpan.FromSeconds(30)
             : _options.BackoffMaxDelay;
 
-        var multiplier = Math.Pow(2, Math.Max(0, attempt - 1));
+        var multiplier = Math.Min( Math.Pow(2, Math.Max(0, attempt - 1)), max / initial);
         var candidate = TimeSpan.FromMilliseconds(initial.TotalMilliseconds * multiplier);
         return candidate > max ? max : candidate;
     }

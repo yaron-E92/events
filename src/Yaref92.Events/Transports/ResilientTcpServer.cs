@@ -3,9 +3,11 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 
+using Yaref92.Events.Abstractions;
+
 namespace Yaref92.Events.Transports;
 
-public sealed class ResilientTcpServer : IAsyncDisposable
+public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber<MessageReceived>
 {
     private readonly int _port;
     private readonly ResilientSessionOptions _options;
@@ -14,17 +16,38 @@ public sealed class ResilientTcpServer : IAsyncDisposable
     private readonly ConcurrentDictionary<string, PersistentSessionClient> _pendingPersistentClients = new();
     private readonly CancellationTokenSource _cts = new();
 
+    private Func<string, string, CancellationToken, Task>? _messageReceivedHandler;
+
     private TcpListener? _listener;
     private Task? _acceptLoop;
     private Task? _monitorLoop;
 
-    public ResilientTcpServer(int port, ResilientSessionOptions? options = null)
+    public ConcurrentDictionary<string, SessionState> Sessions
+    {
+        get {
+                ConcurrentDictionary<string, SessionState> copy = new ConcurrentDictionary<string, SessionState>();
+                foreach (var kvp in _sessions)
+                {
+                    copy[kvp.Key] = kvp.Value;
+                }
+                return copy;
+        }
+    }
+
+    public ResilientTcpServer(
+        int port,
+        ResilientSessionOptions? options = null,
+        Func<string, string, CancellationToken, Task>? messageReceivedHandler = null)
     {
         _port = port;
         _options = options ?? new ResilientSessionOptions();
+        _messageReceivedHandler = messageReceivedHandler;
     }
 
-    public event Func<string, string, CancellationToken, Task>? MessageReceived;
+    public void SetMessageReceivedHandler(Func<string, string, CancellationToken, Task>? handler)
+    {
+        _messageReceivedHandler = handler;
+    }
 
     public void RegisterPersistentClient(string token, PersistentSessionClient client)
     {
@@ -145,7 +168,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable
 
             var task = Task.Run(() => HandleClientAsync(client, cancellationToken), cancellationToken);
             _clientTasks[client] = task;
-            task.ContinueWith(_ => _clientTasks.TryRemove(client, out _), TaskContinuationOptions.ExecuteSynchronously);
+            await task.ContinueWith(_ => _clientTasks.TryRemove(client, out _), TaskContinuationOptions.ExecuteSynchronously);
         }
     }
 
@@ -315,7 +338,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable
                 {
                     try
                     {
-                        var handler = MessageReceived;
+                        var handler = _messageReceivedHandler;
                         if (handler is not null)
                         {
                             await handler(session.Key, frame.Payload, cancellationToken).ConfigureAwait(false);
@@ -409,6 +432,11 @@ public sealed class ResilientTcpServer : IAsyncDisposable
         var lengthPrefix = BitConverter.GetBytes(payload.Length);
         await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task OnNextAsync(MessageReceived domainEvent, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
     }
 
     private readonly record struct SessionInitializationResult(

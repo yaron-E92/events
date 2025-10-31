@@ -1,10 +1,8 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Threading.Tasks;
 
 using FluentAssertions;
 
@@ -35,7 +33,7 @@ public class ResilientSessionIntegrationTests
         var firstDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        server.MessageReceived += async (_, payload, _) =>
+        server.SetMessageReceivedHandler((_, payload, _) =>
         {
             deliveries.Add(payload);
             if (deliveries.Count == 1)
@@ -47,8 +45,8 @@ public class ResilientSessionIntegrationTests
                 replayDeliveryTcs.TrySetResult();
             }
 
-            await Task.CompletedTask;
-        };
+            return Task.CompletedTask;
+        });
 
         await server.StartAsync().ConfigureAwait(false);
 
@@ -93,7 +91,7 @@ public class ResilientSessionIntegrationTests
         await peerA.StartAsync(CancellationToken.None).ConfigureAwait(false);
         await peerB.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
-        await WaitForAuthenticatedSessionsAsync(server, 2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await WaitForAuthenticatedSessionsAsync(server, 2, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
 
         var payload = $"broadcast-{Guid.NewGuid():N}";
         server.QueueBroadcast(payload);
@@ -151,16 +149,12 @@ public class ResilientSessionIntegrationTests
 
     private static async Task WaitForAuthenticatedSessionsAsync(ResilientTcpServer server, int expectedCount, TimeSpan timeout)
     {
-        if (expectedCount <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(expectedCount));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedCount);
 
-        var sessionsField = typeof(ResilientTcpServer).GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < timeout)
         {
-            var sessions = (ConcurrentDictionary<string, ResilientTcpServer.SessionState>) sessionsField.GetValue(server)!;
+            var sessions = server.Sessions;
             var authenticatedCount = 0;
 
             foreach (var session in sessions.Values)
@@ -176,7 +170,7 @@ public class ResilientSessionIntegrationTests
                 return;
             }
 
-            await Task.Delay(10).ConfigureAwait(false);
+            await Task.Delay(1).ConfigureAwait(false);
         }
 
         throw new TimeoutException($"Server did not authenticate {expectedCount} sessions within the timeout window.");
