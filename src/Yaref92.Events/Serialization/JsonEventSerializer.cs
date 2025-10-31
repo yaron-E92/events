@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text.Json;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Transports;
@@ -36,34 +36,14 @@ public class JsonEventSerializer : IEventSerializer
     private (Type? type, IDomainEvent? domainEvent) DeserializeFromEventEnvelope(string data)
     {
         EventEnvelope eventEnvelope = JsonSerializer.Deserialize<EventEnvelope>(data, _options)!;
-        Guid eventId = eventEnvelope.EventId;
-        if ((eventEnvelope?.TypeName) == null)
+        if (eventEnvelope.TypeName is null)
         {
             return (null, null);
         }
 
         var type = Type.GetType(eventEnvelope.TypeName);
-        var domainEvent = JsonSerializer.Deserialize(eventEnvelope?.EventJson!, type!, _options) as IDomainEvent;
-
-        if (domainEvent is IDomainEvent evt && evt.EventId == Guid.Empty && eventId != Guid.Empty)
-        {
-            // If the payload did not preserve the event ID, attempt to hydrate it via reflection when possible.
-            TryAssignEventId(evt, eventId);
-        }
+        var domainEvent = JsonSerializer.Deserialize(eventEnvelope.EventJson!, type!, _options) as IDomainEvent;
 
         return (type, domainEvent);
-    }
-
-    private static void TryAssignEventId(IDomainEvent domainEvent, Guid eventId)
-    {
-        var eventIdProperty = domainEvent.GetType().GetProperty(nameof(IDomainEvent.EventId));
-        if (eventIdProperty?.CanWrite == true && eventIdProperty.PropertyType == typeof(Guid))
-        {
-            eventIdProperty.SetValue(domainEvent, eventId);
-            return;
-        }
-
-        var field = domainEvent.GetType().GetField("<EventId>k__BackingField", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        field?.SetValue(domainEvent, eventId);
     }
 }
