@@ -46,13 +46,13 @@ public class TCPEventTransportUnitTests
         DummyEvent dummy = new();
         string? typeName = typeof(DummyEvent).AssemblyQualifiedName;
         string json = JsonSerializer.Serialize(dummy, dummy.GetType());
-        var envelope = new { TypeName = typeName, Json = json };
+        var envelope = new { EventId = Guid.NewGuid(), TypeName = typeName, EventJson = json };
         string payload = JsonSerializer.Serialize(envelope);
 
         // Act
         TcpEventEnvelope? deserialized = JsonSerializer.Deserialize<TcpEventEnvelope>(payload);
         Type? returnType = Type.GetType(deserialized!.TypeName!);
-        object? evt = JsonSerializer.Deserialize(deserialized!.Json!, returnType!);
+        object? evt = JsonSerializer.Deserialize(deserialized!.EventJson!, returnType!);
 
         // Assert
         evt.Should().BeOfType<DummyEvent>();
@@ -329,8 +329,9 @@ public class TCPEventTransportUnitTests
 
     private class TcpEventEnvelope
     {
+        public Guid EventId { get; set; }
         public string? TypeName { get; set; }
-        public string? Json { get; set; }
+        public string? EventJson { get; set; }
     }
 
 }

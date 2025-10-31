@@ -1,2 +1,3 @@
-﻿namespace Yaref92.Events.Transports;
-public record EventEnvelope(string? TypeName, string? EventJson);
+namespace Yaref92.Events.Transports;
+
+public record EventEnvelope(Guid EventId, string? TypeName, string? EventJson);
