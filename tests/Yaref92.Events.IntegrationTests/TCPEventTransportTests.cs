@@ -14,8 +14,8 @@ public class TCPEventTransportTests
         // Arrange
         int portA = 15000;
         int portB = 15001;
-        using var transportA = new TCPEventTransport(portA);
-        using var transportB = new TCPEventTransport(portB);
+        await using var transportA = new TCPEventTransport(portA);
+        await using var transportB = new TCPEventTransport(portB);
         await transportA.StartListeningAsync();
         await transportB.StartListeningAsync();
         await transportA.ConnectToPeerAsync("localhost", portB);
