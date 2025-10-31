@@ -559,7 +559,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
             ? TimeSpan.FromSeconds(30)
             : _options.BackoffMaxDelay;
 
-        var multiplier = Math.Pow(2, Math.Max(0, attempt - 1));
+        var multiplier = Math.Min( Math.Pow(2, Math.Max(0, attempt - 1)), max / initial);
         var candidate = TimeSpan.FromMilliseconds(initial.TotalMilliseconds * multiplier);
         return candidate > max ? max : candidate;
     }
