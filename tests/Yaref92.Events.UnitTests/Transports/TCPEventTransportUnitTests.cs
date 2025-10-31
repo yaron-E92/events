@@ -117,11 +117,11 @@ public class TCPEventTransportUnitTests
     }
 
     [Test]
-    public void NotifySendFailure_PublishesEventToRegisteredSubscriber()
+    public async Task NotifySendFailure_PublishesEventToRegisteredSubscriber()
     {
         // Arrange
         var aggregator = new FakeEventAggregator();
-        using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
+        await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
         var session = new PersistentSessionClient(
             "localhost",
             12345,

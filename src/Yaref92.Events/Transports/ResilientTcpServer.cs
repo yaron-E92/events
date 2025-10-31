@@ -3,9 +3,11 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 
+using Yaref92.Events.Abstractions;
+
 namespace Yaref92.Events.Transports;
 
-public sealed class ResilientTcpServer : IAsyncDisposable
+public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber<MessageReceived>
 {
     private readonly int _port;
     private readonly ResilientSessionOptions _options;
@@ -430,6 +432,11 @@ public sealed class ResilientTcpServer : IAsyncDisposable
         var lengthPrefix = BitConverter.GetBytes(payload.Length);
         await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task OnNextAsync(MessageReceived domainEvent, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
     }
 
     private readonly record struct SessionInitializationResult(

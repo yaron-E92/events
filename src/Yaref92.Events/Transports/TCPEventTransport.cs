@@ -57,7 +57,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         _server = new ResilientTcpServer(_listenPort, _sessionOptions, HandleInboundMessageAsync);
         foreach (var pair in _persistentSessions)
         {
-            _server.RegisterPersistentClient(pair.Key, pair.Value);
+            _server.RegisterPersistentClient(pair.Value.SessionToken, pair.Value);
         }
         return _server.StartAsync(cancellationToken);
     }
@@ -81,7 +81,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
             return persistent;
         });
 
-        _server?.RegisterPersistentClient(key, session);
+        _server?.RegisterPersistentClient(session.SessionToken, session);
         await session.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -214,8 +214,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
     {
         if (_server is not null)
         {
-            var key = GetSessionKey(session.RemoteEndPoint.Host, session.RemoteEndPoint.Port);
-            _server.RegisterPersistentClient(key, session);
+            _server.RegisterPersistentClient(session.SessionToken, session);
         }
 
         var receiveTask = Task.Run(() => RunReceiveLoopAsync(session, client, cancellationToken), cancellationToken);
