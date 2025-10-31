@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -97,14 +98,14 @@ public class ResilientSessionIntegrationTests
         var payload = $"broadcast-{Guid.NewGuid():N}";
         server.QueueBroadcast(payload);
 
-        await peerA.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        await peerB.WaitForMessageCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        var peerAPayloads = await peerA.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        var peerBPayloads = await peerB.WaitForMessageCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         await peerA.WaitForAckCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         await peerB.WaitForAckCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         await WaitForServerInflightToDrainAsync(server, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
-        peerA.ReceivedPayloads.Should().ContainSingle(p => p == payload);
-        peerB.ReceivedPayloads.Should().HaveCount(2);
+        peerAPayloads.Should().ContainSingle(p => p == payload);
+        peerBPayloads.Should().HaveCount(2).And.OnlyContain(p => p == payload);
         peerB.ConnectionCount.Should().BeGreaterThanOrEqualTo(2);
     }
 
@@ -242,7 +243,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     public void DropNextMessage() => Interlocked.Exchange(ref _dropMessageFlag, 1);
 
-    public async Task WaitForMessageCountAsync(int count, TimeSpan timeout)
+    public async Task<IReadOnlyList<string>> WaitForMessageCountAsync(int count, TimeSpan timeout)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
 
@@ -251,7 +252,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         {
             if (_payloads.Count >= count)
             {
-                return;
+                return _payloads.ToArray();
             }
 
             waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -259,6 +260,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
 
         await TryToAwaitWaiter(timeout, waiter).ConfigureAwait(false);
+        return _payloads.ToArray();
     }
 
     private static async Task TryToAwaitWaiter(TimeSpan timeout, TaskCompletionSource waiter)
