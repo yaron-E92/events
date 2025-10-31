@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
@@ -11,6 +12,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using NUnit.Framework;
 
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.UnitTests.Transports;
@@ -114,6 +116,30 @@ public class TCPEventTransportUnitTests
         }
     }
 
+    [Test]
+    public void NotifySendFailure_PublishesEventToRegisteredSubscriber()
+    {
+        // Arrange
+        var aggregator = new FakeEventAggregator();
+        using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
+        var session = new PersistentSessionClient(
+            "localhost",
+            12345,
+            (_, _, _) => Task.CompletedTask,
+            eventAggregator: aggregator);
+        var exception = new IOException("boom");
+
+        // Act
+        PersistentSessionClientTestHelper.NotifySendFailure(session, exception);
+
+        // Assert
+        aggregator.PublishFailedHandlerExecuted.Should().BeTrue();
+        aggregator.PublishedFailures.Should().ContainSingle();
+        var failure = aggregator.PublishedFailures.Single();
+        failure.Endpoint.Should().BeEquivalentTo(session.RemoteEndPoint);
+        failure.Exception.Should().Be(exception);
+    }
+
     private static ConcurrentDictionary<string, PersistentSessionClient> GetPersistentSessionsDictionary(TCPEventTransport transport)
     {
         var field = typeof(TCPEventTransport).GetField("_persistentSessions", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -165,6 +191,89 @@ public class TCPEventTransportUnitTests
             }
 
             await session.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private sealed class FakeEventAggregator : IEventAggregator
+    {
+        private readonly List<IEventSubscriber> _subscribers = new();
+        private readonly List<IAsyncEventSubscriber<PublishFailed>> _publishFailedSubscribers = new();
+
+        public bool PublishFailedHandlerExecuted { get; private set; }
+
+        public List<PublishFailed> PublishedFailures { get; } = new();
+
+        public ISet<Type> EventTypes { get; } = new HashSet<Type>();
+
+        public IReadOnlyCollection<IEventSubscriber> Subscribers => _subscribers;
+
+        public bool RegisterEventType<T>() where T : class, IDomainEvent
+        {
+            return EventTypes.Add(typeof(T));
+        }
+
+        public void PublishEvent<T>(T domainEvent) where T : class, IDomainEvent
+        {
+            throw new NotSupportedException();
+        }
+
+        public void SubscribeToEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
+        {
+            throw new NotSupportedException();
+        }
+
+        public void SubscribeToEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent
+        {
+            if (subscriber is null)
+            {
+                throw new ArgumentNullException(nameof(subscriber));
+            }
+
+            if (subscriber is IEventSubscriber eventSubscriber)
+            {
+                _subscribers.Add(eventSubscriber);
+            }
+
+            if (subscriber is IAsyncEventSubscriber<PublishFailed> publishFailedSubscriber)
+            {
+                _publishFailedSubscribers.Add(publishFailedSubscriber);
+            }
+        }
+
+        public void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
+        {
+            throw new NotSupportedException();
+        }
+
+        public void UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent
+        {
+            if (subscriber is IEventSubscriber eventSubscriber)
+            {
+                _subscribers.Remove(eventSubscriber);
+            }
+
+            if (subscriber is IAsyncEventSubscriber<PublishFailed> publishFailedSubscriber)
+            {
+                _publishFailedSubscribers.Remove(publishFailedSubscriber);
+            }
+        }
+
+        public Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+        {
+            if (domainEvent is PublishFailed publishFailed)
+            {
+                PublishedFailures.Add(publishFailed);
+
+                var tasks = _publishFailedSubscribers.Select(async subscriber =>
+                {
+                    await subscriber.OnNextAsync(publishFailed, cancellationToken).ConfigureAwait(false);
+                    PublishFailedHandlerExecuted = true;
+                });
+
+                return Task.WhenAll(tasks);
+            }
+
+            return Task.CompletedTask;
         }
     }
 

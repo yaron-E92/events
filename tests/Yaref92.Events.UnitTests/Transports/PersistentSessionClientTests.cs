@@ -108,6 +108,7 @@ internal static class PersistentSessionClientTestHelper
     private static readonly MethodInfo LoadOutboxMethod = typeof(PersistentSessionClient).GetMethod("LoadOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static readonly MethodInfo HeartbeatLoopMethod = typeof(PersistentSessionClient).GetMethod("RunHeartbeatLoopAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static readonly MethodInfo BackoffDelayMethod = typeof(PersistentSessionClient).GetMethod("GetBackoffDelay", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo NotifySendFailureMethod = typeof(PersistentSessionClient).GetMethod("NotifySendFailure", BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static readonly Type OutboxEntryType = typeof(PersistentSessionClient).GetNestedType("OutboxEntry", BindingFlags.NonPublic)!;
     private static readonly PropertyInfo PayloadProperty = OutboxEntryType.GetProperty("Payload", BindingFlags.Instance | BindingFlags.Public)!;
 
@@ -165,5 +166,10 @@ internal static class PersistentSessionClientTestHelper
     public static TimeSpan GetBackoffDelay(PersistentSessionClient client, int attempt)
     {
         return (TimeSpan)BackoffDelayMethod.Invoke(client, new object[] { attempt })!;
+    }
+
+    public static void NotifySendFailure(PersistentSessionClient client, Exception exception)
+    {
+        NotifySendFailureMethod.Invoke(client, new object[] { exception });
     }
 }
