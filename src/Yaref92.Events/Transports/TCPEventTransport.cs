@@ -42,6 +42,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         };
 
         _eventAggregator?.RegisterEventType<PublishFailed>();
+        _eventAggregator?.RegisterEventType<MessageReceived>();
         _eventAggregator?.SubscribeToEventType(new PublishFailedHandler());
     }
 
@@ -53,8 +54,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         }
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _server = new ResilientTcpServer(_listenPort, _sessionOptions);
-        _server.MessageReceived += HandleInboundMessageAsync;
+        _server = new ResilientTcpServer(_listenPort, _sessionOptions, HandleInboundMessageAsync);
         foreach (var pair in _persistentSessions)
         {
             _server.RegisterPersistentClient(pair.Key, pair.Value);
@@ -151,8 +151,26 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         }
     }
 
-    private Task HandleInboundMessageAsync(string sessionKey, string payload, CancellationToken cancellationToken)
-        => DispatchEventAsync(payload, cancellationToken);
+    private async Task HandleInboundMessageAsync(string sessionKey, string payload, CancellationToken cancellationToken)
+    {
+        await NotifyMessageReceivedAsync(sessionKey, payload, cancellationToken).ConfigureAwait(false);
+        await DispatchEventAsync(payload, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task NotifyMessageReceivedAsync(string sessionKey, string payload, CancellationToken cancellationToken)
+    {
+        var messageEvent = new MessageReceived(sessionKey, payload);
+
+        if (_eventAggregator is not null)
+        {
+            await _eventAggregator.PublishEventAsync(messageEvent, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_handlers.TryGetValue(typeof(MessageReceived), out var handlers) && handlers.Count > 0)
+        {
+            await InvokeHandlersAsync(handlers, messageEvent, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     private Task DispatchEventAsync(string payload, CancellationToken cancellationToken)
     {
@@ -244,6 +262,8 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         switch (frame.Kind)
         {
             case SessionFrameKind.Message when frame.Payload is not null && frame.Id is long messageId:
+                var sessionKey = GetSessionKey(session.RemoteEndPoint.Host, session.RemoteEndPoint.Port);
+                await NotifyMessageReceivedAsync(sessionKey, frame.Payload, cancellationToken).ConfigureAwait(false);
                 await DispatchEventAsync(frame.Payload, cancellationToken).ConfigureAwait(false);
                 session.RecordRemoteActivity();
                 session.EnqueueControlMessage(SessionFrame.CreateAck(messageId));
