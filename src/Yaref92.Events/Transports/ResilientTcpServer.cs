@@ -18,6 +18,18 @@ public sealed class ResilientTcpServer : IAsyncDisposable
     private Task? _acceptLoop;
     private Task? _monitorLoop;
 
+    public ConcurrentDictionary<string, SessionState> Sessions
+    {
+        get {
+                ConcurrentDictionary<string, SessionState> copy = new ConcurrentDictionary<string, SessionState>();
+                foreach (var kvp in _sessions)
+                {
+                    copy[kvp.Key] = kvp.Value;
+                }
+                return copy;
+        }
+    }
+
     public ResilientTcpServer(int port, ResilientSessionOptions? options = null)
     {
         _port = port;
@@ -145,7 +157,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable
 
             var task = Task.Run(() => HandleClientAsync(client, cancellationToken), cancellationToken);
             _clientTasks[client] = task;
-            task.ContinueWith(_ => _clientTasks.TryRemove(client, out _), TaskContinuationOptions.ExecuteSynchronously);
+            await task.ContinueWith(_ => _clientTasks.TryRemove(client, out _), TaskContinuationOptions.ExecuteSynchronously);
         }
     }
 

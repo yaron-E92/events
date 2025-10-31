@@ -1,12 +1,6 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+﻿using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
@@ -83,7 +77,6 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
                 OnPersistentClientConnected,
                 _sessionOptions,
                 _eventAggregator);
-            _server?.RegisterPersistentClient(k, persistent);
             return persistent;
         });
 
@@ -93,10 +86,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 
     public async Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
     {
-        if (domainEvent is null)
-        {
-            throw new ArgumentNullException(nameof(domainEvent));
-        }
+        ArgumentNullException.ThrowIfNull(domainEvent);
 
         var payload = _serializer.Serialize(domainEvent);
         _server?.QueueBroadcast(payload);
