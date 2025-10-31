@@ -92,6 +92,8 @@ public class ResilientSessionIntegrationTests
         await peerA.StartAsync(CancellationToken.None).ConfigureAwait(false);
         await peerB.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
+        await WaitForAuthenticatedSessionsAsync(server, 2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
         var payload = $"broadcast-{Guid.NewGuid():N}";
         server.QueueBroadcast(payload);
 
@@ -144,6 +146,39 @@ public class ResilientSessionIntegrationTests
         }
 
         throw new TimeoutException("Server sessions still have in-flight messages after the allotted timeout.");
+    }
+
+    private static async Task WaitForAuthenticatedSessionsAsync(ResilientTcpServer server, int expectedCount, TimeSpan timeout)
+    {
+        if (expectedCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(expectedCount));
+        }
+
+        var sessionsField = typeof(ResilientTcpServer).GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            var sessions = (ConcurrentDictionary<string, ResilientTcpServer.SessionState>) sessionsField.GetValue(server)!;
+            var authenticatedCount = 0;
+
+            foreach (var session in sessions.Values)
+            {
+                if (session is { HasAuthenticated: true })
+                {
+                    authenticatedCount++;
+                }
+            }
+
+            if (authenticatedCount >= expectedCount)
+            {
+                return;
+            }
+
+            await Task.Delay(10).ConfigureAwait(false);
+        }
+
+        throw new TimeoutException($"Server did not authenticate {expectedCount} sessions within the timeout window.");
     }
 
     private static int GetFreeTcpPort()
@@ -234,8 +269,9 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
         catch (Exception ex) when (ex is AggregateException or TimeoutException)
         {
-            var exOrflattened = ex is AggregateException aggEx ? aggEx.Flatten() : ex;
-            await Console.Error.WriteLineAsync($"Persistent receive loop faulted: {exOrflattened}");
+            var exOrFlattened = ex is AggregateException aggEx ? aggEx.Flatten() : ex;
+            await Console.Error.WriteLineAsync($"Persistent receive loop faulted: {exOrFlattened}");
+            throw exOrFlattened;
         }
     }
 
