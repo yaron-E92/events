@@ -1,19 +1,15 @@
-using System.Collections.Concurrent;
-using System.Text.Json;
-
-using Yaref92.Events.Abstractions;
+﻿using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
+using Yaref92.Events.Sessions;
+using Yaref92.Events.Transports.EventHandlers;
+using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports;
 
 public class TCPEventTransport : IEventTransport, IAsyncDisposable
 {
-    private readonly ConcurrentDictionary<Type, ConcurrentBag<Func<object, CancellationToken, Task>>> _handlers = new();
-
-    private readonly int _listenPort;
     private readonly IEventSerializer _serializer;
-    private readonly IEventAggregator? _eventAggregator;
-    private readonly ResilientSessionOptions _sessionOptions;
+    private readonly IEventAggregator? _localAggregator;
     private readonly PersistentSessionListener _listener;
     private readonly PersistentEventPublisher _publisher;
 
@@ -24,12 +20,11 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         TimeSpan? heartbeatInterval = null,
         string? authenticationToken = null)
     {
-        _listenPort = listenPort;
         _serializer = serializer ?? new JsonEventSerializer();
-        _eventAggregator = eventAggregator;
+        _localAggregator = eventAggregator;
 
         var interval = heartbeatInterval ?? TimeSpan.FromSeconds(30);
-        _sessionOptions = new ResilientSessionOptions
+        ResilientSessionOptions sessionOptions = new()
         {
             RequireAuthentication = authenticationToken is not null,
             AuthenticationToken = authenticationToken,
@@ -37,14 +32,12 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
             HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
         };
 
-        _eventAggregator?.RegisterEventType<PublishFailed>();
-        _eventAggregator?.RegisterEventType<MessageReceived>();
-        _eventAggregator?.SubscribeToEventType(new PublishFailedHandler());
+        _localAggregator?.RegisterEventType<PublishFailed>();
+        _localAggregator?.SubscribeToEventType(new PublishFailedHandler());
 
-        _listener = new PersistentSessionListener(_listenPort, _sessionOptions);
-        _listener.EnvelopeReceived += OnEnvelopeReceivedAsync;
+        _listener = new PersistentSessionListener(listenPort, sessionOptions, this);
 
-        _publisher = new PersistentEventPublisher(_listener, _sessionOptions, _listener.PayloadHandler, _eventAggregator);
+        _publisher = new PersistentEventPublisher(_listener, sessionOptions, _localAggregator);
     }
 
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
@@ -62,94 +55,36 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         return _publisher.ConnectAsync(host, port, cancellationToken);
     }
 
+    /// <summary>
+    /// Processes an incoming domain event asynchronously.
+    /// </summary>
+    /// <typeparam name="T">The type of the domain event, which must implement <see cref="IDomainEvent"/>.</typeparam>
+    /// <param name="domainEvent">The domain event to be processed. Cannot be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">A token to monitor for cancellation requests. The default value is <see cref="CancellationToken.None"/>.</param>
+    /// <remarks>The persistent listener uses it's event handlers to fire this event</remarks>
+    /// <returns>A task that represents the asynchronous operation.</returns>
+    public async Task AcceptIncomingTrafficAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+    {
+        ArgumentNullException.ThrowIfNull(domainEvent);
+        await _listener.HandleReceivedEventAsync(new EventReceived<T>(DateTime.UtcNow, domainEvent), cancellationToken);
+    }
+
     public async Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
 
         var payload = _serializer.Serialize(domainEvent);
-        _listener.Broadcast(payload);
         await _publisher.PublishAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
-    public void Subscribe<T>(Func<T, CancellationToken, Task> handler) where T : class, IDomainEvent
+    public void Subscribe<TEvent>() where TEvent : class, IDomainEvent
     {
-        if (handler is null)
-        {
-            throw new ArgumentNullException(nameof(handler));
-        }
-
-        var bag = _handlers.GetOrAdd(typeof(T), _ => new ConcurrentBag<Func<object, CancellationToken, Task>>());
-        bag.Add(async (obj, ct) => await handler((T)obj, ct).ConfigureAwait(false));
+        _localAggregator?.SubscribeToEventType(new EventReceivedHandler<TEvent>(_localAggregator));
     }
 
     public async ValueTask DisposeAsync()
     {
-        _listener.EnvelopeReceived -= OnEnvelopeReceivedAsync;
-
         await _publisher.DisposeAsync().ConfigureAwait(false);
         await _listener.DisposeAsync().ConfigureAwait(false);
-    }
-
-    private Task OnEnvelopeReceivedAsync(string sessionKey, EventEnvelope envelope, string payload, CancellationToken cancellationToken)
-    {
-        return HandleInboundMessageAsync(sessionKey, payload, cancellationToken);
-    }
-
-    private async Task HandleInboundMessageAsync(string sessionKey, string payload, CancellationToken cancellationToken)
-    {
-        await NotifyMessageReceivedAsync(sessionKey, payload, cancellationToken).ConfigureAwait(false);
-        await DispatchEventAsync(payload, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task NotifyMessageReceivedAsync(string sessionKey, string payload, CancellationToken cancellationToken)
-    {
-        var messageEvent = new MessageReceived(sessionKey, payload);
-
-        if (_eventAggregator is not null)
-        {
-            await _eventAggregator.PublishEventAsync(messageEvent, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (_handlers.TryGetValue(typeof(MessageReceived), out var handlers) && handlers.Count > 0)
-        {
-            await InvokeHandlersAsync(handlers, messageEvent, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    private Task DispatchEventAsync(string payload, CancellationToken cancellationToken)
-    {
-        Type? eventType;
-        IDomainEvent? domainEvent;
-        try
-        {
-            (eventType, domainEvent) = _serializer.Deserialize(payload);
-        }
-        catch (JsonException ex)
-        {
-            return Console.Error.WriteLineAsync($"Failed to deserialize event envelope: {ex}");
-        }
-
-        if (eventType is null)
-        {
-            return Console.Error.WriteLineAsync($"Unknown or missing event type.");
-        }
-
-        if (domainEvent is null)
-        {
-            return Console.Error.WriteLineAsync($"missing event.");
-        }
-
-        if (!_handlers.TryGetValue(eventType, out var handlers) || handlers.Count == 0)
-        {
-            return Console.Error.WriteLineAsync($"No handlers found for the event type {eventType}");
-        }
-
-        return InvokeHandlersAsync(handlers, domainEvent, cancellationToken);
-    }
-
-    private static Task InvokeHandlersAsync(IEnumerable<Func<object, CancellationToken, Task>> handlers, object domainEvent, CancellationToken cancellationToken)
-    {
-        var tasks = handlers.Select(handler => handler(domainEvent, cancellationToken));
-        return Task.WhenAll(tasks);
     }
 }

@@ -2,21 +2,18 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
-using System;
 
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Sessions;
+using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports;
 
-public sealed class PersistentSessionClient : IAsyncDisposable
+public sealed class ResilientSessionClient : IAsyncDisposable
 {
     private const string OutboxFileName = "outbox.json";
     private static readonly SemaphoreSlim OutboxFileLock = new(1, 1);
     private static readonly JsonSerializerOptions OutboxSerializerOptions = new(JsonSerializerDefaults.Web);
-
-    private readonly string _host;
-    private readonly int _port;
-    private readonly Func<PersistentSessionClient, TcpClient, CancellationToken, Task> _onClientConnected;
     private readonly ResilientSessionOptions _options;
     private readonly string? _authenticationSecret;
     private readonly IEventAggregator? _eventAggregator;
@@ -27,7 +24,6 @@ public sealed class PersistentSessionClient : IAsyncDisposable
     private readonly SemaphoreSlim _stateLock = new(1, 1);
 
     private readonly Dictionary<long, OutboxEntry> _outboxEntries = new();
-    private readonly string _sessionKey;
     private readonly string _sessionToken;
     private readonly string _outboxPath;
 
@@ -40,29 +36,34 @@ public sealed class PersistentSessionClient : IAsyncDisposable
     private Task? _runTask;
     private readonly object _runLock = new();
 
-    public PersistentSessionClient(
+    public ResilientSessionClient(
+        Guid userId,
         string host,
         int port,
-        Func<PersistentSessionClient, TcpClient, CancellationToken, Task> onClientConnected,
+        ResilientSessionOptions? options = null,
+        IEventAggregator? eventAggregator = null) :this(new(userId, host, port), options, eventAggregator)
+    { }
+
+    public ResilientSessionClient(
+        SessionKey sessionKey,
         ResilientSessionOptions? options = null,
         IEventAggregator? eventAggregator = null)
     {
-        _host = host;
-        _port = port;
-        _onClientConnected = onClientConnected ?? throw new ArgumentNullException(nameof(onClientConnected));
         _options = options ?? new ResilientSessionOptions();
         _authenticationSecret = _options.AuthenticationToken;
         _eventAggregator = eventAggregator;
-        _sessionKey = $"{host}:{port}";
+        SessionKey = sessionKey;
         _sessionToken = _options.RequireAuthentication
-            ? _sessionKey
-            : $"{_sessionKey}-{Guid.NewGuid():N}";
+            ? $"{SessionKey}-{_authenticationSecret}"
+            : $"{SessionKey}-{Guid.NewGuid():N}";
         _outboxPath = Path.Combine(AppContext.BaseDirectory, OutboxFileName);
         _lastRemoteActivityTicks = DateTime.UtcNow.Ticks;
     }
 
-    public DnsEndPoint RemoteEndPoint => new(_host, _port);
+    public DnsEndPoint RemoteEndPoint => new(SessionKey.Host, SessionKey.Port);
     public string SessionToken => _sessionToken;
+
+    public SessionKey SessionKey { get; }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -142,7 +143,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
             }
             catch (ObjectDisposedException)
             {
-                await Console.Error.WriteLineAsync($"{nameof(PersistentSessionClient)} CTS already disposed");
+                await Console.Error.WriteLineAsync($"{nameof(ResilientSessionClient)} CTS already disposed");
                 _cts = null!;
             }
         }
@@ -278,15 +279,13 @@ public sealed class PersistentSessionClient : IAsyncDisposable
     private async Task RunConnectionOnceAsync(CancellationToken cancellationToken)
     {
         using var client = new TcpClient();
-        await client.ConnectAsync(_host, _port, cancellationToken).ConfigureAwait(false);
+        await client.ConnectAsync(SessionKey.Host, SessionKey.Port, cancellationToken).ConfigureAwait(false);
         ConfigureClient(client);
 
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var connectionToken = connectionCts.Token;
 
         Volatile.Write(ref _lastRemoteActivityTicks, DateTime.UtcNow.Ticks);
-
-        await _onClientConnected(this, client, connectionToken).ConfigureAwait(false);
 
         SignalFirstConnectionSuccess();
 
@@ -328,7 +327,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
                 continue;
             }
 
-            if (frame.Kind == SessionFrameKind.Message && frame.Id is long eventId && !TryMarkEventDequeued(eventId))
+            if (frame.Kind == SessionFrameKind.Event && frame.Id is long eventId && !TryMarkEventDequeued(eventId))
             {
                 continue;
             }
@@ -400,7 +399,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
 
     private void NotifySendFailure(Exception exception)
     {
-        Console.Error.WriteLine($"{nameof(PersistentSessionClient)} send failed for {RemoteEndPoint}: {exception}");
+        Console.Error.WriteLine($"{nameof(ResilientSessionClient)} send failed for {RemoteEndPoint}: {exception}");
 
         if (_eventAggregator is null)
         {
@@ -415,13 +414,13 @@ public sealed class PersistentSessionClient : IAsyncDisposable
             {
                 if (t.IsFaulted && t.Exception is not null)
                 {
-                    Console.Error.WriteLine($"{nameof(PersistentSessionClient)} failed to publish {nameof(PublishFailed)}: {t.Exception.Flatten()}");
+                    Console.Error.WriteLine($"{nameof(ResilientSessionClient)} failed to publish {nameof(PublishFailed)}: {t.Exception.Flatten()}");
                 }
             }, TaskContinuationOptions.ExecuteSynchronously);
         }
         catch (Exception aggregatorException)
         {
-            Console.Error.WriteLine($"{nameof(PersistentSessionClient)} threw while publishing {nameof(PublishFailed)}: {aggregatorException}");
+            Console.Error.WriteLine($"{nameof(ResilientSessionClient)} threw while publishing {nameof(PublishFailed)}: {aggregatorException}");
         }
     }
 
@@ -466,7 +465,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
                 return;
             }
 
-            if (model.Sessions.TryGetValue(_sessionKey, out var entries))
+            if (model.Sessions.TryGetValue(SessionKey, out var entries))
             {
                 foreach (var entry in entries)
                 {
@@ -495,7 +494,7 @@ public sealed class PersistentSessionClient : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"{nameof(PersistentSessionClient)} failed to persist outbox: {ex}");
+                Console.Error.WriteLine($"{nameof(ResilientSessionClient)} failed to persist outbox: {ex}");
             }
         });
     }
@@ -534,11 +533,11 @@ public sealed class PersistentSessionClient : IAsyncDisposable
 
             if (snapshot.Count == 0)
             {
-                model.Sessions.Remove(_sessionKey);
+                model.Sessions.Remove(SessionKey);
             }
             else
             {
-                model.Sessions[_sessionKey] = snapshot;
+                model.Sessions[SessionKey] = snapshot;
             }
 
             var output = JsonSerializer.Serialize(model, OutboxSerializerOptions);
@@ -597,6 +596,6 @@ public sealed class PersistentSessionClient : IAsyncDisposable
 
     private sealed class OutboxFileModel
     {
-        public Dictionary<string, List<StoredOutboxEntry>> Sessions { get; set; } = new();
+        public Dictionary<SessionKey, List<StoredOutboxEntry>> Sessions { get; set; } = new();
     }
 }

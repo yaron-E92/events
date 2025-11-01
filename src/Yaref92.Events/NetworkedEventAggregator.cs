@@ -29,19 +29,13 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     }
 
     public ISet<Type> EventTypes => _localAggregator.EventTypes;
-    public IReadOnlyCollection<IEventSubscriber> Subscribers => _localAggregator.Subscribers;
+    public IReadOnlyCollection<IEventHandler> Subscribers => _localAggregator.Subscribers;
 
     public bool RegisterEventType<T>() where T : class, IDomainEvent
     {
         // Register locally and subscribe to network events of this type
         var registered = _localAggregator.RegisterEventType<T>();
-        _transport.Subscribe<T>(async (evt, ct) =>
-        {
-            if (TryMarkSeen(evt))
-            {
-                await _localAggregator.PublishEventAsync(evt, ct).ConfigureAwait(false);
-            }
-        });
+        _transport.Subscribe<T>();
         return registered;
     }
 
@@ -62,22 +56,22 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
         await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
-    public void SubscribeToEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
+    public void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         _localAggregator.SubscribeToEventType(subscriber);
     }
 
-    public void SubscribeToEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent
+    public void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         _localAggregator.SubscribeToEventType(subscriber);
     }
 
-    public void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
+    public void UnsubscribeFromEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         _localAggregator.UnsubscribeFromEventType(subscriber);
     }
 
-    public void UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent
+    public void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         _localAggregator.UnsubscribeFromEventType(subscriber);
     }

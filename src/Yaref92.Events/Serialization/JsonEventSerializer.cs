@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.Text.Json;
+
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Transports;
+using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Serialization;
 

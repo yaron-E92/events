@@ -6,6 +6,7 @@ using System.Reflection;
 
 using FluentAssertions;
 
+using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.IntegrationTests;
@@ -213,7 +214,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         SetOutboxPath(Client, _outboxPath);
     }
 
-    public PersistentSessionClient Client { get; }
+    public ResilientSessionClient Client { get; }
 
     public IReadOnlyCollection<string> ReceivedPayloads => _payloads.ToArray();
 
@@ -350,7 +351,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private Task OnClientConnectedAsync(PersistentSessionClient session, TcpClient client, CancellationToken cancellationToken)
+    private Task OnClientConnectedAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
     {
         Interlocked.Exchange(ref _activeClient, client);
         var connections = Interlocked.Increment(ref _connectionCount);
@@ -360,7 +361,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    private async Task ReceiveLoopAsync(PersistentSessionClient session, TcpClient client, CancellationToken cancellationToken)
+    private async Task ReceiveLoopAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
     {
         var stream = client.GetStream();
         var lengthBuffer = new byte[4];
@@ -395,11 +396,11 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private Task HandleFrameAsync(PersistentSessionClient session, TcpClient client, SessionFrame frame)
+    private Task HandleFrameAsync(ResilientSessionClient session, TcpClient client, SessionFrame frame)
     {
         switch (frame.Kind)
         {
-            case SessionFrameKind.Message when frame.Payload is not null && frame.Id is long messageId:
+            case SessionFrameKind.Event when frame.Payload is not null && frame.Id is long messageId:
                 _payloads.Enqueue(frame.Payload);
                 session.RecordRemoteActivity();
                 NotifyWaiters(_messageWaiters, _payloads.Count);
@@ -456,7 +457,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     private IReadOnlyCollection<long> GetOutboxEntries()
     {
-        var entriesField = typeof(PersistentSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var entriesField = typeof(ResilientSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var entries = (System.Collections.IDictionary) entriesField.GetValue(Client)!;
         var keys = new List<long>();
         foreach (var key in entries.Keys)
@@ -470,9 +471,9 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         return keys;
     }
 
-    private static void SetOutboxPath(PersistentSessionClient client, string path)
+    private static void SetOutboxPath(ResilientSessionClient client, string path)
     {
-        var field = typeof(PersistentSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var field = typeof(ResilientSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
         field.SetValue(client, path);
     }
 

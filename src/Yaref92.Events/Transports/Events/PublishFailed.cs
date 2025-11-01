@@ -1,9 +1,7 @@
-using System;
+﻿using System;
 using System.Net;
 
-using Yaref92.Events;
-
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Transports.Events;
 
 /// <summary>
 /// Event emitted when a TCP publish operation fails for a specific remote endpoint.

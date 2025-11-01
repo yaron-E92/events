@@ -9,7 +9,7 @@ public enum SessionFrameKind
     Auth,
     Ping,
     Pong,
-    Message,
+    Event,
     Ack,
 }
 
@@ -61,7 +61,7 @@ public sealed class SessionFrame
 
         return new SessionFrame
         {
-            Kind = SessionFrameKind.Message,
+            Kind = SessionFrameKind.Event,
             Id = messageId,
             Payload = payload,
         };
@@ -99,7 +99,7 @@ internal static class SessionFrameSerializer
                 AuthKind => SessionFrameKind.Auth,
                 PingKind => SessionFrameKind.Ping,
                 PongKind => SessionFrameKind.Pong,
-                MessageKind or MessageKindLong => SessionFrameKind.Message,
+                MessageKind or MessageKindLong => SessionFrameKind.Event,
                 AckKind => SessionFrameKind.Ack,
                 _ => throw new JsonException($"Unsupported session frame kind '{value}'."),
             };
@@ -112,7 +112,7 @@ internal static class SessionFrameSerializer
                 SessionFrameKind.Auth => AuthKind,
                 SessionFrameKind.Ping => PingKind,
                 SessionFrameKind.Pong => PongKind,
-                SessionFrameKind.Message => MessageKind,
+                SessionFrameKind.Event => MessageKind,
                 SessionFrameKind.Ack => AckKind,
                 _ => throw new ArgumentOutOfRangeException(nameof(value), value, null),
             };

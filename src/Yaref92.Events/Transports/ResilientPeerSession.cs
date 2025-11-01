@@ -1,46 +1,41 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Net.Sockets;
 
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Transports;
 
-internal sealed class ResilientPeerSession : IPersistentPeerSession
+internal sealed class ResilientPeerSession : IResilientPeerSession
 {
-    private readonly PersistentSessionClient _client;
+    private readonly ResilientSessionClient _client;
     private readonly ConcurrentDictionary<TcpClient, Task> _receiveTasks = new();
-    private readonly Func<string, string, CancellationToken, Task> _payloadHandler;
 
-    public ResilientPeerSession(
-        string host,
-        int port,
+    public ResilientPeerSession(SessionKey sessionKey,
         ResilientSessionOptions options,
-        Func<string, string, CancellationToken, Task> payloadHandler,
         IEventAggregator? eventAggregator)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(host);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(payloadHandler);
-
-        SessionKey = $"{host}:{port}";
-        _payloadHandler = payloadHandler;
-        _client = new PersistentSessionClient(host, port, OnClientConnectedAsync, options, eventAggregator);
+        SessionKey = sessionKey;
+        Options = options;
+        _client = new ResilientSessionClient(sessionKey, options, eventAggregator);
+        _ = StartAsync(CancellationToken.None);
     }
-
-    public string SessionKey { get; }
 
     public string SessionToken => _client.SessionToken;
 
-    public PersistentSessionClient PersistentClient => _client;
+    public ResilientSessionClient PersistentClient => _client;
+
+    public SessionKey SessionKey { get; }
+    public ResilientSessionOptions Options { get; }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        return _client.StartAsync(cancellationToken);
+        return PersistentClient.StartAsync(cancellationToken);
     }
 
     public Task PublishAsync(string payload, CancellationToken cancellationToken)
     {
-        return _client.EnqueueEventAsync(payload, cancellationToken);
+        return PersistentClient.EnqueueEventAsync(payload, cancellationToken);
     }
 
     public async ValueTask DisposeAsync()
@@ -64,7 +59,7 @@ internal sealed class ResilientPeerSession : IPersistentPeerSession
         await _client.DisposeAsync().ConfigureAwait(false);
     }
 
-    private Task OnClientConnectedAsync(PersistentSessionClient session, TcpClient client, CancellationToken cancellationToken)
+    private Task OnClientConnectedAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
     {
         var receiveTask = Task.Run(() => ReceiveLoopAsync(session, client, cancellationToken), cancellationToken);
         _receiveTasks[client] = receiveTask;
@@ -77,7 +72,7 @@ internal sealed class ResilientPeerSession : IPersistentPeerSession
         return Task.CompletedTask;
     }
 
-    private async Task ReceiveLoopAsync(PersistentSessionClient session, TcpClient client, CancellationToken cancellationToken)
+    private async Task ReceiveLoopAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
     {
         var stream = client.GetStream();
         var lengthBuffer = new byte[4];
@@ -104,11 +99,11 @@ internal sealed class ResilientPeerSession : IPersistentPeerSession
         }
     }
 
-    private async Task HandleFrameAsync(PersistentSessionClient session, SessionFrame frame, CancellationToken cancellationToken)
+    private async Task HandleFrameAsync(ResilientSessionClient session, SessionFrame frame, CancellationToken cancellationToken)
     {
         switch (frame.Kind)
         {
-            case SessionFrameKind.Message when frame.Payload is not null:
+            case SessionFrameKind.Event when frame.Payload is not null:
                 await _payloadHandler(SessionKey, frame.Payload, cancellationToken).ConfigureAwait(false);
                 session.RecordRemoteActivity();
                 if (frame.Id is long messageId)

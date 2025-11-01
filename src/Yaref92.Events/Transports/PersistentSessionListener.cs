@@ -1,26 +1,31 @@
+﻿using System.Collections.Concurrent;
 using System.Text.Json;
+
+using Yaref92.Events.Abstractions;
+using Yaref92.Events.Sessions;
+using Yaref92.Events.Transports.EventHandlers;
+using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports;
 
 public sealed class PersistentSessionListener : IAsyncDisposable
 {
     private readonly ResilientTcpServer _server;
+
+    public IEventTransport Transport { get; }
+
     private readonly JsonSerializerOptions _serializerOptions = new(JsonSerializerDefaults.Web);
 
-    public PersistentSessionListener(int port, ResilientSessionOptions options)
+    private readonly ConcurrentDictionary<Type, IEventReceivedHandler> _eventHandlers = new();
+
+    public PersistentSessionListener(int port, ResilientSessionOptions options, IEventTransport eventTransport)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         _server = new ResilientTcpServer(port, options, HandleInboundPayloadAsync);
-        _server.SetSessionJoinedHandler(OnSessionJoinedInternalAsync);
-        _server.SetSessionLeftHandler(OnSessionLeftInternalAsync);
+
+        Transport = eventTransport;
     }
-
-    public event Func<string, EventEnvelope, string, CancellationToken, Task>? EnvelopeReceived;
-
-    public event Func<string, CancellationToken, Task>? SessionJoined;
-
-    public event Func<string, CancellationToken, Task>? SessionLeft;
 
     internal Func<string, string, CancellationToken, Task> PayloadHandler => HandleInboundPayloadAsync;
 
@@ -34,11 +39,11 @@ public sealed class PersistentSessionListener : IAsyncDisposable
         return _server.StopAsync(cancellationToken);
     }
 
-    public void RegisterPersistentSession(IPersistentPeerSession session)
+    public void RegisterPersistentSession(IResilientPeerSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        _server.RegisterPersistentClient(session.SessionToken, session.PersistentClient);
+        _server.RegisterPersistentClient(session.SessionKey, session.PersistentClient);
     }
 
     public void Broadcast(string payload)
@@ -92,5 +97,11 @@ public sealed class PersistentSessionListener : IAsyncDisposable
         return handler is null
             ? Task.CompletedTask
             : handler.Invoke(sessionKey, cancellationToken);
+    }
+
+    public async Task HandleReceivedEventAsync<TEvent>(EventReceived<TEvent> domainEvent, CancellationToken cancellationToken = default) where TEvent : class, IDomainEvent
+    {
+        _eventHandlers.TryGetValue(domainEvent.InnerEvent.GetType(), out IEventReceivedHandler? eventReceivedHandler);
+        await (eventReceivedHandler as EventReceivedHandler<TEvent>)?.OnNextAsync(domainEvent, cancellationToken)!;
     }
 }

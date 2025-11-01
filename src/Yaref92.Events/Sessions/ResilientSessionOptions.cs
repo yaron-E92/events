@@ -1,4 +1,4 @@
-﻿namespace Yaref92.Events.Transports;
+﻿namespace Yaref92.Events.Sessions;
 
 public sealed class ResilientSessionOptions
 {

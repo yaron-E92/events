@@ -23,8 +23,10 @@ public class TCPEventTransportTests
 
         var tcsA = new TaskCompletionSource<DummyEvent>();
         var tcsB = new TaskCompletionSource<DummyEvent>();
-        transportA.Subscribe<DummyEvent>(async (evt, ct) => tcsA.TrySetResult(evt));
-        transportB.Subscribe<DummyEvent>(async (evt, ct) => tcsB.TrySetResult(evt));
+        //transportA.Subscribe<DummyEvent>(async (evt, ct) => tcsA.TrySetResult(evt));
+        //transportB.Subscribe<DummyEvent>(async (evt, ct) => tcsB.TrySetResult(evt));
+        transportA.Subscribe<DummyEvent>();
+        transportB.Subscribe<DummyEvent>();
 
         var evt1 = new DummyEvent();
         var evt2 = new DummyEvent();

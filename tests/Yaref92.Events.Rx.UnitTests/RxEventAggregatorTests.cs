@@ -93,7 +93,7 @@ public class RxEventAggregatorTests
     {
         // Arrange
         var rxSubscriber = new RxDummySubscriber();
-        var regularSubscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
+        var regularSubscriber = Substitute.For<IEventHandler<DummyEvent>>();
         _aggregator.SubscribeToEventType(rxSubscriber);
         _aggregator.SubscribeToEventType(regularSubscriber);
         var evt = new DummyEvent();

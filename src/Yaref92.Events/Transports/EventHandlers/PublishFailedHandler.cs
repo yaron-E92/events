@@ -1,16 +1,13 @@
-﻿using System;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using Yaref92.Events.Abstractions;
+using Yaref92.Events.Transports.Events;
 
-using Yaref92.Events.Abstractions;
-
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Transports.EventHandlers;
 
 /// <summary>
 /// Default asynchronous handler for <see cref="PublishFailed"/> events.
 /// Logs the failure details so that operators can take action.
 /// </summary>
-public sealed class PublishFailedHandler : IAsyncEventSubscriber<PublishFailed>
+public sealed class PublishFailedHandler : IAsyncEventHandler<PublishFailed>
 {
     private readonly Func<PublishFailed, CancellationToken, Task> _handler;
 

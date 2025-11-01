@@ -104,7 +104,7 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// </para>
     /// <para>
     /// The stream contains all published events regardless of their type. Use
-    /// <c>OfType&lt;T&gt;()</c> to filter for specific event types.
+    /// <c>OfType&lt;TEvent&gt;()</c> to filter for specific event types.
     /// </para>
     /// <para>
     /// This stream is thread-safe and can be subscribed to from multiple threads.
@@ -146,7 +146,7 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// aggregator.SubscribeToEventType(new AuditLogger());
     /// </code>
     /// </example>
-    public override void SubscribeToEventType<T>(IEventSubscriber<T> subscriber)
+    public override void SubscribeToEventType<T>(IEventHandler<T> subscriber)
     {
         ValidateEventRegistration<T>();
         if (subscriber is IRxSubscriber<T> rxSubscriber)
@@ -168,7 +168,7 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// If the subscriber implements <see cref="IAsyncRxSubscriber{T}"/>, it will be subscribed to the Rx event stream and managed for disposal.
     /// Otherwise, it will be handled by the base EventAggregator logic.
     /// </remarks>
-    public override void SubscribeToEventType<T>(IAsyncEventSubscriber<T> subscriber)
+    public override void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber)
     {
         ValidateEventRegistration<T>();
         if (subscriber is IAsyncRxSubscriber<T> rxSubscriber)
@@ -207,7 +207,7 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// disposed. Otherwise, it will be handled by the base EventAggregator.
     /// </para>
     /// </remarks>
-    public override void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber)
+    public override void UnsubscribeFromEventType<T>(IEventHandler<T> subscriber)
     {
         if (subscriber is IRxSubscriber<T> rxSubscriber)
         {
@@ -228,7 +228,7 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// If the subscriber implements <see cref="IAsyncRxSubscriber{T}"/>, its Rx subscription will be disposed.
     /// Otherwise, it will be handled by the base EventAggregator logic.
     /// </remarks>
-    public override void UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T> subscriber)
+    public override void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber)
     {
         if (subscriber is IAsyncRxSubscriber<T> rxSubscriber)
         {
@@ -250,7 +250,7 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     /// </remarks>
     private void UnsubscribeRxSubscriber<T>(IRxSubscriber subscriber) where T : class, IDomainEvent
     {
-        ValidateSubscriber((IEventSubscriber) subscriber, typeof(IEventSubscriber<T>));
+        ValidateSubscriber((IEventHandler) subscriber, typeof(IEventHandler<T>));
         ValidateEventRegistration<T>();
         if (_rxSubscriptions.TryRemove((typeof(T), subscriber), out var disposable))
         {
