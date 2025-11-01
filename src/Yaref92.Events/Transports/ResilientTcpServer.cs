@@ -17,6 +17,8 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
     private readonly CancellationTokenSource _cts = new();
 
     private Func<string, string, CancellationToken, Task>? _messageReceivedHandler;
+    private Func<string, CancellationToken, Task>? _sessionJoinedHandler;
+    private Func<string, CancellationToken, Task>? _sessionLeftHandler;
 
     private TcpListener? _listener;
     private Task? _acceptLoop;
@@ -47,6 +49,16 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
     public void SetMessageReceivedHandler(Func<string, string, CancellationToken, Task>? handler)
     {
         _messageReceivedHandler = handler;
+    }
+
+    public void SetSessionJoinedHandler(Func<string, CancellationToken, Task>? handler)
+    {
+        _sessionJoinedHandler = handler;
+    }
+
+    public void SetSessionLeftHandler(Func<string, CancellationToken, Task>? handler)
+    {
+        _sessionLeftHandler = handler;
     }
 
     public void RegisterPersistentClient(string token, PersistentSessionClient client)
@@ -196,6 +208,18 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
             connection = initializedConnection;
             connectionCts = initializedCancellation;
 
+            if (_sessionJoinedHandler is not null)
+            {
+                try
+                {
+                    await _sessionJoinedHandler.Invoke(session.Key, serverToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} session join handler failed: {ex}").ConfigureAwait(false);
+                }
+            }
+
             var pendingFrame = initialization.PendingFrame;
             if (pendingFrame is not null)
             {
@@ -226,6 +250,17 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
             }
 
             session?.Detach();
+            if (session is not null && _sessionLeftHandler is not null)
+            {
+                try
+                {
+                    await _sessionLeftHandler.Invoke(session.Key, serverToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} session leave handler failed: {ex}").ConfigureAwait(false);
+                }
+            }
             client.Dispose();
         }
     }
