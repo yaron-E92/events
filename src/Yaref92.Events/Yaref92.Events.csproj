@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Yaref92.Events.UnitTests" />
+    <InternalsVisibleTo Include="Yaref92.Events.IntegrationTests" />
   </ItemGroup>
 
 </Project>
