@@ -34,21 +34,6 @@ public class ResilientSessionIntegrationTests
         var firstDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        server.SetMessageReceivedHandler((_, payload, _) =>
-        {
-            deliveries.Add(payload);
-            if (deliveries.Count == 1)
-            {
-                firstDeliveryTcs.TrySetResult();
-            }
-            else if (deliveries.Count == 2)
-            {
-                replayDeliveryTcs.TrySetResult();
-            }
-
-            return Task.CompletedTask;
-        });
-
         await server.StartAsync().ConfigureAwait(false);
 
         await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
@@ -196,7 +181,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 {
     private readonly string _outboxPath;
     private readonly ConcurrentQueue<string> _payloads = new();
-    private readonly List<long> _acknowledged = new();
+    private readonly List<Guid> _acknowledged = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _messageWaiters = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _ackWaiters = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _connectionWaiters = new();
@@ -210,7 +195,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     public TestPersistentClientHost(string host, int port, ResilientSessionOptions options)
     {
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
-        Client = new PersistentSessionClient(host, port, OnClientConnectedAsync, options);
+        Client = new ResilientSessionClient(Guid.NewGuid(), host, port, options);
         SetOutboxPath(Client, _outboxPath);
     }
 
@@ -218,7 +203,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     public IReadOnlyCollection<string> ReceivedPayloads => _payloads.ToArray();
 
-    public IReadOnlyCollection<long> AcknowledgedMessageIds
+    public IReadOnlyCollection<Guid> AcknowledgedMessageIds
     {
         get
         {
@@ -400,7 +385,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     {
         switch (frame.Kind)
         {
-            case SessionFrameKind.Event when frame.Payload is not null && frame.Id is long messageId:
+            case SessionFrameKind.Event when frame.Payload is not null && frame.Id is Guid messageId:
                 _payloads.Enqueue(frame.Payload);
                 session.RecordRemoteActivity();
                 NotifyWaiters(_messageWaiters, _payloads.Count);
@@ -413,7 +398,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
                 session.EnqueueControlMessage(SessionFrame.CreateAck(messageId));
                 break;
-            case SessionFrameKind.Ack when frame.Id is long ackId:
+            case SessionFrameKind.Ack when frame.Id is Guid ackId:
                 session.RecordRemoteActivity();
 
                 if (Interlocked.Exchange(ref _dropAckFlag, 0) == 1)

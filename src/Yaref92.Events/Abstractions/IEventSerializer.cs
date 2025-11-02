@@ -1,6 +1,4 @@
-﻿using Yaref92.Events.Transports;
-
-namespace Yaref92.Events.Abstractions;
+﻿namespace Yaref92.Events.Abstractions;
 
 /// <summary>
 /// Defines a contract for serializing and deserializing domain events for network transport.

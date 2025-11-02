@@ -1,23 +1,31 @@
 ﻿using System.Collections.Concurrent;
 using System.Net.Sockets;
+using System.Reflection;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports;
 
 internal sealed class ResilientPeerSession : IResilientPeerSession
 {
+    private static readonly ConcurrentDictionary<Type, MethodInfo> _publishCache = new();
+
     private readonly ResilientSessionClient _client;
+    private readonly IEventAggregator? _localAggregator;
+    private readonly IEventSerializer _eventSerializer;
     private readonly ConcurrentDictionary<TcpClient, Task> _receiveTasks = new();
 
     public ResilientPeerSession(SessionKey sessionKey,
         ResilientSessionOptions options,
-        IEventAggregator? eventAggregator)
+        IEventAggregator? eventAggregator, IEventSerializer eventSerializer)
     {
         SessionKey = sessionKey;
         Options = options;
         _client = new ResilientSessionClient(sessionKey, options, eventAggregator);
+        _localAggregator = eventAggregator;
+        _eventSerializer = eventSerializer;
         _ = StartAsync(CancellationToken.None);
     }
 
@@ -87,7 +95,7 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
                     break;
                 }
 
-                await HandleFrameAsync(session, result.Frame!, cancellationToken).ConfigureAwait(false);
+                await HandleIncomingFrameAsync(session, result.Frame!, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -99,32 +107,56 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
         }
     }
 
-    private async Task HandleFrameAsync(ResilientSessionClient session, SessionFrame frame, CancellationToken cancellationToken)
+    private async Task HandleIncomingFrameAsync(ResilientSessionClient sessionClient, SessionFrame frame, CancellationToken cancellationToken)
     {
         switch (frame.Kind)
         {
             case SessionFrameKind.Event when frame.Payload is not null:
-                await _payloadHandler(SessionKey, frame.Payload, cancellationToken).ConfigureAwait(false);
-                session.RecordRemoteActivity();
-                if (frame.Id is long messageId)
+                await PublishReflectedEventLocally(frame.Payload, cancellationToken).ConfigureAwait(false);
+
+                sessionClient.RecordRemoteActivity();
+                if (frame.Id is Guid messageId)
                 {
-                    session.EnqueueControlMessage(SessionFrame.CreateAck(messageId));
+                    sessionClient.EnqueueControlMessage(SessionFrame.CreateAck(messageId));
                 }
                 break;
-            case SessionFrameKind.Ack when frame.Id is long ackId:
-                session.Acknowledge(ackId);
-                session.RecordRemoteActivity();
+            case SessionFrameKind.Ack when frame.Id is Guid ackId:
+                sessionClient.Acknowledge(ackId);
+                sessionClient.RecordRemoteActivity();
                 break;
             case SessionFrameKind.Ping:
-                session.EnqueueControlMessage(SessionFrame.CreatePong());
-                session.RecordRemoteActivity();
+                sessionClient.EnqueueControlMessage(SessionFrame.CreatePong());
+                sessionClient.RecordRemoteActivity();
                 break;
             case SessionFrameKind.Pong:
-                session.RecordRemoteActivity();
+                sessionClient.RecordRemoteActivity();
                 break;
             case SessionFrameKind.Auth:
-                session.RecordRemoteActivity();
+                sessionClient.RecordRemoteActivity();
                 break;
         }
+    }
+
+    private async Task PublishReflectedEventLocally(string payload, CancellationToken cancellationToken)
+    {
+        (Type? eventType, IDomainEvent? domainEvent) = _eventSerializer.Deserialize(payload);
+        // Build the EventReceived<TEvent> type dynamically
+        Type eventReceivedType = typeof(EventReceived<>).MakeGenericType(eventType);
+        // Find the (DateTime, TEvent) constructor explicitly
+        ConstructorInfo ctor = eventReceivedType.GetConstructor([typeof(DateTime), eventType])!
+            ?? throw new InvalidOperationException($"Missing expected constructor on {eventReceivedType}");
+
+        // Instantiate EventReceived<TEvent>(DateTime.UtcNow, (TEvent)domainEvent)
+        object eventReceivedInstance = ctor.Invoke([DateTime.UtcNow, domainEvent]);
+
+        // Get and specialize PublishEventAsync<TEvent>
+        MethodInfo publishMethod = _publishCache.GetOrAdd(eventType, static t =>
+            typeof(IEventAggregator)
+                .GetMethod(nameof(IEventAggregator.PublishEventAsync))!
+                .MakeGenericMethod(t));
+
+        // Call it asynchronously
+        var task = (Task) publishMethod.Invoke(_localAggregator, [eventReceivedInstance, cancellationToken])!;
+        await task.ConfigureAwait(false);
     }
 }

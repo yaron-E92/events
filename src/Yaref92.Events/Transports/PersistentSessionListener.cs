@@ -22,12 +22,12 @@ public sealed class PersistentSessionListener : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        _server = new ResilientTcpServer(port, options, HandleInboundPayloadAsync);
+        _server = new ResilientTcpServer(port, options);
 
         Transport = eventTransport;
     }
 
-    internal Func<string, string, CancellationToken, Task> PayloadHandler => HandleInboundPayloadAsync;
+    //internal Func<string, string, CancellationToken, Task> PayloadHandler => HandleInboundPayloadAsync;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -58,46 +58,46 @@ public sealed class PersistentSessionListener : IAsyncDisposable
         await _server.DisposeAsync().ConfigureAwait(false);
     }
 
-    private async Task HandleInboundPayloadAsync(string sessionKey, string payload, CancellationToken cancellationToken)
-    {
-        EventEnvelope? envelope;
-        try
-        {
-            envelope = JsonSerializer.Deserialize<EventEnvelope>(payload, _serializerOptions);
-        }
-        catch (JsonException ex)
-        {
-            await Console.Error.WriteLineAsync($"Failed to deserialize event envelope: {ex}").ConfigureAwait(false);
-            return;
-        }
+    //private async Task HandleInboundPayloadAsync(string sessionKey, string payload, CancellationToken cancellationToken)
+    //{
+    //    EventEnvelope? envelope;
+    //    try
+    //    {
+    //        envelope = JsonSerializer.Deserialize<EventEnvelope>(payload, _serializerOptions);
+    //    }
+    //    catch (JsonException ex)
+    //    {
+    //        await Console.Error.WriteLineAsync($"Failed to deserialize event envelope: {ex}").ConfigureAwait(false);
+    //        return;
+    //    }
 
-        if (envelope is null)
-        {
-            return;
-        }
+    //    if (envelope is null)
+    //    {
+    //        return;
+    //    }
 
-        var handler = EnvelopeReceived;
-        if (handler is not null)
-        {
-            await handler.Invoke(sessionKey, envelope, payload, cancellationToken).ConfigureAwait(false);
-        }
-    }
+    //    var handler = EnvelopeReceived;
+    //    if (handler is not null)
+    //    {
+    //        await handler.Invoke(sessionKey, envelope, payload, cancellationToken).ConfigureAwait(false);
+    //    }
+    //}
 
-    private Task OnSessionJoinedInternalAsync(string sessionKey, CancellationToken cancellationToken)
-    {
-        var handler = SessionJoined;
-        return handler is null
-            ? Task.CompletedTask
-            : handler.Invoke(sessionKey, cancellationToken);
-    }
+    //private Task OnSessionJoinedInternalAsync(string sessionKey, CancellationToken cancellationToken)
+    //{
+    //    var handler = SessionJoined;
+    //    return handler is null
+    //        ? Task.CompletedTask
+    //        : handler.Invoke(sessionKey, cancellationToken);
+    //}
 
-    private Task OnSessionLeftInternalAsync(string sessionKey, CancellationToken cancellationToken)
-    {
-        var handler = SessionLeft;
-        return handler is null
-            ? Task.CompletedTask
-            : handler.Invoke(sessionKey, cancellationToken);
-    }
+    //private Task OnSessionLeftInternalAsync(string sessionKey, CancellationToken cancellationToken)
+    //{
+    //    var handler = SessionLeft;
+    //    return handler is null
+    //        ? Task.CompletedTask
+    //        : handler.Invoke(sessionKey, cancellationToken);
+    //}
 
     public async Task HandleReceivedEventAsync<TEvent>(EventReceived<TEvent> domainEvent, CancellationToken cancellationToken = default) where TEvent : class, IDomainEvent
     {

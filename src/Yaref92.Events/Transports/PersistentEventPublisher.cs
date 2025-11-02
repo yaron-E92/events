@@ -10,7 +10,7 @@ namespace Yaref92.Events.Transports;
 internal sealed class PersistentEventPublisher(
     PersistentSessionListener listener,
     ResilientSessionOptions options,
-    IEventAggregator? localAggregator) : IAsyncDisposable, IAsyncEventHandler<SessionJoined>, IAsyncEventHandler<SessionLeft>
+    IEventAggregator? localAggregator, IEventSerializer eventSerializer) : IAsyncDisposable, IAsyncEventHandler<SessionJoined>, IAsyncEventHandler<SessionLeft>
 {
     private readonly PersistentSessionListener _listener = listener ?? throw new ArgumentNullException(nameof(listener));
     private readonly ResilientSessionOptions _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -18,6 +18,8 @@ internal sealed class PersistentEventPublisher(
     private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
     private readonly ConcurrentDictionary<SessionKey, byte> _activeSessions = new();
     private TcpClient? _anonymousConnection;
+
+    public IEventSerializer EventSerializer { get; } = eventSerializer;
 
     public Task ConnectAsync(string host, int port, CancellationToken cancellationToken)
     {
@@ -28,7 +30,7 @@ internal sealed class PersistentEventPublisher(
         {
             var session = _sessions.GetOrAdd(sessionKey, key =>
             {
-                var peerSession = new ResilientPeerSession(key, _options, _localAggregator);
+                var peerSession = new ResilientPeerSession(key, _options, _localAggregator, EventSerializer);
                 _listener.RegisterPersistentSession(peerSession);
                 return peerSession;
             });
@@ -62,7 +64,7 @@ internal sealed class PersistentEventPublisher(
             SessionKey sessionKey = domainEvent.SessionKey;
             if (!_sessions.TryGetValue(sessionKey, out var session))
             {
-                session = new ResilientPeerSession(sessionKey, _options, _localAggregator);
+                session = new ResilientPeerSession(sessionKey, _options, _localAggregator, EventSerializer);
                 _sessions[sessionKey] = session;
                 _listener.RegisterPersistentSession(session);
             }

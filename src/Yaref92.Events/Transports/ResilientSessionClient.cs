@@ -23,11 +23,10 @@ public sealed class ResilientSessionClient : IAsyncDisposable
     private readonly SemaphoreSlim _sendSignal = new(0, int.MaxValue);
     private readonly SemaphoreSlim _stateLock = new(1, 1);
 
-    private readonly Dictionary<long, OutboxEntry> _outboxEntries = new();
+    private readonly Dictionary<Guid, OutboxEntry> _outboxEntries = new();
     private readonly string _sessionToken;
     private readonly string _outboxPath;
 
-    private long _nextMessageId;
     private long _lastRemoteActivityTicks;
     private bool _initialized;
 
@@ -72,18 +71,15 @@ public sealed class ResilientSessionClient : IAsyncDisposable
         await _firstConnectionCompletion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<long> EnqueueEventAsync(string payload, CancellationToken cancellationToken)
+    public async Task<Guid> EnqueueEventAsync(string payload, CancellationToken cancellationToken)
     {
-        if (payload is null)
-        {
-            throw new ArgumentNullException(nameof(payload));
-        }
+        ArgumentNullException.ThrowIfNull(payload);
 
-        long messageId;
+        Guid messageId;
         await _stateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            messageId = ++_nextMessageId;
+            messageId = Guid.NewGuid();
             var entry = new OutboxEntry(messageId, payload)
             {
                 IsQueued = true,
@@ -109,7 +105,7 @@ public sealed class ResilientSessionClient : IAsyncDisposable
         _sendSignal.Release();
     }
 
-    public void Acknowledge(long messageId)
+    public void Acknowledge(Guid messageId)
     {
         var removed = false;
         _stateLock.Wait();
@@ -327,7 +323,7 @@ public sealed class ResilientSessionClient : IAsyncDisposable
                 continue;
             }
 
-            if (frame.Kind == SessionFrameKind.Event && frame.Id is long eventId && !TryMarkEventDequeued(eventId))
+            if (frame.Kind == SessionFrameKind.Event && frame.Id is Guid eventId && !TryMarkEventDequeued(eventId))
             {
                 continue;
             }
@@ -424,7 +420,7 @@ public sealed class ResilientSessionClient : IAsyncDisposable
         }
     }
 
-    private bool TryMarkEventDequeued(long messageId)
+    private bool TryMarkEventDequeued(Guid messageId)
     {
         _stateLock.Wait();
         try
@@ -471,10 +467,6 @@ public sealed class ResilientSessionClient : IAsyncDisposable
                 {
                     var outboxEntry = new OutboxEntry(entry.Id, entry.Payload);
                     _outboxEntries[entry.Id] = outboxEntry;
-                    if (entry.Id > _nextMessageId)
-                    {
-                        _nextMessageId = entry.Id;
-                    }
                 }
             }
         }
@@ -579,20 +571,20 @@ public sealed class ResilientSessionClient : IAsyncDisposable
 
     private sealed class OutboxEntry
     {
-        public OutboxEntry(long messageId, string payload)
+        public OutboxEntry(Guid messageId, string payload)
         {
             MessageId = messageId;
             Payload = payload;
         }
 
-        public long MessageId { get; }
+        public Guid MessageId { get; }
 
         public string Payload { get; }
 
         public bool IsQueued { get; set; }
     }
 
-    private sealed record StoredOutboxEntry(long Id, string Payload);
+    private sealed record StoredOutboxEntry(Guid Id, string Payload);
 
     private sealed class OutboxFileModel
     {

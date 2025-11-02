@@ -37,7 +37,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 
         _listener = new PersistentSessionListener(listenPort, sessionOptions, this);
 
-        _publisher = new PersistentEventPublisher(_listener, sessionOptions, _localAggregator);
+        _publisher = new PersistentEventPublisher(_listener, sessionOptions, _localAggregator, serializer ?? new JsonEventSerializer());
     }
 
     public Task StartListeningAsync(CancellationToken cancellationToken = default)

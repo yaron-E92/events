@@ -128,7 +128,6 @@ public class TCPEventTransportUnitTests
             Guid.NewGuid(),
             "localhost",
             12345,
-            (_, _, _) => Task.CompletedTask,
             eventAggregator: aggregator);
         var exception = new IOException("boom");
 
@@ -180,7 +179,7 @@ public class TCPEventTransportUnitTests
 
     private static ResilientSessionClient CreateSession(string tempDirectory)
     {
-        var session = new ResilientSessionClient(Guid.NewGuid(), "localhost", 12345, (_, _, _) => Task.CompletedTask);
+        var session = new ResilientSessionClient(Guid.NewGuid(), "localhost", 12345);
         var path = Path.Combine(tempDirectory, $"outbox-{Guid.NewGuid():N}.json");
         ResilientSessionClientTestHelper.OverrideOutboxPath(session, path);
         return session;
