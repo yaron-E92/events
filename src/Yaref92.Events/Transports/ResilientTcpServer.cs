@@ -284,7 +284,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
 
     private (SessionState? Session, SessionFrame? PendingFrame) ResolveSession(TcpClient client, SessionFrame firstFrame)
     {
-        if (firstFrame.Kind == SessionFrameKind.Auth)
+        if (SessionFrameContract.TryValidateAuthentication(firstFrame, _options, out var sessionKey))
         {
             var token = firstFrame.Token;
             if (string.IsNullOrWhiteSpace(token))
@@ -427,21 +427,6 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
         }
     }
 
-    private bool IsTokenAccepted(string token, string? secret)
-    {
-        if (!_options.RequireAuthentication)
-        {
-            return true;
-        }
-
-        if (string.IsNullOrEmpty(_options.AuthenticationToken))
-        {
-            return true;
-        }
-
-        return string.Equals(_options.AuthenticationToken, secret ?? token, StringComparison.Ordinal);
-    }
-
     private static async Task RunSendLoopAsync(SessionState session, NetworkStream stream, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -480,7 +465,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
         {
             try
             {
-                await Task.Delay(_options.HeartbeatInterval, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(SessionFrameContract.GetHeartbeatInterval(_options), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -488,7 +473,8 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
             }
 
             var now = DateTime.UtcNow;
-            foreach (var session in _sessionStates.Values.Where(session => session.IsExpired(now, _options.HeartbeatTimeout)))
+            var timeout = SessionFrameContract.GetHeartbeatTimeout(_options);
+            foreach (var session in _sessionStates.Values.Where(session => session.IsExpired(now, timeout)))
             {
                 await session.CloseConnectionAsync().ConfigureAwait(false);
             }
