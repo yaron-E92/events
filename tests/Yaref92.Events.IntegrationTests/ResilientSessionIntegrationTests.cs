@@ -264,7 +264,6 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     private readonly List<(int Target, TaskCompletionSource Completion)> _connectionWaiters = new();
     private readonly object _waiterLock = new();
 
-    private TcpClient? _activeClient;
     private int _connectionCount;
     private int _dropAckFlag;
     private int _dropMessageFlag;
@@ -274,6 +273,8 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
         Client = new ResilientSessionClient(Guid.NewGuid(), host, port, options);
         SetOutboxPath(Client, _outboxPath);
+        Client.ConnectionEstablished += OnConnectionEstablishedAsync;
+        Client.FrameReceived += OnFrameReceivedAsync;
     }
 
     public ResilientSessionClient Client { get; }
@@ -396,9 +397,9 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        Client.ConnectionEstablished -= OnConnectionEstablishedAsync;
+        Client.FrameReceived -= OnFrameReceivedAsync;
         await Client.DisposeAsync().ConfigureAwait(false);
-        var client = Interlocked.Exchange(ref _activeClient, null);
-        client?.Dispose();
 
         if (File.Exists(_outboxPath))
         {
@@ -413,78 +414,36 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private Task OnClientConnectedAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
+    private ValueTask OnConnectionEstablishedAsync(ResilientSessionClient session, CancellationToken cancellationToken)
     {
-        Interlocked.Exchange(ref _activeClient, client);
         var connections = Interlocked.Increment(ref _connectionCount);
         NotifyWaiters(_connectionWaiters, connections);
-
-        _ = Task.Run(() => ReceiveLoopAsync(session, client, cancellationToken), cancellationToken);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    private async Task ReceiveLoopAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
-    {
-        var stream = client.GetStream();
-        var lengthBuffer = new byte[4];
-
-        try
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                SessionFrameIO.FrameReadResult result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
-                if (!result.IsSuccess || result.Frame is null)
-                {
-                    break;
-                }
-
-                await HandleFrameAsync(session, client, result.Frame).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // shutdown requested
-        }
-        catch (Exception ex) when (ex is IOException or SocketException)
-        {
-            await Console.Error.WriteLineAsync($"Test receive loop terminated: {ex}").ConfigureAwait(false);
-        }
-        finally
-        {
-            if (ReferenceEquals(client, Interlocked.CompareExchange(ref _activeClient, null, client)))
-            {
-                client.Dispose();
-            }
-        }
-    }
-
-    private Task HandleFrameAsync(ResilientSessionClient session, TcpClient client, SessionFrame frame)
+    private async ValueTask OnFrameReceivedAsync(ResilientSessionClient session, SessionFrame frame, CancellationToken cancellationToken)
     {
         switch (frame.Kind)
         {
             case SessionFrameKind.Event when frame.Payload is not null && frame.Id != Guid.Empty:
                 _payloads.Enqueue(frame.Payload);
-                session.RecordRemoteActivity();
                 NotifyWaiters(_messageWaiters, _payloads.Count);
 
                 if (Interlocked.Exchange(ref _dropMessageFlag, 0) == 1)
                 {
-                    DropClient(client);
+                    await session.AbortActiveConnectionAsync().ConfigureAwait(false);
                     break;
                 }
 
                 session.EnqueueControlMessage(SessionFrame.CreateAck(frame.Id));
                 break;
             case SessionFrameKind.Ack when frame.Id != Guid.Empty:
-                session.RecordRemoteActivity();
-
                 if (Interlocked.Exchange(ref _dropAckFlag, 0) == 1)
                 {
-                    DropClient(client);
+                    await session.AbortActiveConnectionAsync().ConfigureAwait(false);
                     break;
                 }
 
-                session.Acknowledge(frame.Id);
                 lock (_acknowledged)
                 {
                     _acknowledged.Add(frame.Id);
@@ -492,28 +451,6 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
                 NotifyWaiters(_ackWaiters, _acknowledged.Count);
                 break;
-            case SessionFrameKind.Ping:
-                session.RecordRemoteActivity();
-                session.EnqueueControlMessage(SessionFrame.CreatePong());
-                break;
-            case SessionFrameKind.Pong:
-            case SessionFrameKind.Auth:
-                session.RecordRemoteActivity();
-                break;
-        }
-
-        return Task.CompletedTask;
-    }
-
-    private void DropClient(TcpClient client)
-    {
-        try
-        {
-            client.Dispose();
-        }
-        catch
-        {
-            // ignored for test cleanup
         }
     }
 

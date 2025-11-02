@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Net.Sockets;
+using System.Collections.Concurrent;
 using System.Reflection;
 
 using Yaref92.Events.Abstractions;
@@ -15,7 +14,6 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
     private readonly ResilientSessionClient _client;
     private readonly IEventAggregator? _localAggregator;
     private readonly IEventSerializer _eventSerializer;
-    private readonly ConcurrentDictionary<TcpClient, Task> _receiveTasks = new();
 
     public ResilientPeerSession(SessionKey sessionKey,
         ResilientSessionOptions options,
@@ -26,6 +24,7 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
         _client = new ResilientSessionClient(sessionKey, options, eventAggregator);
         _localAggregator = eventAggregator;
         _eventSerializer = eventSerializer;
+        _client.FrameReceived += OnFrameReceivedAsync;
         _ = StartAsync(CancellationToken.None);
     }
 
@@ -48,91 +47,21 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var task in _receiveTasks.Values)
-        {
-            try
-            {
-                await task.ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or SocketException)
-            {
-                await Console.Error.WriteLineAsync($"{nameof(ResilientPeerSession)} receive loop terminated: {ex}").ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
-
-        _receiveTasks.Clear();
+        _client.FrameReceived -= OnFrameReceivedAsync;
         await _client.DisposeAsync().ConfigureAwait(false);
     }
 
-    private Task OnClientConnectedAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
-    {
-        var receiveTask = Task.Run(() => ReceiveLoopAsync(session, client, cancellationToken), cancellationToken);
-        _receiveTasks[client] = receiveTask;
-        receiveTask.ContinueWith(_ =>
-        {
-            _receiveTasks.TryRemove(client, out _);
-            client.Dispose();
-        }, TaskContinuationOptions.ExecuteSynchronously);
-
-        return Task.CompletedTask;
-    }
-
-    private async Task ReceiveLoopAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
-    {
-        var stream = client.GetStream();
-        var lengthBuffer = new byte[4];
-
-        try
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                var result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
-                if (!result.IsSuccess)
-                {
-                    break;
-                }
-
-                await HandleIncomingFrameAsync(session, result.Frame!, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex) when (ex is IOException or SocketException)
-        {
-            await Console.Error.WriteLineAsync($"Persistent receive loop terminated: {ex}").ConfigureAwait(false);
-        }
-    }
-
-    private async Task HandleIncomingFrameAsync(ResilientSessionClient sessionClient, SessionFrame frame, CancellationToken cancellationToken)
+    private async ValueTask OnFrameReceivedAsync(ResilientSessionClient sessionClient, SessionFrame frame, CancellationToken cancellationToken)
     {
         switch (frame.Kind)
         {
             case SessionFrameKind.Event when frame.Payload is not null:
                 await PublishReflectedEventLocally(frame.Payload, cancellationToken).ConfigureAwait(false);
 
-                sessionClient.RecordRemoteActivity();
                 if (frame.Id != Guid.Empty)
                 {
                     sessionClient.EnqueueControlMessage(SessionFrame.CreateAck(frame.Id));
                 }
-                break;
-            case SessionFrameKind.Ack when frame.Id != Guid.Empty:
-                sessionClient.Acknowledge(frame.Id);
-                sessionClient.RecordRemoteActivity();
-                break;
-            case SessionFrameKind.Ping:
-                sessionClient.EnqueueControlMessage(SessionFrame.CreatePong());
-                sessionClient.RecordRemoteActivity();
-                break;
-            case SessionFrameKind.Pong:
-                sessionClient.RecordRemoteActivity();
-                break;
-            case SessionFrameKind.Auth:
-                sessionClient.RecordRemoteActivity();
                 break;
         }
     }

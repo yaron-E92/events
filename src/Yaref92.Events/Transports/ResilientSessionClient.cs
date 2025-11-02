@@ -34,14 +34,44 @@ public sealed class ResilientSessionClient : IAsyncDisposable
     private CancellationTokenSource _cts = new();
     private Task? _runTask;
     private readonly object _runLock = new();
+    private CancellationTokenSource? _activeConnectionCts;
+
+    public delegate ValueTask SessionFrameReceivedHandler(ResilientSessionClient client, SessionFrame frame, CancellationToken cancellationToken);
+
+    public delegate ValueTask SessionConnectionEstablishedHandler(ResilientSessionClient client, CancellationToken cancellationToken);
 
     public ResilientSessionClient(
         Guid userId,
         string host,
         int port,
         ResilientSessionOptions? options = null,
-        IEventAggregator? eventAggregator = null) :this(new(userId, host, port), options, eventAggregator)
-    { }
+        IEventAggregator? eventAggregator = null)
+        : this(new(userId, host, port), options, eventAggregator)
+    {
+    }
+
+    public ResilientSessionClient(
+        Guid userId,
+        string host,
+        int port,
+        SessionFrameReceivedHandler frameHandler,
+        ResilientSessionOptions? options = null,
+        IEventAggregator? eventAggregator = null)
+        : this(new(userId, host, port), options, eventAggregator)
+    {
+        ArgumentNullException.ThrowIfNull(frameHandler);
+        FrameReceived += frameHandler;
+    }
+
+    public ResilientSessionClient(
+        string host,
+        int port,
+        SessionFrameReceivedHandler frameHandler,
+        ResilientSessionOptions? options = null,
+        IEventAggregator? eventAggregator = null)
+        : this(Guid.NewGuid(), host, port, frameHandler, options, eventAggregator)
+    {
+    }
 
     public ResilientSessionClient(
         SessionKey sessionKey,
@@ -61,6 +91,10 @@ public sealed class ResilientSessionClient : IAsyncDisposable
     public string SessionToken => _sessionToken;
 
     public SessionKey SessionKey { get; }
+
+    public event SessionFrameReceivedHandler? FrameReceived;
+
+    public event SessionConnectionEstablishedHandler? ConnectionEstablished;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -125,6 +159,24 @@ public sealed class ResilientSessionClient : IAsyncDisposable
     public void RecordRemoteActivity()
     {
         Volatile.Write(ref _lastRemoteActivityTicks, DateTime.UtcNow.Ticks);
+    }
+
+    public async Task AbortActiveConnectionAsync()
+    {
+        var connectionCts = Volatile.Read(ref _activeConnectionCts);
+        if (connectionCts is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await connectionCts.CancelAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // connection already torn down
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -278,36 +330,47 @@ public sealed class ResilientSessionClient : IAsyncDisposable
 
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var connectionToken = connectionCts.Token;
-
-        Volatile.Write(ref _lastRemoteActivityTicks, DateTime.UtcNow.Ticks);
-
-        SignalFirstConnectionSuccess();
-
-        await ReplayPendingEntriesAsync(connectionToken).ConfigureAwait(false);
-
-        var authFrame = SessionFrameContract.CreateAuthFrame(_sessionToken, _options, _authenticationSecret);
-        await WriteFrameAsync(client.GetStream(), authFrame, connectionToken).ConfigureAwait(false);
-
-        var sendTask = RunSendLoopAsync(client, connectionToken);
-        var heartbeatTask = RunHeartbeatLoopAsync(connectionToken);
-
-        var completed = await Task.WhenAny(sendTask, heartbeatTask).ConfigureAwait(false);
-        await connectionCts.CancelAsync().ConfigureAwait(false);
+        Volatile.Write(ref _activeConnectionCts, connectionCts);
 
         try
         {
-            await Task.WhenAll(sendTask, heartbeatTask).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or SocketException)
-        {
-            if (!_cts.IsCancellationRequested)
-            {
-                throw;
-            }
-        }
+            Volatile.Write(ref _lastRemoteActivityTicks, DateTime.UtcNow.Ticks);
 
-        ThrowIfConnectionFailed(completed);
-        ThrowIfSessionEndedUnexpectedly(cancellationToken);
+            SignalFirstConnectionSuccess();
+
+            await ReplayPendingEntriesAsync(connectionToken).ConfigureAwait(false);
+
+            var authFrame = SessionFrameContract.CreateAuthFrame(_sessionToken, _options, _authenticationSecret);
+            await WriteFrameAsync(client.GetStream(), authFrame, connectionToken).ConfigureAwait(false);
+
+            await RaiseConnectionEstablishedAsync(connectionToken).ConfigureAwait(false);
+
+            var sendTask = RunSendLoopAsync(client, connectionToken);
+            var heartbeatTask = RunHeartbeatLoopAsync(connectionToken);
+            var receiveTask = RunReceiveLoopAsync(client, connectionToken);
+
+            var completed = await Task.WhenAny(sendTask, heartbeatTask, receiveTask).ConfigureAwait(false);
+            await connectionCts.CancelAsync().ConfigureAwait(false);
+
+            try
+            {
+                await Task.WhenAll(sendTask, heartbeatTask, receiveTask).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or SocketException)
+            {
+                if (!_cts.IsCancellationRequested)
+                {
+                    throw;
+                }
+            }
+
+            ThrowIfConnectionFailed(completed);
+            ThrowIfSessionEndedUnexpectedly(cancellationToken);
+        }
+        finally
+        {
+            Volatile.Write(ref _activeConnectionCts, null);
+        }
     }
 
     private async Task RunSendLoopAsync(TcpClient client, CancellationToken cancellationToken)
@@ -359,6 +422,98 @@ public sealed class ResilientSessionClient : IAsyncDisposable
             {
                 throw new IOException("Heartbeat timed out.");
             }
+        }
+    }
+
+    private async Task RunReceiveLoopAsync(TcpClient client, CancellationToken cancellationToken)
+    {
+        var stream = client.GetStream();
+        var lengthBuffer = new byte[4];
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            SessionFrameIO.FrameReadResult result;
+            try
+            {
+                result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            if (!result.IsSuccess || result.Frame is null)
+            {
+                break;
+            }
+
+            await HandleInboundFrameAsync(result.Frame, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask HandleInboundFrameAsync(SessionFrame frame, CancellationToken cancellationToken)
+    {
+        if (ShouldRecordRemoteActivity(frame.Kind))
+        {
+            RecordRemoteActivity();
+        }
+
+        await RaiseFrameReceivedAsync(frame, cancellationToken).ConfigureAwait(false);
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        switch (frame.Kind)
+        {
+            case SessionFrameKind.Ack when frame.Id != Guid.Empty:
+                Acknowledge(frame.Id);
+                break;
+            case SessionFrameKind.Ping:
+                EnqueueControlMessage(SessionFrame.CreatePong());
+                break;
+        }
+    }
+
+    private static bool ShouldRecordRemoteActivity(SessionFrameKind kind)
+    {
+        return kind switch
+        {
+            SessionFrameKind.Event => true,
+            SessionFrameKind.Ack => true,
+            SessionFrameKind.Ping => true,
+            SessionFrameKind.Pong => true,
+            SessionFrameKind.Auth => true,
+            _ => false,
+        };
+    }
+
+    private async ValueTask RaiseFrameReceivedAsync(SessionFrame frame, CancellationToken cancellationToken)
+    {
+        var handlers = FrameReceived;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (SessionFrameReceivedHandler handler in handlers.GetInvocationList())
+        {
+            await handler(this, frame, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask RaiseConnectionEstablishedAsync(CancellationToken cancellationToken)
+    {
+        var handlers = ConnectionEstablished;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (SessionConnectionEstablishedHandler handler in handlers.GetInvocationList())
+        {
+            await handler(this, cancellationToken).ConfigureAwait(false);
         }
     }
 

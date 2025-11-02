@@ -59,7 +59,7 @@ public class ResilientSessionClientTests
         await using var client = new ResilientSessionClient(
             "localhost",
             12345,
-            (_, _, _) => Task.CompletedTask,
+            (_, _, _) => ValueTask.CompletedTask,
             new ResilientSessionOptions
             {
                 HeartbeatInterval = TimeSpan.Zero,
@@ -78,7 +78,7 @@ public class ResilientSessionClientTests
         await using var client = new ResilientSessionClient(
             "localhost",
             12345,
-            (_, _, _) => Task.CompletedTask,
+            (_, _, _) => ValueTask.CompletedTask,
             new ResilientSessionOptions
             {
                 BackoffInitialDelay = TimeSpan.FromMilliseconds(5),
