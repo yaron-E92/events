@@ -19,7 +19,8 @@ public sealed class SessionFrame
     public SessionFrameKind Kind { get; init; }
 
     [JsonPropertyName("id")]
-    public Guid? Id { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public Guid Id { get; init; }
 
     [JsonPropertyName("token")]
     public string? Token { get; init; }

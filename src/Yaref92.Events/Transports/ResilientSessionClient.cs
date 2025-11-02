@@ -323,7 +323,7 @@ public sealed class ResilientSessionClient : IAsyncDisposable
                 continue;
             }
 
-            if (frame.Kind == SessionFrameKind.Event && frame.Id is Guid eventId && !TryMarkEventDequeued(eventId))
+            if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty && !TryMarkEventDequeued(frame.Id))
             {
                 continue;
             }

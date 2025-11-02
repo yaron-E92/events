@@ -342,10 +342,10 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
                 session.Touch();
                 break;
             case SessionFrameKind.Ack:
-                if (frame.Id is long ackId)
+                if (frame.Id != Guid.Empty)
                 {
-                    session.Acknowledge(ackId);
-                    session.PersistentClient?.Acknowledge(ackId);
+                    session.Acknowledge(frame.Id);
+                    session.PersistentClient?.Acknowledge(frame.Id);
                 }
                 break;
             case SessionFrameKind.Event:
@@ -355,7 +355,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
                 }
 
                 session.Touch();
-                if (frame.Id is long messageId)
+                if (frame.Id != Guid.Empty)
                 {
                     try
                     {
@@ -371,7 +371,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
                     }
                     finally
                     {
-                        session.EnqueueControl(SessionFrame.CreateAck(messageId));
+                        session.EnqueueControl(SessionFrame.CreateAck(frame.Id));
                         session.PersistentClient?.RecordRemoteActivity();
                     }
                 }
@@ -500,14 +500,13 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
     public sealed class SessionState : IAsyncDisposable
     {
         private readonly ConcurrentQueue<SessionFrame> _outbound = new();
-        private readonly ConcurrentDictionary<long, SessionFrame> _inflight = new();
+        private readonly ConcurrentDictionary<Guid, SessionFrame> _inflight = new();
         private readonly SemaphoreSlim _sendSignal = new(0);
         private readonly object _lock = new();
 
         private SessionConnection? _connection;
         private ResilientSessionClient? _persistentClient;
         private long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
-        private long _nextMessageId;
 
         public SessionState(SessionKey key)
         {
@@ -533,7 +532,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
 
         public void EnqueueMessage(string payload)
         {
-            var id = Interlocked.Increment(ref _nextMessageId);
+            var id = Guid.NewGuid();
             var frame = SessionFrame.CreateMessage(id, payload);
             _outbound.Enqueue(frame);
             _sendSignal.Release();
@@ -549,9 +548,9 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
         {
             if (_outbound.TryDequeue(out frame))
             {
-                if (frame.Kind == SessionFrameKind.Event && frame.Id is long id)
+                if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
                 {
-                    _inflight[id] = frame;
+                    _inflight[frame.Id] = frame;
                 }
 
                 return true;
@@ -567,16 +566,16 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
 
         public void ReturnToQueue(SessionFrame frame)
         {
-            if (frame.Kind == SessionFrameKind.Event && frame.Id is long id)
+            if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
             {
-                _inflight.TryRemove(id, out _);
+                _inflight.TryRemove(frame.Id, out _);
             }
 
             _outbound.Enqueue(frame);
             _sendSignal.Release();
         }
 
-        public void Acknowledge(long messageId)
+        public void Acknowledge(Guid messageId)
         {
             if (_inflight.TryRemove(messageId, out _))
             {

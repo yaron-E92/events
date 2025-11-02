@@ -115,13 +115,13 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
                 await PublishReflectedEventLocally(frame.Payload, cancellationToken).ConfigureAwait(false);
 
                 sessionClient.RecordRemoteActivity();
-                if (frame.Id is Guid messageId)
+                if (frame.Id != Guid.Empty)
                 {
-                    sessionClient.EnqueueControlMessage(SessionFrame.CreateAck(messageId));
+                    sessionClient.EnqueueControlMessage(SessionFrame.CreateAck(frame.Id));
                 }
                 break;
-            case SessionFrameKind.Ack when frame.Id is Guid ackId:
-                sessionClient.Acknowledge(ackId);
+            case SessionFrameKind.Ack when frame.Id != Guid.Empty:
+                sessionClient.Acknowledge(frame.Id);
                 sessionClient.RecordRemoteActivity();
                 break;
             case SessionFrameKind.Ping:
