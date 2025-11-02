@@ -52,9 +52,7 @@ public sealed class ResilientSessionClient : IAsyncDisposable
         _authenticationSecret = _options.AuthenticationToken;
         _eventAggregator = eventAggregator;
         SessionKey = sessionKey;
-        _sessionToken = _options.RequireAuthentication
-            ? $"{SessionKey}-{_authenticationSecret}"
-            : $"{SessionKey}-{Guid.NewGuid():N}";
+        _sessionToken = SessionFrameContract.CreateSessionToken(SessionKey, _options, _authenticationSecret);
         _outboxPath = Path.Combine(AppContext.BaseDirectory, OutboxFileName);
         _lastRemoteActivityTicks = DateTime.UtcNow.Ticks;
     }
@@ -287,7 +285,8 @@ public sealed class ResilientSessionClient : IAsyncDisposable
 
         await ReplayPendingEntriesAsync(connectionToken).ConfigureAwait(false);
 
-        await WriteFrameAsync(client.GetStream(), SessionFrame.CreateAuth(_sessionToken, _authenticationSecret), connectionToken).ConfigureAwait(false);
+        var authFrame = SessionFrameContract.CreateAuthFrame(_sessionToken, _options, _authenticationSecret);
+        await WriteFrameAsync(client.GetStream(), authFrame, connectionToken).ConfigureAwait(false);
 
         var sendTask = RunSendLoopAsync(client, connectionToken);
         var heartbeatTask = RunHeartbeatLoopAsync(connectionToken);
@@ -347,10 +346,8 @@ public sealed class ResilientSessionClient : IAsyncDisposable
 
     private async Task RunHeartbeatLoopAsync(CancellationToken cancellationToken)
     {
-        var heartbeatInterval = _options.HeartbeatInterval;
-        var timeout = _options.HeartbeatTimeout <= TimeSpan.Zero
-            ? heartbeatInterval * 2
-            : _options.HeartbeatTimeout;
+        var heartbeatInterval = SessionFrameContract.GetHeartbeatInterval(_options);
+        var timeout = SessionFrameContract.GetHeartbeatTimeout(_options);
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(heartbeatInterval, cancellationToken).ConfigureAwait(false);

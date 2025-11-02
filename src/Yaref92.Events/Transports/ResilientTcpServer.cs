@@ -283,20 +283,9 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
 
     private (SessionState? Session, SessionFrame? PendingFrame) ResolveSession(TcpClient client, SessionFrame firstFrame)
     {
-        if (firstFrame.Kind == SessionFrameKind.Auth)
+        if (SessionFrameContract.TryValidateAuthentication(firstFrame, _options, out var sessionKey))
         {
-            var token = firstFrame.Token;
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                return default;
-            }
-
-            if (_options.RequireAuthentication && !IsTokenAccepted(token, firstFrame.Payload))
-            {
-                return default;
-            }
-
-            var session = _sessionStates.GetOrAdd(token, key => new SessionState(key));
+            var session = _sessionStates.GetOrAdd(sessionKey, key => new SessionState(key));
             session.RegisterAuthentication();
             return (session, null);
         }
@@ -306,10 +295,35 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
             return default;
         }
 
-        var remoteKey = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString("N");
-        var existing = _sessionStates.GetOrAdd(remoteKey, key => new SessionState(key));
+        var fallbackKey = CreateFallbackSessionKey(client);
+        var existing = _sessionStates.GetOrAdd(fallbackKey, key => new SessionState(key));
         existing.RegisterAuthentication();
         return (existing, firstFrame);
+    }
+
+    private static SessionKey CreateFallbackSessionKey(TcpClient client)
+    {
+        if (client.Client.RemoteEndPoint is IPEndPoint endPoint)
+        {
+            var port = endPoint.Port <= 0 ? 1 : endPoint.Port;
+            return new SessionKey(Guid.Empty, endPoint.Address.ToString(), port);
+        }
+
+        var remoteText = client.Client.RemoteEndPoint?.ToString();
+        if (!string.IsNullOrWhiteSpace(remoteText))
+        {
+            var separatorIndex = remoteText.LastIndexOf(':');
+            if (separatorIndex > 0 && separatorIndex < remoteText.Length - 1 &&
+                int.TryParse(remoteText[(separatorIndex + 1)..], out var port))
+            {
+                var host = remoteText[..separatorIndex];
+                return new SessionKey(Guid.Empty, host, port <= 0 ? 1 : port);
+            }
+
+            return new SessionKey(Guid.Empty, remoteText, 1);
+        }
+
+        return new SessionKey(Guid.NewGuid(), "unknown", 1);
     }
 
     private async Task ProcessIncomingFramesAsync(
@@ -376,21 +390,6 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
         }
     }
 
-    private bool IsTokenAccepted(string token, string? secret)
-    {
-        if (!_options.RequireAuthentication)
-        {
-            return true;
-        }
-
-        if (string.IsNullOrEmpty(_options.AuthenticationToken))
-        {
-            return true;
-        }
-
-        return string.Equals(_options.AuthenticationToken, secret ?? token, StringComparison.Ordinal);
-    }
-
     private static async Task RunSendLoopAsync(SessionState session, NetworkStream stream, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -429,7 +428,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
         {
             try
             {
-                await Task.Delay(_options.HeartbeatInterval, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(SessionFrameContract.GetHeartbeatInterval(_options), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -437,7 +436,8 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
             }
 
             var now = DateTime.UtcNow;
-            foreach (var session in _sessionStates.Values.Where(session => session.IsExpired(now, _options.HeartbeatTimeout)))
+            var timeout = SessionFrameContract.GetHeartbeatTimeout(_options);
+            foreach (var session in _sessionStates.Values.Where(session => session.IsExpired(now, timeout)))
             {
                 await session.CloseConnectionAsync().ConfigureAwait(false);
             }
