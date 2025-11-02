@@ -3,9 +3,11 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Text.Json;
 
 using FluentAssertions;
 
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
 
@@ -95,13 +97,12 @@ public class ResilientSessionIntegrationTests
 
     private static async Task WaitForServerInflightToDrainAsync(ResilientTcpServer server, TimeSpan timeout)
     {
-        var sessionsField = typeof(ResilientTcpServer).GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < timeout)
         {
-            var sessions = (ConcurrentDictionary<string, ResilientTcpServer.SessionState>) sessionsField.GetValue(server)!;
+            var sessions = server.Sessions.Values;
             var drained = true;
-            foreach (var sessionState in sessions.Values)
+            foreach (var sessionState in sessions)
             {
                 if (sessionState is null)
                 {
@@ -131,6 +132,62 @@ public class ResilientSessionIntegrationTests
         }
 
         throw new TimeoutException("Server sessions still have in-flight messages after the allotted timeout.");
+    }
+
+    [Test]
+    public async Task AnonymousClient_SessionJoined_EventPublisherAcceptsFallbackSession()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = false,
+            HeartbeatInterval = TimeSpan.FromMilliseconds(25),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(80),
+        };
+
+        var port = GetFreeTcpPort();
+        await using var server = new ResilientTcpServer(port, options);
+        await server.StartAsync().ConfigureAwait(false);
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port).ConfigureAwait(false);
+
+        var stream = client.GetStream();
+        var anonymousFrame = SessionFrame.CreateMessage(Guid.NewGuid(), "anonymous-payload");
+        await SendFrameAsync(stream, anonymousFrame, CancellationToken.None).ConfigureAwait(false);
+
+        await WaitForAuthenticatedSessionsAsync(server, 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        var sessions = server.Sessions;
+        sessions.Should().HaveCount(1);
+        var sessionEntry = sessions.Single();
+        sessionEntry.Value.Should().NotBeNull();
+        sessionEntry.Value.HasAuthenticated.Should().BeTrue();
+
+        var sessionKey = sessionEntry.Key;
+        sessionKey.UserId.Should().NotBe(Guid.Empty);
+        sessionKey.Host.Should().NotBeNullOrWhiteSpace();
+        sessionKey.Port.Should().BeGreaterThan(0);
+
+        var fallbackFactory = typeof(ResilientTcpServer).GetMethod("CreateFallbackSessionKey", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var remoteEndPoint = (IPEndPoint) client.Client.RemoteEndPoint!;
+        var fallbackKey = (SessionKey) fallbackFactory.Invoke(server, [new IPEndPoint(remoteEndPoint.Address, remoteEndPoint.Port)])!;
+        fallbackKey.UserId.Should().Be(sessionKey.UserId);
+        fallbackKey.Host.Should().Be(sessionKey.Host);
+        fallbackKey.Port.Should().Be(sessionKey.Port);
+
+        var listener = new PersistentSessionListener(GetFreeTcpPort(), new ResilientSessionOptions(), new NoopEventTransport());
+        await using var publisher = new PersistentEventPublisher(listener, new ResilientSessionOptions(), null, new NoopEventSerializer());
+
+        Func<Task> act = () => publisher.OnNextAsync(new SessionJoined(sessionKey), CancellationToken.None);
+        await act.Should().NotThrowAsync<ArgumentException>();
+    }
+
+    private static async Task SendFrameAsync(NetworkStream stream, SessionFrame frame, CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(frame, SessionFrameSerializer.Options);
+        var lengthPrefix = BitConverter.GetBytes(payload.Length);
+        await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task WaitForAuthenticatedSessionsAsync(ResilientTcpServer server, int expectedCount, TimeSpan timeout)
@@ -175,6 +232,26 @@ public class ResilientSessionIntegrationTests
             listener.Stop();
         }
     }
+}
+
+internal sealed class NoopEventTransport : IEventTransport
+{
+    public Task AcceptIncomingTrafficAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+        => Task.CompletedTask;
+
+    public Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+        => Task.CompletedTask;
+
+    public void Subscribe<TEvent>() where TEvent : class, IDomainEvent
+    {
+    }
+}
+
+internal sealed class NoopEventSerializer : IEventSerializer
+{
+    public string Serialize<T>(T evt) where T : class, IDomainEvent => string.Empty;
+
+    public (Type? type, IDomainEvent? domainEvent) Deserialize(string data) => (null, null);
 }
 
 internal sealed class TestPersistentClientHost : IAsyncDisposable
