@@ -14,7 +14,7 @@ using Yaref92.Events.Transports;
 namespace Yaref92.Events.UnitTests.Transports;
 
 [TestFixture]
-public class PersistentSessionClientTests
+public class ResilientSessionClientTests
 {
     [Test]
     public async Task Outbox_Persistence_RoundTrips_PendingEntries()
@@ -28,23 +28,23 @@ public class PersistentSessionClientTests
             long firstId;
             long secondId;
 
-            await using (var writer = new PersistentSessionClient("localhost", 12345, (_, _, _) => Task.CompletedTask))
+            await using (var writer = new ResilientSessionClient("localhost", 12345, (_, _, _) => Task.CompletedTask))
             {
-                PersistentSessionClientTestHelper.OverrideOutboxPath(writer, outboxPath);
+                ResilientSessionClientTestHelper.OverrideOutboxPath(writer, outboxPath);
                 firstId = await writer.EnqueueEventAsync("first", CancellationToken.None).ConfigureAwait(false);
                 secondId = await writer.EnqueueEventAsync("second", CancellationToken.None).ConfigureAwait(false);
-                await PersistentSessionClientTestHelper.PersistOutboxAsync(writer, CancellationToken.None).ConfigureAwait(false);
+                await ResilientSessionClientTestHelper.PersistOutboxAsync(writer, CancellationToken.None).ConfigureAwait(false);
             }
 
-            await using var reader = new PersistentSessionClient("localhost", 12345, (_, _, _) => Task.CompletedTask);
-            PersistentSessionClientTestHelper.OverrideOutboxPath(reader, outboxPath);
-            await PersistentSessionClientTestHelper.LoadOutboxAsync(reader, CancellationToken.None).ConfigureAwait(false);
+            await using var reader = new ResilientSessionClient("localhost", 12345, (_, _, _) => Task.CompletedTask);
+            ResilientSessionClientTestHelper.OverrideOutboxPath(reader, outboxPath);
+            await ResilientSessionClientTestHelper.LoadOutboxAsync(reader, CancellationToken.None).ConfigureAwait(false);
 
-            var snapshot = PersistentSessionClientTestHelper.GetOutboxSnapshot(reader);
+            var snapshot = ResilientSessionClientTestHelper.GetOutboxSnapshot(reader);
             snapshot.Should().ContainKey(firstId).WhoseValue.Should().Be("first");
             snapshot.Should().ContainKey(secondId).WhoseValue.Should().Be("second");
 
-            var nextMessageId = PersistentSessionClientTestHelper.GetNextMessageId(reader);
+            var nextMessageId = ResilientSessionClientTestHelper.GetNextMessageId(reader);
             nextMessageId.Should().BeGreaterThanOrEqualTo(secondId);
         }
         finally
@@ -59,7 +59,7 @@ public class PersistentSessionClientTests
     [Test]
     public async Task HeartbeatLoop_Throws_When_Remote_Is_Inactive()
     {
-        await using var client = new PersistentSessionClient(
+        await using var client = new ResilientSessionClient(
             "localhost",
             12345,
             (_, _, _) => Task.CompletedTask,
@@ -69,16 +69,16 @@ public class PersistentSessionClientTests
                 HeartbeatTimeout = TimeSpan.FromMilliseconds(10),
             });
 
-        PersistentSessionClientTestHelper.SetLastRemoteActivity(client, DateTime.UtcNow - TimeSpan.FromSeconds(5));
+        ResilientSessionClientTestHelper.SetLastRemoteActivity(client, DateTime.UtcNow - TimeSpan.FromSeconds(5));
 
-        Func<Task> act = () => PersistentSessionClientTestHelper.RunHeartbeatLoopAsync(client, CancellationToken.None);
+        Func<Task> act = () => ResilientSessionClientTestHelper.RunHeartbeatLoopAsync(client, CancellationToken.None);
         await act.Should().ThrowAsync<IOException>().ConfigureAwait(false);
     }
 
     [Test]
     public async Task BackoffDelay_GrowsExponentially_And_Respects_Maximum()
     {
-        await using var client = new PersistentSessionClient(
+        await using var client = new ResilientSessionClient(
             "localhost",
             12345,
             (_, _, _) => Task.CompletedTask,
@@ -88,9 +88,9 @@ public class PersistentSessionClientTests
                 BackoffMaxDelay = TimeSpan.FromMilliseconds(40),
             });
 
-        var attempt1 = PersistentSessionClientTestHelper.GetBackoffDelay(client, 1);
-        var attempt2 = PersistentSessionClientTestHelper.GetBackoffDelay(client, 2);
-        var attempt5 = PersistentSessionClientTestHelper.GetBackoffDelay(client, 5);
+        var attempt1 = ResilientSessionClientTestHelper.GetBackoffDelay(client, 1);
+        var attempt2 = ResilientSessionClientTestHelper.GetBackoffDelay(client, 2);
+        var attempt5 = ResilientSessionClientTestHelper.GetBackoffDelay(client, 5);
 
         attempt1.Should().Be(TimeSpan.FromMilliseconds(5));
         attempt2.Should().Be(TimeSpan.FromMilliseconds(10));
@@ -98,38 +98,38 @@ public class PersistentSessionClientTests
     }
 }
 
-internal static class PersistentSessionClientTestHelper
+internal static class ResilientSessionClientTestHelper
 {
-    private static readonly FieldInfo OutboxPathField = typeof(PersistentSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo OutboxEntriesField = typeof(PersistentSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo NextMessageIdField = typeof(PersistentSessionClient).GetField("_nextMessageId", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo LastRemoteActivityField = typeof(PersistentSessionClient).GetField("_lastRemoteActivityTicks", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo PersistOutboxMethod = typeof(PersistentSessionClient).GetMethod("PersistOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo LoadOutboxMethod = typeof(PersistentSessionClient).GetMethod("LoadOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo HeartbeatLoopMethod = typeof(PersistentSessionClient).GetMethod("RunHeartbeatLoopAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo BackoffDelayMethod = typeof(PersistentSessionClient).GetMethod("GetBackoffDelay", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo NotifySendFailureMethod = typeof(PersistentSessionClient).GetMethod("NotifySendFailure", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly Type OutboxEntryType = typeof(PersistentSessionClient).GetNestedType("OutboxEntry", BindingFlags.NonPublic)!;
+    private static readonly FieldInfo OutboxPathField = typeof(ResilientSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly FieldInfo OutboxEntriesField = typeof(ResilientSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly FieldInfo NextMessageIdField = typeof(ResilientSessionClient).GetField("_nextMessageId", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly FieldInfo LastRemoteActivityField = typeof(ResilientSessionClient).GetField("_lastRemoteActivityTicks", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo PersistOutboxMethod = typeof(ResilientSessionClient).GetMethod("PersistOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo LoadOutboxMethod = typeof(ResilientSessionClient).GetMethod("LoadOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo HeartbeatLoopMethod = typeof(ResilientSessionClient).GetMethod("RunHeartbeatLoopAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo BackoffDelayMethod = typeof(ResilientSessionClient).GetMethod("GetBackoffDelay", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo NotifySendFailureMethod = typeof(ResilientSessionClient).GetMethod("NotifySendFailure", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly Type OutboxEntryType = typeof(ResilientSessionClient).GetNestedType("OutboxEntry", BindingFlags.NonPublic)!;
     private static readonly PropertyInfo PayloadProperty = OutboxEntryType.GetProperty("Payload", BindingFlags.Instance | BindingFlags.Public)!;
 
-    public static void OverrideOutboxPath(PersistentSessionClient client, string path)
+    public static void OverrideOutboxPath(ResilientSessionClient client, string path)
     {
         OutboxPathField.SetValue(client, path);
     }
 
-    public static async Task PersistOutboxAsync(PersistentSessionClient client, CancellationToken cancellationToken)
+    public static async Task PersistOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)
     {
         var task = (Task)PersistOutboxMethod.Invoke(client, new object[] { cancellationToken })!;
         await task.ConfigureAwait(false);
     }
 
-    public static async Task LoadOutboxAsync(PersistentSessionClient client, CancellationToken cancellationToken)
+    public static async Task LoadOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)
     {
         var task = (Task)LoadOutboxMethod.Invoke(client, new object[] { cancellationToken })!;
         await task.ConfigureAwait(false);
     }
 
-    public static Dictionary<long, string> GetOutboxSnapshot(PersistentSessionClient client)
+    public static Dictionary<long, string> GetOutboxSnapshot(ResilientSessionClient client)
     {
         var entries = (System.Collections.IDictionary)OutboxEntriesField.GetValue(client)!;
         var snapshot = new Dictionary<long, string>();
@@ -148,27 +148,27 @@ internal static class PersistentSessionClientTestHelper
         return snapshot;
     }
 
-    public static long GetNextMessageId(PersistentSessionClient client)
+    public static long GetNextMessageId(ResilientSessionClient client)
     {
         return (long)NextMessageIdField.GetValue(client)!;
     }
 
-    public static void SetLastRemoteActivity(PersistentSessionClient client, DateTime timestamp)
+    public static void SetLastRemoteActivity(ResilientSessionClient client, DateTime timestamp)
     {
         LastRemoteActivityField.SetValue(client, timestamp.Ticks);
     }
 
-    public static Task RunHeartbeatLoopAsync(PersistentSessionClient client, CancellationToken cancellationToken)
+    public static Task RunHeartbeatLoopAsync(ResilientSessionClient client, CancellationToken cancellationToken)
     {
         return (Task)HeartbeatLoopMethod.Invoke(client, new object[] { cancellationToken })!;
     }
 
-    public static TimeSpan GetBackoffDelay(PersistentSessionClient client, int attempt)
+    public static TimeSpan GetBackoffDelay(ResilientSessionClient client, int attempt)
     {
         return (TimeSpan)BackoffDelayMethod.Invoke(client, new object[] { attempt })!;
     }
 
-    public static void NotifySendFailure(PersistentSessionClient client, Exception exception)
+    public static void NotifySendFailure(ResilientSessionClient client, Exception exception)
     {
         NotifySendFailureMethod.Invoke(client, new object[] { exception });
     }

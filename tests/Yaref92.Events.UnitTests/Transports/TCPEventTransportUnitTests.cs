@@ -14,6 +14,7 @@ using NUnit.Framework;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Transports;
+using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.UnitTests.Transports;
 
@@ -26,7 +27,8 @@ public class TCPEventTransportUnitTests
         // Arrange
         var transport = new TCPEventTransport(0); // Port 0 for no listening
         DummyEvent? received = null;
-        transport.Subscribe<DummyEvent>(async (evt, ct) => received = evt);
+        //transport.Subscribe<DummyEvent>(async (evt, ct) => received = evt);
+        transport.Subscribe<DummyEvent>();
 
         // Act
         var handlersField = typeof(TCPEventTransport).GetField("_handlers", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
@@ -77,8 +79,8 @@ public class TCPEventTransportUnitTests
             await transport.PublishAsync(new DummyEvent()).ConfigureAwait(false);
 
             // Assert
-            var snapshotA = PersistentSessionClientTestHelper.GetOutboxSnapshot(sessionA);
-            var snapshotB = PersistentSessionClientTestHelper.GetOutboxSnapshot(sessionB);
+            var snapshotA = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionA);
+            var snapshotB = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionB);
 
             snapshotA.Should().HaveCount(1);
             snapshotB.Should().HaveCount(1);
@@ -122,15 +124,15 @@ public class TCPEventTransportUnitTests
         // Arrange
         var aggregator = new FakeEventAggregator();
         await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
-        var session = new PersistentSessionClient(
+        var session = new ResilientSessionClient(
+            Guid.NewGuid(),
             "localhost",
             12345,
-            (_, _, _) => Task.CompletedTask,
             eventAggregator: aggregator);
         var exception = new IOException("boom");
 
         // Act
-        PersistentSessionClientTestHelper.NotifySendFailure(session, exception);
+        ResilientSessionClientTestHelper.NotifySendFailure(session, exception);
 
         // Assert
         aggregator.PublishFailedHandlerExecuted.Should().BeTrue();
@@ -147,12 +149,13 @@ public class TCPEventTransportUnitTests
         await using var transport = new TCPEventTransport(0);
         MessageReceived? received = null;
         var invocationCount = 0;
-        transport.Subscribe<MessageReceived>(async (evt, ct) =>
-        {
-            invocationCount++;
-            received = evt;
-            await Task.CompletedTask;
-        });
+        transport.Subscribe<MessageReceived>();
+        //transport.Subscribe<MessageReceived>(async (evt, ct) =>
+        //{
+        //    invocationCount++;
+        //    received = evt;
+        //    await Task.CompletedTask;
+        //});
 
         var serializerField = typeof(TCPEventTransport).GetField("_serializer", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var serializer = (IEventSerializer)serializerField.GetValue(transport)!;
@@ -168,17 +171,17 @@ public class TCPEventTransportUnitTests
         received.Payload.Should().Be(payload);
     }
 
-    private static ConcurrentDictionary<string, PersistentSessionClient> GetPersistentSessionsDictionary(TCPEventTransport transport)
+    private static ConcurrentDictionary<string, ResilientSessionClient> GetPersistentSessionsDictionary(TCPEventTransport transport)
     {
         var field = typeof(TCPEventTransport).GetField("_persistentSessions", BindingFlags.Instance | BindingFlags.NonPublic);
-        return (ConcurrentDictionary<string, PersistentSessionClient>)field!.GetValue(transport)!;
+        return (ConcurrentDictionary<string, ResilientSessionClient>)field!.GetValue(transport)!;
     }
 
-    private static PersistentSessionClient CreateSession(string tempDirectory)
+    private static ResilientSessionClient CreateSession(string tempDirectory)
     {
-        var session = new PersistentSessionClient("localhost", 12345, (_, _, _) => Task.CompletedTask);
+        var session = new ResilientSessionClient(Guid.NewGuid(), "localhost", 12345);
         var path = Path.Combine(tempDirectory, $"outbox-{Guid.NewGuid():N}.json");
-        PersistentSessionClientTestHelper.OverrideOutboxPath(session, path);
+        ResilientSessionClientTestHelper.OverrideOutboxPath(session, path);
         return session;
     }
 
@@ -209,7 +212,7 @@ public class TCPEventTransportUnitTests
         }
     }
 
-    private static async Task DisposeSessionsAsync(IEnumerable<PersistentSessionClient> sessions)
+    private static async Task DisposeSessionsAsync(IEnumerable<ResilientSessionClient> sessions)
     {
         foreach (var session in sessions.ToArray())
         {
@@ -224,9 +227,9 @@ public class TCPEventTransportUnitTests
 
     private sealed class FakeEventAggregator : IEventAggregator
     {
-        private readonly List<IEventSubscriber> _subscribers = new();
-        private readonly List<IAsyncEventSubscriber<PublishFailed>> _publishFailedSubscribers = new();
-        private readonly List<IAsyncEventSubscriber<MessageReceived>> _messageReceivedSubscribers = new();
+        private readonly List<IEventHandler> _subscribers = new();
+        private readonly List<IAsyncEventHandler<PublishFailed>> _publishFailedSubscribers = new();
+        private readonly List<IAsyncEventHandler<MessageReceived>> _messageReceivedSubscribers = new();
 
         public bool PublishFailedHandlerExecuted { get; private set; }
 
@@ -235,7 +238,7 @@ public class TCPEventTransportUnitTests
 
         public ISet<Type> EventTypes { get; } = new HashSet<Type>();
 
-        public IReadOnlyCollection<IEventSubscriber> Subscribers => _subscribers;
+        public IReadOnlyCollection<IEventHandler> Subscribers => _subscribers;
 
         public bool RegisterEventType<T>() where T : class, IDomainEvent
         {
@@ -247,52 +250,52 @@ public class TCPEventTransportUnitTests
             throw new NotSupportedException();
         }
 
-        public void SubscribeToEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
+        public void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
         {
             throw new NotSupportedException();
         }
 
-        public void SubscribeToEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent
+        public void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
         {
             if (subscriber is null)
             {
                 throw new ArgumentNullException(nameof(subscriber));
             }
 
-            if (subscriber is IEventSubscriber eventSubscriber)
+            if (subscriber is IEventHandler eventSubscriber)
             {
                 _subscribers.Add(eventSubscriber);
             }
 
-            if (subscriber is IAsyncEventSubscriber<PublishFailed> publishFailedSubscriber)
+            if (subscriber is IAsyncEventHandler<PublishFailed> publishFailedSubscriber)
             {
                 _publishFailedSubscribers.Add(publishFailedSubscriber);
             }
 
-            if (subscriber is IAsyncEventSubscriber<MessageReceived> messageReceivedSubscriber)
+            if (subscriber is IAsyncEventHandler<MessageReceived> messageReceivedSubscriber)
             {
                 _messageReceivedSubscribers.Add(messageReceivedSubscriber);
             }
         }
 
-        public void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
+        public void UnsubscribeFromEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
         {
             throw new NotSupportedException();
         }
 
-        public void UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent
+        public void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
         {
-            if (subscriber is IEventSubscriber eventSubscriber)
+            if (subscriber is IEventHandler eventSubscriber)
             {
                 _subscribers.Remove(eventSubscriber);
             }
 
-            if (subscriber is IAsyncEventSubscriber<PublishFailed> publishFailedSubscriber)
+            if (subscriber is IAsyncEventHandler<PublishFailed> publishFailedSubscriber)
             {
                 _publishFailedSubscribers.Remove(publishFailedSubscriber);
             }
 
-            if (subscriber is IAsyncEventSubscriber<MessageReceived> messageReceivedSubscriber)
+            if (subscriber is IAsyncEventHandler<MessageReceived> messageReceivedSubscriber)
             {
                 _messageReceivedSubscribers.Remove(messageReceivedSubscriber);
             }

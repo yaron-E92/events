@@ -1,7 +1,9 @@
-using System;
+﻿using System;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Transports;
+using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Serialization;
 
@@ -25,7 +27,7 @@ public class JsonEventSerializer : IEventSerializer
 
     private string SerializeToEventEnvelope<T>(T domainEvent) where T : class, IDomainEvent
     {
-        ArgumentNullException.ThrowIfNull(domainEvent, nameof(domainEvent));
+        ArgumentNullException.ThrowIfNull(domainEvent);
 
         string eventJson = JsonSerializer.Serialize(domainEvent, _options);
         string? typeName = typeof(T).AssemblyQualifiedName;
@@ -33,9 +35,9 @@ public class JsonEventSerializer : IEventSerializer
         return JsonSerializer.Serialize(new EventEnvelope(eventId, typeName!, eventJson), _options);
     }
 
-    private (Type? type, IDomainEvent? domainEvent) DeserializeFromEventEnvelope(string data)
+    private (Type? type, IDomainEvent? domainEvent) DeserializeFromEventEnvelope(string eventEnvelopeData)
     {
-        EventEnvelope eventEnvelope = JsonSerializer.Deserialize<EventEnvelope>(data, _options)!;
+        EventEnvelope eventEnvelope = JsonSerializer.Deserialize<EventEnvelope>(eventEnvelopeData, _options)!;
         if (eventEnvelope.TypeName is null)
         {
             return (null, null);

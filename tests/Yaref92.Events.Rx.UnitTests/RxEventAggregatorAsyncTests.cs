@@ -23,7 +23,7 @@ public class DummySyncRxSubscriber : IRxSubscriber<DummyEvent>
     public void OnCompleted() { }
 }
 
-public class DummyAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+public class DummyAsyncSubscriber : IAsyncEventHandler<DummyEvent>
 {
     public TaskCompletionSource<DummyEvent> Received { get; } = new();
     public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default)
@@ -33,7 +33,7 @@ public class DummyAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
     }
 }
 
-public class CancellableAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+public class CancellableAsyncSubscriber : IAsyncEventHandler<DummyEvent>
 {
     public TaskCompletionSource<DummyEvent> Received { get; } = new();
     public TaskCompletionSource<bool> Cancelled { get; } = new();
@@ -207,7 +207,7 @@ public class RxEventAggregatorAsyncTests
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
-    private class FailingAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+    private class FailingAsyncSubscriber : IAsyncEventHandler<DummyEvent>
     {
         public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default) => throw new InvalidOperationException("fail");
     }

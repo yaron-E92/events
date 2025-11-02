@@ -12,8 +12,8 @@ internal class NetworkedEventAggregatorTests
     private IEventAggregator _localAggregator;
     private IEventTransport _transport;
     private NetworkedEventAggregator _networkedAggregator;
-    private IEventSubscriber<DummyEvent> _subscriber;
-    private IAsyncEventSubscriber<DummyEvent> _asyncSubscriber;
+    private IEventHandler<DummyEvent> _subscriber;
+    private IAsyncEventHandler<DummyEvent> _asyncSubscriber;
 
     [SetUp]
     public void SetUp()
@@ -21,8 +21,8 @@ internal class NetworkedEventAggregatorTests
         _localAggregator = Substitute.For<IEventAggregator>();
         _transport = Substitute.For<IEventTransport>();
         _networkedAggregator = new NetworkedEventAggregator(_localAggregator, _transport);
-        _subscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
-        _asyncSubscriber = Substitute.For<IAsyncEventSubscriber<DummyEvent>>();
+        _subscriber = Substitute.For<IEventHandler<DummyEvent>>();
+        _asyncSubscriber = Substitute.For<IAsyncEventHandler<DummyEvent>>();
     }
 
     [Test]

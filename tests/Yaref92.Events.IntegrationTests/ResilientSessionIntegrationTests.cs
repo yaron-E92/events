@@ -6,6 +6,7 @@ using System.Reflection;
 
 using FluentAssertions;
 
+using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.IntegrationTests;
@@ -32,21 +33,6 @@ public class ResilientSessionIntegrationTests
         var deliveries = new List<string>();
         var firstDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        server.SetMessageReceivedHandler((_, payload, _) =>
-        {
-            deliveries.Add(payload);
-            if (deliveries.Count == 1)
-            {
-                firstDeliveryTcs.TrySetResult();
-            }
-            else if (deliveries.Count == 2)
-            {
-                replayDeliveryTcs.TrySetResult();
-            }
-
-            return Task.CompletedTask;
-        });
 
         await server.StartAsync().ConfigureAwait(false);
 
@@ -195,7 +181,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 {
     private readonly string _outboxPath;
     private readonly ConcurrentQueue<string> _payloads = new();
-    private readonly List<long> _acknowledged = new();
+    private readonly List<Guid> _acknowledged = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _messageWaiters = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _ackWaiters = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _connectionWaiters = new();
@@ -209,15 +195,15 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     public TestPersistentClientHost(string host, int port, ResilientSessionOptions options)
     {
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
-        Client = new PersistentSessionClient(host, port, OnClientConnectedAsync, options);
+        Client = new ResilientSessionClient(Guid.NewGuid(), host, port, options);
         SetOutboxPath(Client, _outboxPath);
     }
 
-    public PersistentSessionClient Client { get; }
+    public ResilientSessionClient Client { get; }
 
     public IReadOnlyCollection<string> ReceivedPayloads => _payloads.ToArray();
 
-    public IReadOnlyCollection<long> AcknowledgedMessageIds
+    public IReadOnlyCollection<Guid> AcknowledgedMessageIds
     {
         get
         {
@@ -350,7 +336,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private Task OnClientConnectedAsync(PersistentSessionClient session, TcpClient client, CancellationToken cancellationToken)
+    private Task OnClientConnectedAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
     {
         Interlocked.Exchange(ref _activeClient, client);
         var connections = Interlocked.Increment(ref _connectionCount);
@@ -360,7 +346,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    private async Task ReceiveLoopAsync(PersistentSessionClient session, TcpClient client, CancellationToken cancellationToken)
+    private async Task ReceiveLoopAsync(ResilientSessionClient session, TcpClient client, CancellationToken cancellationToken)
     {
         var stream = client.GetStream();
         var lengthBuffer = new byte[4];
@@ -395,11 +381,11 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private Task HandleFrameAsync(PersistentSessionClient session, TcpClient client, SessionFrame frame)
+    private Task HandleFrameAsync(ResilientSessionClient session, TcpClient client, SessionFrame frame)
     {
         switch (frame.Kind)
         {
-            case SessionFrameKind.Message when frame.Payload is not null && frame.Id is long messageId:
+            case SessionFrameKind.Event when frame.Payload is not null && frame.Id is Guid messageId:
                 _payloads.Enqueue(frame.Payload);
                 session.RecordRemoteActivity();
                 NotifyWaiters(_messageWaiters, _payloads.Count);
@@ -412,7 +398,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
                 session.EnqueueControlMessage(SessionFrame.CreateAck(messageId));
                 break;
-            case SessionFrameKind.Ack when frame.Id is long ackId:
+            case SessionFrameKind.Ack when frame.Id is Guid ackId:
                 session.RecordRemoteActivity();
 
                 if (Interlocked.Exchange(ref _dropAckFlag, 0) == 1)
@@ -456,7 +442,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     private IReadOnlyCollection<long> GetOutboxEntries()
     {
-        var entriesField = typeof(PersistentSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var entriesField = typeof(ResilientSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var entries = (System.Collections.IDictionary) entriesField.GetValue(Client)!;
         var keys = new List<long>();
         foreach (var key in entries.Keys)
@@ -470,9 +456,9 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         return keys;
     }
 
-    private static void SetOutboxPath(PersistentSessionClient client, string path)
+    private static void SetOutboxPath(ResilientSessionClient client, string path)
     {
-        var field = typeof(PersistentSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var field = typeof(ResilientSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
         field.SetValue(client, path);
     }
 

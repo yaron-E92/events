@@ -1,4 +1,4 @@
-namespace Yaref92.Events.Abstractions;
+﻿namespace Yaref92.Events.Abstractions;
 
 using System;
 using System.Threading;
@@ -9,6 +9,13 @@ using System.Threading.Tasks;
 /// </summary>
 public interface IEventTransport
 {
+    /// <summary>
+    /// Accepts an incoming event and uses local aggregator to handle that.
+    /// </summary>
+    /// <typeparam name="T">The event type, must implement <see cref="IDomainEvent"/>.</typeparam>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task AcceptIncomingTrafficAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent;
+
     /// <summary>
     /// Publishes an event asynchronously to the transport.
     /// </summary>
@@ -21,7 +28,6 @@ public interface IEventTransport
     /// <summary>
     /// Subscribes to events of a specific type received from the transport.
     /// </summary>
-    /// <typeparam name="T">The event type, must implement <see cref="IDomainEvent"/>.</typeparam>
-    /// <param name="handler">An asynchronous handler to invoke when an event is received.</param>
-    void Subscribe<T>(Func<T, CancellationToken, Task> handler) where T : class, IDomainEvent;
-} 
+    /// <typeparam name="TEvent">The event type, must implement <see cref="IDomainEvent"/>.</typeparam>
+    void Subscribe<TEvent>() where TEvent : class, IDomainEvent;
+}

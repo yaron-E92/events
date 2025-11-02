@@ -48,7 +48,7 @@ namespace Yaref92.Events;
 ///     public UserRegisteredEvent(string userId) => UserId = userId;
 /// }
 /// 
-/// public class WelcomeEmailSender : IEventSubscriber&lt;UserRegisteredEvent&gt;
+/// public class WelcomeEmailSender : IEventHandler&lt;UserRegisteredEvent&gt;
 /// {
 ///     public void OnNext(UserRegisteredEvent @event) => Console.WriteLine($"Welcome {@event.UserId}!");
 /// }
@@ -76,7 +76,7 @@ public class EventAggregator : IEventAggregator
     public ISet<Type> EventTypes => _eventTypes.Keys.ToImmutableHashSet();
 
     private readonly ILogger<EventAggregator>? _logger;
-    private readonly ConcurrentDictionary<Type, ConcurrentDictionary<IEventSubscriber, byte>> _subscribersByType = new();
+    private readonly ConcurrentDictionary<Type, ConcurrentDictionary<IEventHandler, byte>> _subscribersByType = new();
     
     /// <summary>
     /// Gets the collection of all current subscribers.
@@ -88,7 +88,7 @@ public class EventAggregator : IEventAggregator
     /// This property returns an immutable snapshot of all subscribers.
     /// Changes to the underlying collections will be reflected in subsequent calls.
     /// </remarks>
-    public IReadOnlyCollection<IEventSubscriber> Subscribers => _subscribersByType.Values.SelectMany(dict => dict.Keys).ToImmutableHashSet();
+    public IReadOnlyCollection<IEventHandler> Subscribers => _subscribersByType.Values.SelectMany(dict => dict.Keys).ToImmutableHashSet();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EventAggregator"/> class without logging.
@@ -195,7 +195,7 @@ public class EventAggregator : IEventAggregator
 
         if (_subscribersByType.TryGetValue(typeof(T), out var subscribers))
         {
-            foreach (var subscriber in subscribers.Keys.OfType<IEventSubscriber<T>>())
+            foreach (var subscriber in subscribers.Keys.OfType<IEventHandler<T>>())
             {
                 subscriber.OnNext(domainEvent);
             }
@@ -247,11 +247,11 @@ public class EventAggregator : IEventAggregator
             var tasks = new List<Task>();
             foreach (var subscriber in subscribers.Keys)
             {
-                if (subscriber is IAsyncEventSubscriber<T> asyncSubscriber)
+                if (subscriber is IAsyncEventHandler<T> asyncSubscriber)
                 {
                     tasks.Add(asyncSubscriber.OnNextAsync(domainEvent, cancellationToken));
                 }
-                else if (subscriber is IEventSubscriber<T> syncSubscriber)
+                else if (subscriber is IEventHandler<T> syncSubscriber)
                 {
                     syncSubscriber.OnNext(domainEvent);
                 }
@@ -326,7 +326,7 @@ public class EventAggregator : IEventAggregator
     /// <remarks>
     /// <para>
     /// This method adds a subscriber to the list of subscribers for the specified event type.
-    /// When events of this type are published, the subscriber's <see cref="IEventSubscriber{T}.OnNext(T)"/>
+    /// When events of this type are published, the subscriber's <see cref="IEventHandler{T}.OnNext(T)"/>
     /// method will be called.
     /// </para>
     /// <para>
@@ -337,7 +337,7 @@ public class EventAggregator : IEventAggregator
     /// This method is thread-safe and can be called concurrently from multiple threads.
     /// </para>
     /// <para>
-    /// <strong>Important:</strong> Remember to call <see cref="UnsubscribeFromEventType{T}(IEventSubscriber{T})"/>
+    /// <strong>Important:</strong> Remember to call <see cref="UnsubscribeFromEventType{T}(IEventHandler{T})"/>
     /// when the subscriber is no longer needed to prevent memory leaks.
     /// </para>
     /// </remarks>
@@ -353,7 +353,7 @@ public class EventAggregator : IEventAggregator
     /// aggregator.UnsubscribeFromEventType(emailSender);
     /// </code>
     /// </example>
-    public virtual void SubscribeToEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
+    public virtual void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         ValidateEventRegistration<T>();
         SubscribeSubscriber<T>(subscriber);
@@ -367,9 +367,9 @@ public class EventAggregator : IEventAggregator
     /// <remarks>
     /// Used internally by both sync and async subscription methods.
     /// </remarks>
-    protected void SubscribeSubscriber<T>(IEventSubscriber subscriber) where T : class, IDomainEvent
+    protected void SubscribeSubscriber<T>(IEventHandler subscriber) where T : class, IDomainEvent
     {
-        var dict = _subscribersByType.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<IEventSubscriber, byte>());
+        var dict = _subscribersByType.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<IEventHandler, byte>());
         if (!dict.TryAdd(subscriber, 0))
         {
             _logger?.LogWarning("Subscriber {SubscriberType} is already subscribed to event type {EventType}.",
@@ -388,7 +388,7 @@ public class EventAggregator : IEventAggregator
     /// This method adds an async subscriber to the list of subscribers for the specified event type.
     /// Subscription is idempotent; duplicate subscriptions are ignored with a warning.
     /// </remarks>
-    public virtual void SubscribeToEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent
+    public virtual void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         ValidateEventRegistration<T>();
         SubscribeSubscriber<T>(subscriber);
@@ -434,7 +434,7 @@ public class EventAggregator : IEventAggregator
     /// aggregator.UnsubscribeFromEventType(emailSender);
     /// </code>
     /// </example>
-    public virtual void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent
+    public virtual void UnsubscribeFromEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         UnsubscribeSubscriber<T>(subscriber);
     }
@@ -447,9 +447,9 @@ public class EventAggregator : IEventAggregator
     /// <remarks>
     /// Used internally by both sync and async unsubscription methods.
     /// </remarks>
-    protected void UnsubscribeSubscriber<T>(IEventSubscriber subscriber) where T : class, IDomainEvent
+    protected void UnsubscribeSubscriber<T>(IEventHandler subscriber) where T : class, IDomainEvent
     {
-        ValidateSubscriber(subscriber, typeof(IEventSubscriber<T>));
+        ValidateSubscriber(subscriber, typeof(IEventHandler<T>));
         ValidateEventRegistration<T>();
         TryToRemoveSubscriber<T>(subscriber);
     }
@@ -460,7 +460,7 @@ public class EventAggregator : IEventAggregator
     /// <param name="subscriber">The subscriber instance.</param>
     /// <param name="subscriberType">The expected subscriber type.</param>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="subscriber"/> is null.</exception>
-    protected void ValidateSubscriber(IEventSubscriber subscriber, Type subscriberType)
+    protected void ValidateSubscriber(IEventHandler subscriber, Type subscriberType)
     {
         if (subscriber is null)
         {
@@ -474,7 +474,7 @@ public class EventAggregator : IEventAggregator
     /// </summary>
     /// <typeparam name="T">The event type.</typeparam>
     /// <param name="subscriber">The subscriber instance.</param>
-    private void TryToRemoveSubscriber<T>(IEventSubscriber subscriber) where T : class, IDomainEvent
+    private void TryToRemoveSubscriber<T>(IEventHandler subscriber) where T : class, IDomainEvent
     {
         if (_subscribersByType.TryGetValue(typeof(T), out var dict))
         {
@@ -493,7 +493,7 @@ public class EventAggregator : IEventAggregator
     /// This method removes an async subscriber from the list of subscribers for the specified event type.
     /// Unsubscription is idempotent; unsubscribing a non-existent subscriber is a no-op.
     /// </remarks>
-    public virtual void UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent
+    public virtual void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         UnsubscribeSubscriber<T>(subscriber);
     }

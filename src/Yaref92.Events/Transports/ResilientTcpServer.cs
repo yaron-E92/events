@@ -4,29 +4,33 @@ using System.Net.Sockets;
 using System.Text.Json;
 
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Sessions;
+using Yaref92.Events.Sessions.Events;
 
 namespace Yaref92.Events.Transports;
 
-public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber<MessageReceived>
+public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<SessionJoined>, IAsyncEventHandler<SessionLeft>
 {
     private readonly int _port;
     private readonly ResilientSessionOptions _options;
-    private readonly ConcurrentDictionary<string, SessionState> _sessions = new();
+    private readonly ConcurrentDictionary<SessionKey, SessionState> _sessionStates = new();
     private readonly ConcurrentDictionary<TcpClient, Task> _clientTasks = new();
-    private readonly ConcurrentDictionary<string, PersistentSessionClient> _pendingPersistentClients = new();
+    private readonly ConcurrentDictionary<SessionKey, ResilientSessionClient> _pendingPersistentClients = new();
     private readonly CancellationTokenSource _cts = new();
 
     private Func<string, string, CancellationToken, Task>? _messageReceivedHandler;
+    private Func<string, CancellationToken, Task>? _sessionJoinedHandler;
+    private Func<string, CancellationToken, Task>? _sessionLeftHandler;
 
     private TcpListener? _listener;
     private Task? _acceptLoop;
     private Task? _monitorLoop;
 
-    public ConcurrentDictionary<string, SessionState> Sessions
+    public ConcurrentDictionary<SessionKey, SessionState> Sessions
     {
         get {
-                ConcurrentDictionary<string, SessionState> copy = new ConcurrentDictionary<string, SessionState>();
-                foreach (var kvp in _sessions)
+                ConcurrentDictionary<SessionKey, SessionState> copy = new();
+                foreach (var kvp in _sessionStates)
                 {
                     copy[kvp.Key] = kvp.Value;
                 }
@@ -44,16 +48,11 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
         _messageReceivedHandler = messageReceivedHandler;
     }
 
-    public void SetMessageReceivedHandler(Func<string, string, CancellationToken, Task>? handler)
+    public void RegisterPersistentClient(SessionKey key, ResilientSessionClient client)
     {
-        _messageReceivedHandler = handler;
-    }
-
-    public void RegisterPersistentClient(string token, PersistentSessionClient client)
-    {
-        if (token is null)
+        if (key is null)
         {
-            throw new ArgumentNullException(nameof(token));
+            throw new ArgumentNullException(nameof(key));
         }
 
         if (client is null)
@@ -61,13 +60,13 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
             throw new ArgumentNullException(nameof(client));
         }
 
-        if (_sessions.TryGetValue(token, out var session))
+        if (_sessionStates.TryGetValue(key, out var session))
         {
             session.AttachPersistentClient(client);
         }
         else
         {
-            _pendingPersistentClients[token] = client;
+            _pendingPersistentClients[key] = client;
         }
     }
 
@@ -96,7 +95,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
             throw new ArgumentNullException(nameof(payload));
         }
 
-        foreach (var session in _sessions.Values.Where(static session => session.HasAuthenticated))
+        foreach (var session in _sessionStates.Values.Where(static session => session.HasAuthenticated))
         {
             session.EnqueueMessage(payload);
         }
@@ -110,11 +109,11 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
         var tasks = _clientTasks.Values.ToArray();
         await Task.WhenAll(tasks.Append(_acceptLoop ?? Task.CompletedTask).Append(_monitorLoop ?? Task.CompletedTask)).WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        foreach (var session in _sessions.Values)
+        foreach (var session in _sessionStates.Values)
         {
             await session.DisposeAsync().ConfigureAwait(false);
         }
-        _sessions.Clear();
+        _sessionStates.Clear();
     }
 
     public async ValueTask DisposeAsync()
@@ -176,9 +175,9 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
     {
         var stream = client.GetStream();
         var lengthBuffer = new byte[4];
-        SessionState? session = null;
-        SessionConnection? connection = null;
-        CancellationTokenSource? connectionCts = null;
+        SessionState sessionState = null;
+        SessionConnection connection = null;
+        CancellationTokenSource connectionCts = null;
 
         try
         {
@@ -188,21 +187,32 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
                 return;
             }
 
-            var initializedSession = initialization.Session ?? throw new InvalidOperationException("Initialization succeeded without a session.");
-            var initializedConnection = initialization.Connection ?? throw new InvalidOperationException("Initialization succeeded without a connection.");
-            var initializedCancellation = initialization.ConnectionCancellation ?? throw new InvalidOperationException("Initialization succeeded without a cancellation token source.");
 
-            session = initializedSession;
-            connection = initializedConnection;
-            connectionCts = initializedCancellation;
+            sessionState = initialization.Session ?? throw new InvalidOperationException("Initialization succeeded without a sessionState.");
+            connection = initialization.Connection ?? throw new InvalidOperationException("Initialization succeeded without a connection.");
+            connectionCts = initialization.ConnectionCancellation ?? throw new InvalidOperationException("Initialization succeeded without a cancellation key source.");
+            SessionJoined sessionJoined = new(sessionState.Key);
+            await OnNextAsync(sessionJoined, serverToken).ConfigureAwait(false);
+
+            if (_sessionJoinedHandler is not null)
+            {
+                try
+                {
+                    await _sessionJoinedHandler.Invoke(sessionState.Key, serverToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} sessionState join handler failed: {ex}").ConfigureAwait(false);
+                }
+            }
 
             var pendingFrame = initialization.PendingFrame;
             if (pendingFrame is not null)
             {
-                await ProcessFrameAsync(initializedSession, pendingFrame, initializedCancellation.Token).ConfigureAwait(false);
+                await ProcessFrameAsync( initialization.Session ?? throw new InvalidOperationException("Initialization succeeded without a sessionState."), pendingFrame, (initialization.ConnectionCancellation ?? throw new InvalidOperationException("Initialization succeeded without a cancellation key source.")).Token).ConfigureAwait(false);
             }
 
-            await ProcessIncomingFramesAsync(initializedSession, stream, lengthBuffer, initializedCancellation.Token).ConfigureAwait(false);
+            await ProcessIncomingFramesAsync( initialization.Session ?? throw new InvalidOperationException("Initialization succeeded without a sessionState."), stream, lengthBuffer, (initialization.ConnectionCancellation ?? throw new InvalidOperationException("Initialization succeeded without a cancellation key source.")).Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
         {
@@ -225,7 +235,18 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
                 await connection.DisposeAsync().ConfigureAwait(false);
             }
 
-            session?.Detach();
+            sessionState?.Detach();
+            if (sessionState is not null && _sessionLeftHandler is not null)
+            {
+                try
+                {
+                    await _sessionLeftHandler.Invoke(sessionState.Key, serverToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} sessionState leave handler failed: {ex}").ConfigureAwait(false);
+                }
+            }
             client.Dispose();
         }
     }
@@ -275,7 +296,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
                 return default;
             }
 
-            var session = _sessions.GetOrAdd(token, key => new SessionState(key));
+            var session = _sessionStates.GetOrAdd(token, key => new SessionState(key));
             session.RegisterAuthentication();
             return (session, null);
         }
@@ -286,7 +307,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
         }
 
         var remoteKey = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString("N");
-        var existing = _sessions.GetOrAdd(remoteKey, key => new SessionState(key));
+        var existing = _sessionStates.GetOrAdd(remoteKey, key => new SessionState(key));
         existing.RegisterAuthentication();
         return (existing, firstFrame);
     }
@@ -327,7 +348,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
                     session.PersistentClient?.Acknowledge(ackId);
                 }
                 break;
-            case SessionFrameKind.Message:
+            case SessionFrameKind.Event:
                 if (frame.Payload is null)
                 {
                     break;
@@ -419,7 +440,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
             }
 
             var now = DateTime.UtcNow;
-            foreach (var session in _sessions.Values.Where(session => session.IsExpired(now, _options.HeartbeatTimeout)))
+            foreach (var session in _sessionStates.Values.Where(session => session.IsExpired(now, _options.HeartbeatTimeout)))
             {
                 await session.CloseConnectionAsync().ConfigureAwait(false);
             }
@@ -435,6 +456,27 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
     }
 
     public Task OnNextAsync(MessageReceived domainEvent, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task OnNextAsync(SessionJoined domainEvent, CancellationToken cancellationToken = default)
+    {
+        var sessionKey = domainEvent.SessionKey;
+        if (!SessionKey.IsNullOrInvalid(sessionKey))
+        {
+            _activeSessions[sessionKey] = 0;
+        }
+
+        if (_sessionStates.TryGetValue(sessionKey, out var session))
+        {
+            _listener.RegisterPersistentSession(session);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task OnNextAsync(SessionLeft domainEvent, CancellationToken cancellationToken = default)
     {
         throw new NotImplementedException();
     }
@@ -463,20 +505,20 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
         private readonly object _lock = new();
 
         private SessionConnection? _connection;
-        private PersistentSessionClient? _persistentClient;
+        private ResilientSessionClient? _persistentClient;
         private long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
         private long _nextMessageId;
 
-        public SessionState(string key)
+        public SessionState(SessionKey key)
         {
             Key = key;
         }
 
-        public string Key { get; }
+        public SessionKey Key { get; }
 
         public bool HasAuthenticated { get; private set; }
 
-        public PersistentSessionClient? PersistentClient => _persistentClient;
+        public ResilientSessionClient? PersistentClient => _persistentClient;
 
         public void RegisterAuthentication()
         {
@@ -484,7 +526,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
             Touch();
         }
 
-        public void AttachPersistentClient(PersistentSessionClient client)
+        public void AttachPersistentClient(ResilientSessionClient client)
         {
             _persistentClient = client ?? throw new ArgumentNullException(nameof(client));
         }
@@ -507,7 +549,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
         {
             if (_outbound.TryDequeue(out frame))
             {
-                if (frame.Kind == SessionFrameKind.Message && frame.Id is long id)
+                if (frame.Kind == SessionFrameKind.Event && frame.Id is long id)
                 {
                     _inflight[id] = frame;
                 }
@@ -525,7 +567,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventSubscriber
 
         public void ReturnToQueue(SessionFrame frame)
         {
-            if (frame.Kind == SessionFrameKind.Message && frame.Id is long id)
+            if (frame.Kind == SessionFrameKind.Event && frame.Id is long id)
             {
                 _inflight.TryRemove(id, out _);
             }
