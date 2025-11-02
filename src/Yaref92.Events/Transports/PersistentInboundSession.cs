@@ -1,15 +1,14 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.Linq;
 
-using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
-using Yaref92.Events.Sessions.Events;
 
 namespace Yaref92.Events.Transports;
 
-public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<SessionJoined>, IAsyncEventHandler<SessionLeft>
+public sealed class PersistentInboundSession : IAsyncDisposable
 {
     private readonly int _port;
     private readonly ResilientSessionOptions _options;
@@ -19,34 +18,34 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
     private readonly ConcurrentDictionary<IPEndPoint, Guid> _anonymousSessionIds = new();
     private readonly CancellationTokenSource _cts = new();
 
-    private Func<string, string, CancellationToken, Task>? _messageReceivedHandler;
-    private Func<string, CancellationToken, Task>? _sessionJoinedHandler;
-    private Func<string, CancellationToken, Task>? _sessionLeftHandler;
-
     private TcpListener? _listener;
     private Task? _acceptLoop;
     private Task? _monitorLoop;
 
-    public ConcurrentDictionary<SessionKey, SessionState> Sessions
-    {
-        get {
-                ConcurrentDictionary<SessionKey, SessionState> copy = new();
-                foreach (var kvp in _sessionStates)
-                {
-                    copy[kvp.Key] = kvp.Value;
-                }
-                return copy;
-        }
-    }
+    public event Func<SessionKey, CancellationToken, Task>? SessionJoined;
 
-    public ResilientTcpServer(
-        int port,
-        ResilientSessionOptions? options = null,
-        Func<string, string, CancellationToken, Task>? messageReceivedHandler = null)
+    public event Func<SessionKey, CancellationToken, Task>? SessionLeft;
+
+    public event Func<SessionKey, SessionFrame, CancellationToken, Task>? FrameReceived;
+
+    public PersistentInboundSession(int port, ResilientSessionOptions? options = null)
     {
         _port = port;
         _options = options ?? new ResilientSessionOptions();
-        _messageReceivedHandler = messageReceivedHandler;
+    }
+
+    public ConcurrentDictionary<SessionKey, SessionState> Sessions
+    {
+        get
+        {
+            ConcurrentDictionary<SessionKey, SessionState> copy = new();
+            foreach (var kvp in _sessionStates)
+            {
+                copy[kvp.Key] = kvp.Value;
+            }
+
+            return copy;
+        }
     }
 
     public void RegisterPersistentClient(SessionKey key, ResilientSessionClient client)
@@ -75,7 +74,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
     {
         if (_listener is not null)
         {
-            throw new InvalidOperationException("Server already started.");
+            throw new InvalidOperationException("Listener already started.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -108,12 +107,14 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
         _listener?.Stop();
 
         var tasks = _clientTasks.Values.ToArray();
-        await Task.WhenAll(tasks.Append(_acceptLoop ?? Task.CompletedTask).Append(_monitorLoop ?? Task.CompletedTask)).WaitAsync(cancellationToken).ConfigureAwait(false);
+        await Task.WhenAll(tasks.Append(_acceptLoop ?? Task.CompletedTask).Append(_monitorLoop ?? Task.CompletedTask))
+            .WaitAsync(cancellationToken).ConfigureAwait(false);
 
         foreach (var session in _sessionStates.Values)
         {
             await session.DisposeAsync().ConfigureAwait(false);
         }
+
         _sessionStates.Clear();
     }
 
@@ -125,7 +126,8 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
         }
         catch (Exception ex)
         {
-            await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} disposal failed: {ex}").ConfigureAwait(false);
+            await Console.Error.WriteLineAsync($"{nameof(PersistentInboundSession)} disposal failed: {ex}")
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -168,7 +170,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
 
             var task = Task.Run(() => HandleClientAsync(client, cancellationToken), cancellationToken);
             _clientTasks[client] = task;
-            await task.ContinueWith(_ => _clientTasks.TryRemove(client, out _), TaskContinuationOptions.ExecuteSynchronously);
+            _ = task.ContinueWith(_ => _clientTasks.TryRemove(client, out _), TaskContinuationOptions.ExecuteSynchronously);
         }
     }
 
@@ -176,9 +178,9 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
     {
         var stream = client.GetStream();
         var lengthBuffer = new byte[4];
-        SessionState sessionState = null;
-        SessionConnection connection = null;
-        CancellationTokenSource connectionCts = null;
+        SessionState? sessionState = null;
+        SessionConnection? connection = null;
+        CancellationTokenSource? connectionCts = null;
 
         try
         {
@@ -188,32 +190,22 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
                 return;
             }
 
+            sessionState = initialization.Session ??
+                throw new InvalidOperationException("Initialization succeeded without a session state.");
+            connection = initialization.Connection ??
+                throw new InvalidOperationException("Initialization succeeded without a connection.");
+            connectionCts = initialization.ConnectionCancellation ??
+                throw new InvalidOperationException("Initialization succeeded without a cancellation source.");
 
-            sessionState = initialization.Session ?? throw new InvalidOperationException("Initialization succeeded without a sessionState.");
-            connection = initialization.Connection ?? throw new InvalidOperationException("Initialization succeeded without a connection.");
-            connectionCts = initialization.ConnectionCancellation ?? throw new InvalidOperationException("Initialization succeeded without a cancellation key source.");
-            SessionJoined sessionJoined = new(sessionState.Key);
-            await OnNextAsync(sessionJoined, serverToken).ConfigureAwait(false);
-
-            if (_sessionJoinedHandler is not null)
-            {
-                try
-                {
-                    await _sessionJoinedHandler.Invoke(sessionState.Key, serverToken).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} sessionState join handler failed: {ex}").ConfigureAwait(false);
-                }
-            }
+            await OnSessionJoinedAsync(sessionState.Key, serverToken).ConfigureAwait(false);
 
             var pendingFrame = initialization.PendingFrame;
             if (pendingFrame is not null)
             {
-                await ProcessFrameAsync( initialization.Session ?? throw new InvalidOperationException("Initialization succeeded without a sessionState."), pendingFrame, (initialization.ConnectionCancellation ?? throw new InvalidOperationException("Initialization succeeded without a cancellation key source.")).Token).ConfigureAwait(false);
+                await ProcessFrameAsync(sessionState, pendingFrame, connectionCts.Token).ConfigureAwait(false);
             }
 
-            await ProcessIncomingFramesAsync( initialization.Session ?? throw new InvalidOperationException("Initialization succeeded without a sessionState."), stream, lengthBuffer, (initialization.ConnectionCancellation ?? throw new InvalidOperationException("Initialization succeeded without a cancellation key source.")).Token).ConfigureAwait(false);
+            await ProcessIncomingFramesAsync(sessionState, stream, lengthBuffer, connectionCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
         {
@@ -237,17 +229,11 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
             }
 
             sessionState?.Detach();
-            if (sessionState is not null && _sessionLeftHandler is not null)
+            if (sessionState is not null)
             {
-                try
-                {
-                    await _sessionLeftHandler.Invoke(sessionState.Key, serverToken).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} sessionState leave handler failed: {ex}").ConfigureAwait(false);
-                }
+                await OnSessionLeftAsync(sessionState.Key, serverToken).ConfigureAwait(false);
             }
+
             client.Dispose();
         }
     }
@@ -292,22 +278,23 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
                 return default;
             }
 
-            if (!TryExtractSessionKey(token, out var sessionKey))
+            if (!TryExtractSessionKey(token, out var parsedSessionKey))
             {
                 if (_options.RequireAuthentication)
                 {
                     return default;
                 }
 
-                sessionKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
+                parsedSessionKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
             }
 
-            if (_options.RequireAuthentication && !IsTokenAccepted(token, firstFrame.Payload))
+            var resolvedKey = parsedSessionKey ?? sessionKey;
+            if (resolvedKey is null)
             {
                 return default;
             }
 
-            var session = _sessionStates.GetOrAdd(sessionKey, key => new SessionState(key));
+            var session = _sessionStates.GetOrAdd(resolvedKey, key => new SessionState(key));
             session.RegisterAuthentication();
             return (session, null);
         }
@@ -408,21 +395,23 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
 
                 try
                 {
-                    var handler = _messageReceivedHandler;
+                    var handler = FrameReceived;
                     if (handler is not null)
                     {
-                        await handler(session.Key, frame.Payload, cancellationToken).ConfigureAwait(false);
+                        await handler(session.Key, frame, cancellationToken).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
                 {
-                    await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} handler failed: {ex}").ConfigureAwait(false);
+                    await Console.Error.WriteLineAsync($"{nameof(PersistentInboundSession)} frame handler failed: {ex}")
+                        .ConfigureAwait(false);
                 }
                 finally
                 {
                     session.EnqueueControl(SessionFrame.CreateAck(messageId));
                     session.PersistentClient?.RecordRemoteActivity();
                 }
+
                 break;
         }
     }
@@ -453,7 +442,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
                     session.ReturnToQueue(frame);
                 }
 
-                await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} send loop error: {ex}").ConfigureAwait(false);
+                await Console.Error.WriteLineAsync($"{nameof(PersistentInboundSession)} send loop error: {ex}").ConfigureAwait(false);
                 break;
             }
         }
@@ -489,30 +478,42 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task OnNextAsync(MessageReceived domainEvent, CancellationToken cancellationToken = default)
+    private async Task OnSessionJoinedAsync(SessionKey key, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException();
-    }
-
-    public Task OnNextAsync(SessionJoined domainEvent, CancellationToken cancellationToken = default)
-    {
-        var sessionKey = domainEvent.SessionKey;
-        if (!SessionKey.IsNullOrInvalid(sessionKey))
+        var handler = SessionJoined;
+        if (handler is null)
         {
-            _activeSessions[sessionKey] = 0;
+            return;
         }
 
-        if (_sessionStates.TryGetValue(sessionKey, out var session))
+        try
         {
-            _listener.RegisterPersistentSession(session);
+            await handler.Invoke(key, cancellationToken).ConfigureAwait(false);
         }
-
-        return Task.CompletedTask;
+        catch (Exception ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(PersistentInboundSession)} session join handler failed: {ex}")
+                .ConfigureAwait(false);
+        }
     }
 
-    public Task OnNextAsync(SessionLeft domainEvent, CancellationToken cancellationToken = default)
+    private async Task OnSessionLeftAsync(SessionKey key, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException();
+        var handler = SessionLeft;
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await handler.Invoke(key, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(PersistentInboundSession)} session leave handler failed: {ex}")
+                .ConfigureAwait(false);
+        }
     }
 
     private readonly record struct SessionInitializationResult(
@@ -630,7 +631,8 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
             return utcNow - last > timeout;
         }
 
-        public async Task<SessionConnection> AttachAsync(TcpClient client, CancellationToken serverToken, NetworkStream stream, Func<SessionState, NetworkStream, CancellationToken, Task> sendLoopFactory)
+        public async Task<SessionConnection> AttachAsync(TcpClient client, CancellationToken serverToken, NetworkStream stream,
+            Func<SessionState, NetworkStream, CancellationToken, Task> sendLoopFactory)
         {
             SessionConnection? previous;
             lock (_lock)
@@ -737,7 +739,8 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
             }
             catch (Exception ex) when (ex is IOException or SocketException)
             {
-                await Console.Error.WriteLineAsync($"{nameof(SessionConnection)} send loop closed with {ex}").ConfigureAwait(false);
+                await Console.Error.WriteLineAsync($"{nameof(SessionConnection)} send loop closed with {ex}")
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

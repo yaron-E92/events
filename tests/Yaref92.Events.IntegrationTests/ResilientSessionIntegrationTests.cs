@@ -31,7 +31,7 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new ResilientTcpServer(port, options);
+        await using var server = new PersistentInboundSession(port, options);
         var deliveries = new List<string>();
         var firstDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -69,7 +69,7 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new ResilientTcpServer(port, options);
+        await using var server = new PersistentInboundSession(port, options);
         await server.StartAsync().ConfigureAwait(false);
 
         await using var peerA = new TestPersistentClientHost("127.0.0.1", port, options);
@@ -95,7 +95,7 @@ public class ResilientSessionIntegrationTests
         peerB.ConnectionCount.Should().BeGreaterThanOrEqualTo(2);
     }
 
-    private static async Task WaitForServerInflightToDrainAsync(ResilientTcpServer server, TimeSpan timeout)
+    private static async Task WaitForServerInflightToDrainAsync(PersistentInboundSession server, TimeSpan timeout)
     {
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < timeout)
@@ -145,7 +145,7 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new ResilientTcpServer(port, options);
+        await using var server = new PersistentInboundSession(port, options);
         await server.StartAsync().ConfigureAwait(false);
 
         using var client = new TcpClient();
@@ -168,7 +168,7 @@ public class ResilientSessionIntegrationTests
         sessionKey.Host.Should().NotBeNullOrWhiteSpace();
         sessionKey.Port.Should().BeGreaterThan(0);
 
-        var fallbackFactory = typeof(ResilientTcpServer).GetMethod("CreateFallbackSessionKey", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var fallbackFactory = typeof(PersistentInboundSession).GetMethod("CreateFallbackSessionKey", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var remoteEndPoint = (IPEndPoint) client.Client.RemoteEndPoint!;
         var fallbackKey = (SessionKey) fallbackFactory.Invoke(server, [new IPEndPoint(remoteEndPoint.Address, remoteEndPoint.Port)])!;
         fallbackKey.UserId.Should().Be(sessionKey.UserId);
@@ -190,7 +190,7 @@ public class ResilientSessionIntegrationTests
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task WaitForAuthenticatedSessionsAsync(ResilientTcpServer server, int expectedCount, TimeSpan timeout)
+    private static async Task WaitForAuthenticatedSessionsAsync(PersistentInboundSession server, int expectedCount, TimeSpan timeout)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedCount);
 

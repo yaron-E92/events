@@ -10,7 +10,7 @@ namespace Yaref92.Events.Transports;
 
 public sealed class PersistentSessionListener : IAsyncDisposable
 {
-    private readonly ResilientTcpServer _server;
+    private readonly PersistentInboundSession _inboundSession;
 
     public IEventTransport Transport { get; }
 
@@ -22,40 +22,58 @@ public sealed class PersistentSessionListener : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        _server = new ResilientTcpServer(port, options);
+        _inboundSession = new PersistentInboundSession(port, options);
 
         Transport = eventTransport;
+    }
+
+    public event Func<SessionKey, CancellationToken, Task>? SessionJoined
+    {
+        add => _inboundSession.SessionJoined += value;
+        remove => _inboundSession.SessionJoined -= value;
+    }
+
+    public event Func<SessionKey, CancellationToken, Task>? SessionLeft
+    {
+        add => _inboundSession.SessionLeft += value;
+        remove => _inboundSession.SessionLeft -= value;
+    }
+
+    public event Func<SessionKey, SessionFrame, CancellationToken, Task>? FrameReceived
+    {
+        add => _inboundSession.FrameReceived += value;
+        remove => _inboundSession.FrameReceived -= value;
     }
 
     //internal Func<string, string, CancellationToken, Task> PayloadHandler => HandleInboundPayloadAsync;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        return _server.StartAsync(cancellationToken);
+        return _inboundSession.StartAsync(cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken = default)
     {
-        return _server.StopAsync(cancellationToken);
+        return _inboundSession.StopAsync(cancellationToken);
     }
 
     public void RegisterPersistentSession(IResilientPeerSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        _server.RegisterPersistentClient(session.SessionKey, session.PersistentClient);
+        _inboundSession.RegisterPersistentClient(session.SessionKey, session.PersistentClient);
     }
 
     public void Broadcast(string payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        _server.QueueBroadcast(payload);
+        _inboundSession.QueueBroadcast(payload);
     }
 
     public async ValueTask DisposeAsync()
     {
-        await _server.DisposeAsync().ConfigureAwait(false);
+        await _inboundSession.DisposeAsync().ConfigureAwait(false);
     }
 
     //private async Task HandleInboundPayloadAsync(string sessionKey, string payload, CancellationToken cancellationToken)
