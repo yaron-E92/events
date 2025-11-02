@@ -114,7 +114,7 @@ public class ResilientSessionIntegrationTests
                     continue;
                 }
 
-                var inflight = (ConcurrentDictionary<long, SessionFrame>) inflightField.GetValue(sessionState)!;
+                var inflight = (ConcurrentDictionary<Guid, SessionFrame>) inflightField.GetValue(sessionState)!;
                 if (!inflight.IsEmpty)
                 {
                     drained = false;
@@ -440,14 +440,14 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private IReadOnlyCollection<long> GetOutboxEntries()
+    private IReadOnlyCollection<Guid> GetOutboxEntries()
     {
         var entriesField = typeof(ResilientSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var entries = (System.Collections.IDictionary) entriesField.GetValue(Client)!;
-        var keys = new List<long>();
+        var keys = new List<Guid>();
         foreach (var key in entries.Keys)
         {
-            if (key is long id)
+            if (key is Guid id)
             {
                 keys.Add(id);
             }

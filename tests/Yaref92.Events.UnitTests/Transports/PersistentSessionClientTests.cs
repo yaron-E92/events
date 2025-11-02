@@ -25,10 +25,10 @@ public class ResilientSessionClientTests
 
         try
         {
-            long firstId;
-            long secondId;
+            Guid firstId;
+            Guid secondId;
 
-            await using (var writer = new ResilientSessionClient("localhost", 12345, (_, _, _) => Task.CompletedTask))
+            await using (var writer = new ResilientSessionClient(Guid.NewGuid(), "localhost", 12345))
             {
                 ResilientSessionClientTestHelper.OverrideOutboxPath(writer, outboxPath);
                 firstId = await writer.EnqueueEventAsync("first", CancellationToken.None).ConfigureAwait(false);
@@ -36,16 +36,13 @@ public class ResilientSessionClientTests
                 await ResilientSessionClientTestHelper.PersistOutboxAsync(writer, CancellationToken.None).ConfigureAwait(false);
             }
 
-            await using var reader = new ResilientSessionClient("localhost", 12345, (_, _, _) => Task.CompletedTask);
+            await using var reader = new ResilientSessionClient(Guid.NewGuid(), "localhost", 12345);
             ResilientSessionClientTestHelper.OverrideOutboxPath(reader, outboxPath);
             await ResilientSessionClientTestHelper.LoadOutboxAsync(reader, CancellationToken.None).ConfigureAwait(false);
 
             var snapshot = ResilientSessionClientTestHelper.GetOutboxSnapshot(reader);
             snapshot.Should().ContainKey(firstId).WhoseValue.Should().Be("first");
             snapshot.Should().ContainKey(secondId).WhoseValue.Should().Be("second");
-
-            var nextMessageId = ResilientSessionClientTestHelper.GetNextMessageId(reader);
-            nextMessageId.Should().BeGreaterThanOrEqualTo(secondId);
         }
         finally
         {
@@ -102,7 +99,6 @@ internal static class ResilientSessionClientTestHelper
 {
     private static readonly FieldInfo OutboxPathField = typeof(ResilientSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static readonly FieldInfo OutboxEntriesField = typeof(ResilientSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo NextMessageIdField = typeof(ResilientSessionClient).GetField("_nextMessageId", BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static readonly FieldInfo LastRemoteActivityField = typeof(ResilientSessionClient).GetField("_lastRemoteActivityTicks", BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static readonly MethodInfo PersistOutboxMethod = typeof(ResilientSessionClient).GetMethod("PersistOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static readonly MethodInfo LoadOutboxMethod = typeof(ResilientSessionClient).GetMethod("LoadOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -129,13 +125,13 @@ internal static class ResilientSessionClientTestHelper
         await task.ConfigureAwait(false);
     }
 
-    public static Dictionary<long, string> GetOutboxSnapshot(ResilientSessionClient client)
+    public static Dictionary<Guid, string> GetOutboxSnapshot(ResilientSessionClient client)
     {
         var entries = (System.Collections.IDictionary)OutboxEntriesField.GetValue(client)!;
-        var snapshot = new Dictionary<long, string>();
+        var snapshot = new Dictionary<Guid, string>();
         foreach (var key in entries.Keys)
         {
-            if (key is not long id)
+            if (key is not Guid id)
             {
                 continue;
             }
@@ -146,11 +142,6 @@ internal static class ResilientSessionClientTestHelper
         }
 
         return snapshot;
-    }
-
-    public static long GetNextMessageId(ResilientSessionClient client)
-    {
-        return (long)NextMessageIdField.GetValue(client)!;
     }
 
     public static void SetLastRemoteActivity(ResilientSessionClient client, DateTime timestamp)
