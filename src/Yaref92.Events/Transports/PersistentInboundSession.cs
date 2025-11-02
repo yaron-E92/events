@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 using Yaref92.Events.Sessions;
 
@@ -97,7 +99,7 @@ public sealed class PersistentInboundSession : IAsyncDisposable
 
         foreach (var session in _sessionStates.Values.Where(static session => session.HasAuthenticated))
         {
-            session.EnqueueMessage(payload);
+            session.Outbound.EnqueueEvent(payload);
         }
     }
 
@@ -374,14 +376,17 @@ public sealed class PersistentInboundSession : IAsyncDisposable
         {
             case SessionFrameKind.Ping:
                 session.Touch();
-                session.EnqueueControl(SessionFrame.CreatePong());
+                session.Outbound.EnqueueFrame(SessionFrame.CreatePong());
                 break;
             case SessionFrameKind.Pong:
                 session.Touch();
                 break;
             case SessionFrameKind.Ack when frame.Id != Guid.Empty:
                 var ackId = frame.Id;
-                session.Acknowledge(ackId);
+                if (session.Outbound.TryAcknowledge(ackId))
+                {
+                    session.Touch();
+                }
                 session.PersistentClient?.Acknowledge(ackId);
                 break;
             case SessionFrameKind.Event when frame.Payload is not null:
@@ -408,7 +413,7 @@ public sealed class PersistentInboundSession : IAsyncDisposable
                 }
                 finally
                 {
-                    session.EnqueueControl(SessionFrame.CreateAck(messageId));
+                    session.Outbound.EnqueueFrame(SessionFrame.CreateAck(messageId));
                     session.PersistentClient?.RecordRemoteActivity();
                 }
 
@@ -423,9 +428,9 @@ public sealed class PersistentInboundSession : IAsyncDisposable
             SessionFrame? frame = null;
             try
             {
-                if (!session.TryDequeueOutbound(out frame))
+                if (!session.Outbound.TryDequeue(out frame))
                 {
-                    await session.WaitForOutboundAsync(cancellationToken).ConfigureAwait(false);
+                    await session.Outbound.WaitAsync(cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -439,7 +444,7 @@ public sealed class PersistentInboundSession : IAsyncDisposable
             {
                 if (frame is not null)
                 {
-                    session.ReturnToQueue(frame);
+                    session.Outbound.Return(frame);
                 }
 
                 await Console.Error.WriteLineAsync($"{nameof(PersistentInboundSession)} send loop error: {ex}").ConfigureAwait(false);
@@ -534,9 +539,6 @@ public sealed class PersistentInboundSession : IAsyncDisposable
 
     public sealed class SessionState : IAsyncDisposable
     {
-        private readonly ConcurrentQueue<SessionFrame> _outbound = new();
-        private readonly ConcurrentDictionary<Guid, SessionFrame> _inflight = new();
-        private readonly SemaphoreSlim _sendSignal = new(0);
         private readonly object _lock = new();
 
         private SessionConnection? _connection;
@@ -546,11 +548,14 @@ public sealed class PersistentInboundSession : IAsyncDisposable
         public SessionState(SessionKey key)
         {
             Key = key;
+            Outbound = new SessionOutboundBuffer();
         }
 
         public SessionKey Key { get; }
 
         public bool HasAuthenticated { get; private set; }
+
+        public SessionOutboundBuffer Outbound { get; }
 
         public ResilientSessionClient? PersistentClient => _persistentClient;
 
@@ -563,59 +568,6 @@ public sealed class PersistentInboundSession : IAsyncDisposable
         public void AttachPersistentClient(ResilientSessionClient client)
         {
             _persistentClient = client ?? throw new ArgumentNullException(nameof(client));
-        }
-
-        public void EnqueueMessage(string payload)
-        {
-            Guid messageId = Guid.NewGuid();
-            var frame = SessionFrame.CreateMessage(messageId, payload);
-            _outbound.Enqueue(frame);
-            _sendSignal.Release();
-        }
-
-        public void EnqueueControl(SessionFrame frame)
-        {
-            _outbound.Enqueue(frame);
-            _sendSignal.Release();
-        }
-
-        public bool TryDequeueOutbound(out SessionFrame frame)
-        {
-            if (_outbound.TryDequeue(out frame))
-            {
-                if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
-                {
-                    _inflight[frame.Id] = frame;
-                }
-
-                return true;
-            }
-
-            return false;
-        }
-
-        public Task WaitForOutboundAsync(CancellationToken cancellationToken)
-        {
-            return _sendSignal.WaitAsync(cancellationToken);
-        }
-
-        public void ReturnToQueue(SessionFrame frame)
-        {
-            if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
-            {
-                _inflight.TryRemove(frame.Id, out _);
-            }
-
-            _outbound.Enqueue(frame);
-            _sendSignal.Release();
-        }
-
-        public void Acknowledge(Guid messageId)
-        {
-            if (_inflight.TryRemove(messageId, out _))
-            {
-                Touch();
-            }
         }
 
         public void Touch()
@@ -646,7 +598,7 @@ public sealed class PersistentInboundSession : IAsyncDisposable
                 await previous.DisposeAsync().ConfigureAwait(false);
             }
 
-            RequeueInFlight();
+            Outbound.RequeueInflight();
 
             var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
             var sendTask = Task.Run(() => sendLoopFactory(this, stream, linkedCts.Token), linkedCts.Token);
@@ -669,7 +621,7 @@ public sealed class PersistentInboundSession : IAsyncDisposable
                 _connection = null;
             }
 
-            RequeueInFlight();
+            Outbound.RequeueInflight();
         }
 
         public async Task CloseConnectionAsync()
@@ -684,31 +636,14 @@ public sealed class PersistentInboundSession : IAsyncDisposable
             if (connection is not null)
             {
                 await connection.DisposeAsync().ConfigureAwait(false);
-                RequeueInFlight();
+                Outbound.RequeueInflight();
             }
         }
 
         public async ValueTask DisposeAsync()
         {
             await CloseConnectionAsync().ConfigureAwait(false);
-            _sendSignal.Dispose();
-        }
-
-        private void RequeueInFlight()
-        {
-            var frames = _inflight.Values.OrderBy(frame => frame.Id).ToList();
-            _inflight.Clear();
-            if (frames.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var frame in frames)
-            {
-                _outbound.Enqueue(frame);
-            }
-
-            _sendSignal.Release(frames.Count);
+            Outbound.Dispose();
         }
     }
 
