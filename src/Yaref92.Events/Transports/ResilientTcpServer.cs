@@ -16,6 +16,7 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
     private readonly ConcurrentDictionary<SessionKey, SessionState> _sessionStates = new();
     private readonly ConcurrentDictionary<TcpClient, Task> _clientTasks = new();
     private readonly ConcurrentDictionary<SessionKey, ResilientSessionClient> _pendingPersistentClients = new();
+    private readonly ConcurrentDictionary<IPEndPoint, Guid> _anonymousSessionIds = new();
     private readonly CancellationTokenSource _cts = new();
 
     private Func<string, string, CancellationToken, Task>? _messageReceivedHandler;
@@ -291,12 +292,22 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
                 return default;
             }
 
+            if (!TryExtractSessionKey(token, out var sessionKey))
+            {
+                if (_options.RequireAuthentication)
+                {
+                    return default;
+                }
+
+                sessionKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
+            }
+
             if (_options.RequireAuthentication && !IsTokenAccepted(token, firstFrame.Payload))
             {
                 return default;
             }
 
-            var session = _sessionStates.GetOrAdd(token, key => new SessionState(key));
+            var session = _sessionStates.GetOrAdd(sessionKey, key => new SessionState(key));
             session.RegisterAuthentication();
             return (session, null);
         }
@@ -306,10 +317,50 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
             return default;
         }
 
-        var remoteKey = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString("N");
-        var existing = _sessionStates.GetOrAdd(remoteKey, key => new SessionState(key));
+        var fallbackKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
+        var existing = _sessionStates.GetOrAdd(fallbackKey, key => new SessionState(key));
         existing.RegisterAuthentication();
         return (existing, firstFrame);
+    }
+
+    private bool TryExtractSessionKey(string token, out SessionKey sessionKey)
+    {
+        sessionKey = default!;
+        var separatorIndex = token.LastIndexOf('-');
+        var normalizedToken = separatorIndex > 0 ? token[..separatorIndex] : token;
+
+        if (!SessionKey.TryParse(normalizedToken, out var parsed) || parsed is null)
+        {
+            return false;
+        }
+
+        sessionKey = parsed;
+        return true;
+    }
+
+    private SessionKey CreateFallbackSessionKey(EndPoint? endpoint)
+    {
+        if (endpoint is IPEndPoint ipEndPoint)
+        {
+            IPEndPoint key = new(ipEndPoint.Address, ipEndPoint.Port);
+            var identifier = _anonymousSessionIds.GetOrAdd(key, static _ => Guid.NewGuid());
+            var host = key.Address.ToString();
+            return new SessionKey(identifier, host, key.Port);
+        }
+
+        var fallbackHost = endpoint switch
+        {
+            DnsEndPoint dns when !string.IsNullOrWhiteSpace(dns.Host) => dns.Host,
+            _ => IPAddress.Any.ToString(),
+        };
+
+        var fallbackPort = endpoint switch
+        {
+            DnsEndPoint dns when dns.Port > 0 => dns.Port,
+            _ => _port,
+        };
+
+        return new SessionKey(Guid.NewGuid(), fallbackHost, fallbackPort);
     }
 
     private async Task ProcessIncomingFramesAsync(
