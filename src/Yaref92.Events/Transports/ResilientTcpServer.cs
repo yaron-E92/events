@@ -341,39 +341,36 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
             case SessionFrameKind.Pong:
                 session.Touch();
                 break;
-            case SessionFrameKind.Ack:
-                if (frame.Id != Guid.Empty)
-                {
-                    session.Acknowledge(frame.Id);
-                    session.PersistentClient?.Acknowledge(frame.Id);
-                }
+            case SessionFrameKind.Ack when frame.Id != Guid.Empty:
+                var ackId = frame.Id;
+                session.Acknowledge(ackId);
+                session.PersistentClient?.Acknowledge(ackId);
                 break;
-            case SessionFrameKind.Event:
-                if (frame.Payload is null)
+            case SessionFrameKind.Event when frame.Payload is not null:
+                session.Touch();
+
+                var messageId = frame.Id;
+                if (messageId == Guid.Empty)
                 {
                     break;
                 }
 
-                session.Touch();
-                if (frame.Id != Guid.Empty)
+                try
                 {
-                    try
+                    var handler = _messageReceivedHandler;
+                    if (handler is not null)
                     {
-                        var handler = _messageReceivedHandler;
-                        if (handler is not null)
-                        {
-                            await handler(session.Key, frame.Payload, cancellationToken).ConfigureAwait(false);
-                        }
+                        await handler(session.Key, frame.Payload, cancellationToken).ConfigureAwait(false);
                     }
-                    catch (Exception ex)
-                    {
-                        await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} handler failed: {ex}").ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        session.EnqueueControl(SessionFrame.CreateAck(frame.Id));
-                        session.PersistentClient?.RecordRemoteActivity();
-                    }
+                }
+                catch (Exception ex)
+                {
+                    await Console.Error.WriteLineAsync($"{nameof(ResilientTcpServer)} handler failed: {ex}").ConfigureAwait(false);
+                }
+                finally
+                {
+                    session.EnqueueControl(SessionFrame.CreateAck(messageId));
+                    session.PersistentClient?.RecordRemoteActivity();
                 }
                 break;
         }
@@ -532,8 +529,8 @@ public sealed class ResilientTcpServer : IAsyncDisposable, IAsyncEventHandler<Se
 
         public void EnqueueMessage(string payload)
         {
-            var id = Guid.NewGuid();
-            var frame = SessionFrame.CreateMessage(id, payload);
+            Guid messageId = Guid.NewGuid();
+            var frame = SessionFrame.CreateMessage(messageId, payload);
             _outbound.Enqueue(frame);
             _sendSignal.Release();
         }
