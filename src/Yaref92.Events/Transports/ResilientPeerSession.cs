@@ -1,16 +1,9 @@
-using System.Collections.Concurrent;
-using System.Reflection;
-
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports.Events;
-
 namespace Yaref92.Events.Transports;
 
 internal sealed class ResilientPeerSession : IResilientPeerSession
 {
-    private static readonly ConcurrentDictionary<Type, MethodInfo> _publishCache = new();
-
     private readonly ResilientSessionClient _client;
     private readonly IEventAggregator? _localAggregator;
     private readonly IEventSerializer _eventSerializer;
@@ -56,7 +49,7 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
         switch (frame.Kind)
         {
             case SessionFrameKind.Event when frame.Payload is not null:
-                await PublishReflectedEventLocally(frame.Payload, cancellationToken).ConfigureAwait(false);
+                await PublishEventLocallyAsync(frame.Payload, cancellationToken).ConfigureAwait(false);
 
                 if (frame.Id != Guid.Empty)
                 {
@@ -66,26 +59,30 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
         }
     }
 
-    private async Task PublishReflectedEventLocally(string payload, CancellationToken cancellationToken)
+    private async Task PublishEventLocallyAsync(string payload, CancellationToken cancellationToken)
     {
-        (Type? eventType, IDomainEvent? domainEvent) = _eventSerializer.Deserialize(payload);
-        // Build the EventReceived<TEvent> type dynamically
-        Type eventReceivedType = typeof(EventReceived<>).MakeGenericType(eventType);
-        // Find the (DateTime, TEvent) constructor explicitly
-        ConstructorInfo ctor = eventReceivedType.GetConstructor([typeof(DateTime), eventType])!
-            ?? throw new InvalidOperationException($"Missing expected constructor on {eventReceivedType}");
+        if (_localAggregator is null)
+        {
+            return;
+        }
 
-        // Instantiate EventReceived<TEvent>(DateTime.UtcNow, (TEvent)domainEvent)
-        object eventReceivedInstance = ctor.Invoke([DateTime.UtcNow, domainEvent]);
+        (_, IDomainEvent? domainEvent) = _eventSerializer.Deserialize(payload);
+        if (domainEvent is null)
+        {
+            return;
+        }
 
-        // Get and specialize PublishEventAsync<TEvent>
-        MethodInfo publishMethod = _publishCache.GetOrAdd(eventType, static t =>
-            typeof(IEventAggregator)
-                .GetMethod(nameof(IEventAggregator.PublishEventAsync))!
-                .MakeGenericMethod(t));
+        await PublishDomainEventAsync(domainEvent, cancellationToken).ConfigureAwait(false);
+    }
 
-        // Call it asynchronously
-        var task = (Task) publishMethod.Invoke(_localAggregator, [eventReceivedInstance, cancellationToken])!;
-        await task.ConfigureAwait(false);
+    private Task PublishDomainEventAsync(IDomainEvent domainEvent, CancellationToken cancellationToken)
+    {
+        if (_localAggregator is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        dynamic aggregator = _localAggregator;
+        return (Task) aggregator.PublishEventAsync((dynamic) domainEvent, cancellationToken);
     }
 }
