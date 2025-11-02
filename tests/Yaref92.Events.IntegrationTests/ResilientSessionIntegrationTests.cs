@@ -385,7 +385,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     {
         switch (frame.Kind)
         {
-            case SessionFrameKind.Event when frame.Payload is not null && frame.Id is Guid messageId:
+            case SessionFrameKind.Event when frame.Payload is not null && frame.Id != Guid.Empty:
                 _payloads.Enqueue(frame.Payload);
                 session.RecordRemoteActivity();
                 NotifyWaiters(_messageWaiters, _payloads.Count);
@@ -396,9 +396,9 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
                     break;
                 }
 
-                session.EnqueueControlMessage(SessionFrame.CreateAck(messageId));
+                session.EnqueueControlMessage(SessionFrame.CreateAck(frame.Id));
                 break;
-            case SessionFrameKind.Ack when frame.Id is Guid ackId:
+            case SessionFrameKind.Ack when frame.Id != Guid.Empty:
                 session.RecordRemoteActivity();
 
                 if (Interlocked.Exchange(ref _dropAckFlag, 0) == 1)
@@ -407,10 +407,10 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
                     break;
                 }
 
-                session.Acknowledge(ackId);
+                session.Acknowledge(frame.Id);
                 lock (_acknowledged)
                 {
-                    _acknowledged.Add(ackId);
+                    _acknowledged.Add(frame.Id);
                 }
 
                 NotifyWaiters(_ackWaiters, _acknowledged.Count);
