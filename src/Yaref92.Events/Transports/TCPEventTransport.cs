@@ -51,7 +51,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 
     public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default)
     {
-        return ConnectToPeerAsync(Guid.NewGuid(), host, port, cancellationToken);
+        return ConnectToPeerAsync(Guid.Empty, host, port, cancellationToken);
     }
 
     public Task ConnectToPeerAsync(Guid userId, string host, int port, CancellationToken cancellationToken = default)
