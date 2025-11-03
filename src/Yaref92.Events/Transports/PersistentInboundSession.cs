@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -73,6 +74,33 @@ public sealed class PersistentInboundSession : IAsyncDisposable
         {
             _pendingPersistentClients[key] = client;
         }
+    }
+
+    public ResilientSessionClient GetOrCreatePersistentClient(
+        SessionKey key,
+        Func<SessionKey, ResilientSessionClient> clientFactory)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(clientFactory);
+
+        if (_sessionStates.TryGetValue(key, out var session) && session.PersistentClient is { } existingClient)
+        {
+            return existingClient;
+        }
+
+        var client = _pendingPersistentClients.GetOrAdd(key, static (sessionKey, factory) =>
+        {
+            var created = factory(sessionKey);
+            ArgumentNullException.ThrowIfNull(created);
+            return created;
+        }, clientFactory);
+
+        if (_sessionStates.TryGetValue(key, out var currentSession))
+        {
+            currentSession.AttachPersistentClient(client);
+        }
+
+        return client;
     }
 
     public Task StartAsync(CancellationToken cancellationToken = default)
