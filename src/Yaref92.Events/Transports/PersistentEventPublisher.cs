@@ -20,16 +20,20 @@ internal sealed class PersistentEventPublisher(
     private readonly ConcurrentDictionary<SessionKey, byte> _activeSessions = new();
     private readonly ConcurrentDictionary<SessionKey, byte> _startedSessions = new();
 
+    internal ConcurrentDictionary<SessionKey, IResilientPeerSession> SessionsForTesting => _sessions;
+
     public IEventSerializer EventSerializer { get; } = eventSerializer;
 
     public Task ConnectAsync(string host, int port, CancellationToken cancellationToken)
     {
+        return ConnectAsync(Guid.Empty, host, port, cancellationToken);
+    }
+
+    public Task ConnectAsync(Guid userId, string host, int port, CancellationToken cancellationToken = default)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
-        var sessionKey = _sessions.Keys.FirstOrDefault(session =>
-            session.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && session.Port == port)
-            ?? new SessionKey(Guid.NewGuid(), host, port);
-
+        var sessionKey = ResolveSessionKey(host, port, userId);
         var session = GetOrCreateSession(sessionKey);
         return EnsureSessionStartedAsync(session, cancellationToken);
     }
@@ -98,6 +102,18 @@ internal sealed class PersistentEventPublisher(
     private ResilientSessionClient CreatePersistentClient(SessionKey sessionKey)
     {
         return new ResilientSessionClient(sessionKey, _options, _localAggregator);
+    }
+
+    private SessionKey ResolveSessionKey(string host, int port, Guid userId)
+    {
+        if (userId != Guid.Empty)
+        {
+            return new SessionKey(userId, host, port);
+        }
+
+        return _sessions.Keys.FirstOrDefault(session =>
+                   session.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && session.Port == port)
+               ?? new SessionKey(Guid.NewGuid(), host, port);
     }
 
     private Task EnsureSessionStartedAsync(IResilientPeerSession session, CancellationToken cancellationToken)

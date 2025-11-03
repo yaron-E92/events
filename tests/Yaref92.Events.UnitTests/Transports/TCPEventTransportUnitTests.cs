@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,6 +13,7 @@ using NUnit.Framework;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Transports;
+using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.UnitTests.Transports;
@@ -22,23 +22,22 @@ namespace Yaref92.Events.UnitTests.Transports;
 public class TCPEventTransportUnitTests
 {
     [Test]
-    public void Subscribe_RegistersHandler_And_InvokesIt()
+    public async Task Subscribe_RegistersHandler_And_PublishesInnerEvent()
     {
         // Arrange
-        var transport = new TCPEventTransport(0); // Port 0 for no listening
-        DummyEvent? received = null;
-        //transport.Subscribe<DummyEvent>(async (evt, ct) => received = evt);
+        var aggregator = new FakeEventAggregator();
+        await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
         transport.Subscribe<DummyEvent>();
 
         // Act
-        var handlersField = typeof(TCPEventTransport).GetField("_handlers", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var handlers = handlersField!.GetValue(transport) as System.Collections.Concurrent.ConcurrentDictionary<Type, System.Collections.Concurrent.ConcurrentBag<Func<object, CancellationToken, Task>>>;
-        var bag = handlers![typeof(DummyEvent)];
-        DummyEvent dummy = new();
-        foreach (var h in bag) h(dummy, CancellationToken.None).Wait();
+        var handler = aggregator.GetAsyncSubscriber<EventReceived<DummyEvent>>();
+        handler.Should().NotBeNull();
+
+        var dummy = new DummyEvent();
+        await handler!.OnNextAsync(new EventReceived<DummyEvent>(DateTime.UtcNow, dummy), CancellationToken.None).ConfigureAwait(false);
 
         // Assert
-        received.Should().NotBeNull();
+        aggregator.PublishedEvents.OfType<DummyEvent>().Should().ContainSingle().Which.Should().Be(dummy);
     }
 
     [Test]
@@ -72,19 +71,45 @@ public class TCPEventTransportUnitTests
         {
             var sessionA = CreateSession(tempDirectory);
             var sessionB = CreateSession(tempDirectory);
-            sessions.TryAdd("peer-a", sessionA);
-            sessions.TryAdd("peer-b", sessionB);
+            sessions.TryAdd(sessionA.SessionKey, sessionA);
+            sessions.TryAdd(sessionB.SessionKey, sessionB);
 
             // Act
             await transport.PublishAsync(new DummyEvent()).ConfigureAwait(false);
 
             // Assert
-            var snapshotA = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionA);
-            var snapshotB = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionB);
+            var snapshotA = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionA.PersistentClient);
+            var snapshotB = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionB.PersistentClient);
 
             snapshotA.Should().HaveCount(1);
             snapshotB.Should().HaveCount(1);
             snapshotA.Values.Single().Should().Be(snapshotB.Values.Single());
+        }
+        finally
+        {
+            await DisposeSessionsAsync(sessions.Values).ConfigureAwait(false);
+            DeleteTempDirectory(tempDirectory);
+        }
+    }
+
+    [Test]
+    public async Task ConnectAsync_WithProvidedUserId_ReusesExistingSession()
+    {
+        var aggregator = new FakeEventAggregator();
+        await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
+        var sessions = GetPersistentSessionsDictionary(transport);
+
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var userId = Guid.NewGuid();
+            var sessionKey = new SessionKey(userId, "localhost", 23456);
+            var session = CreateSession(tempDirectory, sessionKey);
+            sessions.TryAdd(sessionKey, session);
+
+            await transport.PublisherForTesting.ConnectAsync(userId, sessionKey.Host, sessionKey.Port, CancellationToken.None).ConfigureAwait(false);
+
+            session.StartInvocationCount.Should().Be(1);
         }
         finally
         {
@@ -103,13 +128,14 @@ public class TCPEventTransportUnitTests
         try
         {
             var session = CreateSession(tempDirectory);
-            sessions.TryAdd("peer", session);
+            var sessionKey = session.SessionKey;
+            sessions.TryAdd(sessionKey, session);
             await session.DisposeAsync().ConfigureAwait(false);
 
             Func<Task> act = () => transport.PublishAsync(new DummyEvent());
             await act.Should().ThrowAsync<ObjectDisposedException>().ConfigureAwait(false);
 
-            sessions.Should().ContainKey("peer");
+            sessions.Should().ContainKey(sessionKey);
         }
         finally
         {
@@ -143,46 +169,36 @@ public class TCPEventTransportUnitTests
     }
 
     [Test]
-    public async Task Subscribe_MessageReceived_InvokesHandlers_ForInboundPayloads()
+    public async Task Subscribe_MessageReceived_PublishesInnerEvent()
     {
         // Arrange
-        await using var transport = new TCPEventTransport(0);
-        MessageReceived? received = null;
-        var invocationCount = 0;
+        var aggregator = new FakeEventAggregator();
+        await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
         transport.Subscribe<MessageReceived>();
-        //transport.Subscribe<MessageReceived>(async (evt, ct) =>
-        //{
-        //    invocationCount++;
-        //    received = evt;
-        //    await Task.CompletedTask;
-        //});
 
-        var serializerField = typeof(TCPEventTransport).GetField("_serializer", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var serializer = (IEventSerializer)serializerField.GetValue(transport)!;
-        var payload = serializer.Serialize(new DummyEvent());
+        // Act
+        var handler = aggregator.GetAsyncSubscriber<EventReceived<MessageReceived>>();
+        handler.Should().NotBeNull();
 
-        var method = typeof(TCPEventTransport).GetMethod("HandleInboundMessageAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var task = (Task)method.Invoke(transport, new object[] { "session", payload, CancellationToken.None })!;
-        await task.ConfigureAwait(false);
+        var message = new MessageReceived("session", "payload");
+        await handler!.OnNextAsync(new EventReceived<MessageReceived>(DateTime.UtcNow, message), CancellationToken.None).ConfigureAwait(false);
 
-        invocationCount.Should().Be(1);
-        received.Should().NotBeNull();
-        received!.SessionKey.Should().Be("session");
-        received.Payload.Should().Be(payload);
+        // Assert
+        aggregator.PublishedMessages.Should().ContainSingle().Which.Should().BeSameAs(message);
     }
 
-    private static ConcurrentDictionary<string, ResilientSessionClient> GetPersistentSessionsDictionary(TCPEventTransport transport)
+    private static ConcurrentDictionary<SessionKey, IResilientPeerSession> GetPersistentSessionsDictionary(TCPEventTransport transport)
     {
-        var field = typeof(TCPEventTransport).GetField("_persistentSessions", BindingFlags.Instance | BindingFlags.NonPublic);
-        return (ConcurrentDictionary<string, ResilientSessionClient>)field!.GetValue(transport)!;
+        return transport.PublisherForTesting.SessionsForTesting;
     }
 
-    private static ResilientSessionClient CreateSession(string tempDirectory)
+    private static TestPeerSession CreateSession(string tempDirectory, SessionKey? sessionKey = null)
     {
-        var session = new ResilientSessionClient(Guid.NewGuid(), "localhost", 12345);
+        var key = sessionKey ?? new SessionKey(Guid.NewGuid(), "localhost", 12345);
+        var client = new ResilientSessionClient(key, new ResilientSessionOptions());
         var path = Path.Combine(tempDirectory, $"outbox-{Guid.NewGuid():N}.json");
-        ResilientSessionClientTestHelper.OverrideOutboxPath(session, path);
-        return session;
+        ResilientSessionClientTestHelper.OverrideOutboxPath(client, path);
+        return new TestPeerSession(key, client);
     }
 
     private static string CreateTempDirectory()
@@ -212,7 +228,7 @@ public class TCPEventTransportUnitTests
         }
     }
 
-    private static async Task DisposeSessionsAsync(IEnumerable<ResilientSessionClient> sessions)
+    private static async Task DisposeSessionsAsync(IEnumerable<IResilientPeerSession> sessions)
     {
         foreach (var session in sessions.ToArray())
         {
@@ -225,16 +241,53 @@ public class TCPEventTransportUnitTests
         }
     }
 
+    private sealed class TestPeerSession : IResilientPeerSession
+    {
+        private readonly ResilientSessionClient _client;
+
+        public TestPeerSession(SessionKey sessionKey, ResilientSessionClient client)
+        {
+            SessionKey = sessionKey;
+            _client = client;
+        }
+
+        public SessionKey SessionKey { get; }
+
+        public string SessionToken => _client.SessionToken;
+
+        public ResilientSessionClient PersistentClient => _client;
+
+        public int StartInvocationCount { get; private set; }
+
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            StartInvocationCount++;
+            return Task.CompletedTask;
+        }
+
+        public Task PublishAsync(string payload, CancellationToken cancellationToken)
+        {
+            return _client.EnqueueEventAsync(payload, cancellationToken);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            return _client.DisposeAsync();
+        }
+    }
+
     private sealed class FakeEventAggregator : IEventAggregator
     {
         private readonly List<IEventHandler> _subscribers = new();
         private readonly List<IAsyncEventHandler<PublishFailed>> _publishFailedSubscribers = new();
         private readonly List<IAsyncEventHandler<MessageReceived>> _messageReceivedSubscribers = new();
+        private readonly Dictionary<Type, List<IEventHandler>> _asyncSubscribers = new();
 
         public bool PublishFailedHandlerExecuted { get; private set; }
 
         public List<PublishFailed> PublishedFailures { get; } = new();
         public List<MessageReceived> PublishedMessages { get; } = new();
+        public List<IDomainEvent> PublishedEvents { get; } = new();
 
         public ISet<Type> EventTypes { get; } = new HashSet<Type>();
 
@@ -247,12 +300,17 @@ public class TCPEventTransportUnitTests
 
         public void PublishEvent<T>(T domainEvent) where T : class, IDomainEvent
         {
-            throw new NotSupportedException();
+            PublishedEvents.Add(domainEvent);
         }
 
         public void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
         {
-            throw new NotSupportedException();
+            if (subscriber is null)
+            {
+                throw new ArgumentNullException(nameof(subscriber));
+            }
+
+            _subscribers.Add(subscriber);
         }
 
         public void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
@@ -261,6 +319,14 @@ public class TCPEventTransportUnitTests
             {
                 throw new ArgumentNullException(nameof(subscriber));
             }
+
+            if (!_asyncSubscribers.TryGetValue(typeof(T), out var subscribers))
+            {
+                subscribers = new List<IEventHandler>();
+                _asyncSubscribers[typeof(T)] = subscribers;
+            }
+
+            subscribers.Add(subscriber);
 
             if (subscriber is IEventHandler eventSubscriber)
             {
@@ -280,11 +346,30 @@ public class TCPEventTransportUnitTests
 
         public void UnsubscribeFromEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
         {
-            throw new NotSupportedException();
+            if (subscriber is null)
+            {
+                throw new ArgumentNullException(nameof(subscriber));
+            }
+
+            _subscribers.Remove(subscriber);
         }
 
         public void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
         {
+            if (subscriber is null)
+            {
+                throw new ArgumentNullException(nameof(subscriber));
+            }
+
+            if (_asyncSubscribers.TryGetValue(typeof(T), out var subscribers))
+            {
+                subscribers.Remove(subscriber);
+                if (subscribers.Count == 0)
+                {
+                    _asyncSubscribers.Remove(typeof(T));
+                }
+            }
+
             if (subscriber is IEventHandler eventSubscriber)
             {
                 _subscribers.Remove(eventSubscriber);
@@ -326,7 +411,18 @@ public class TCPEventTransportUnitTests
                 return Task.WhenAll(tasks);
             }
 
+            PublishedEvents.Add(domainEvent);
             return Task.CompletedTask;
+        }
+
+        public IAsyncEventHandler<T>? GetAsyncSubscriber<T>() where T : class, IDomainEvent
+        {
+            if (_asyncSubscribers.TryGetValue(typeof(T), out var subscribers))
+            {
+                return subscribers.OfType<IAsyncEventHandler<T>>().FirstOrDefault();
+            }
+
+            return null;
         }
     }
 

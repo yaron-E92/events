@@ -13,6 +13,10 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
     private readonly PersistentSessionListener _listener;
     private readonly PersistentEventPublisher _publisher;
 
+    internal IEventSerializer SerializerForTesting => _serializer;
+    internal PersistentSessionListener ListenerForTesting => _listener;
+    internal PersistentEventPublisher PublisherForTesting => _publisher;
+
     public TCPEventTransport(
         int listenPort,
         IEventSerializer? serializer = null,
@@ -47,12 +51,17 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 
     public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default)
     {
+        return ConnectToPeerAsync(Guid.NewGuid(), host, port, cancellationToken);
+    }
+
+    public Task ConnectToPeerAsync(Guid userId, string host, int port, CancellationToken cancellationToken = default)
+    {
         if (string.IsNullOrWhiteSpace(host))
         {
             throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
         }
 
-        return _publisher.ConnectAsync(host, port, cancellationToken);
+        return _publisher.ConnectAsync(userId, host, port, cancellationToken);
     }
 
     /// <summary>
