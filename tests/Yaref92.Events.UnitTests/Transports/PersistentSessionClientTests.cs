@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -97,70 +96,43 @@ public class ResilientSessionClientTests
 
 internal static class ResilientSessionClientTestHelper
 {
-    private static readonly FieldInfo OutboxPathField = typeof(ResilientSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo OutboxEntriesField = typeof(ResilientSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo LastRemoteActivityField = typeof(ResilientSessionClient).GetField("_lastRemoteActivityTicks", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo PersistOutboxMethod = typeof(ResilientSessionClient).GetMethod("PersistOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo LoadOutboxMethod = typeof(ResilientSessionClient).GetMethod("LoadOutboxAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo HeartbeatLoopMethod = typeof(ResilientSessionClient).GetMethod("RunHeartbeatLoopAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo BackoffDelayMethod = typeof(ResilientSessionClient).GetMethod("GetBackoffDelay", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo NotifySendFailureMethod = typeof(ResilientSessionClient).GetMethod("NotifySendFailure", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly Type OutboxEntryType = typeof(ResilientSessionClient).GetNestedType("OutboxEntry", BindingFlags.NonPublic)!;
-    private static readonly PropertyInfo PayloadProperty = OutboxEntryType.GetProperty("Payload", BindingFlags.Instance | BindingFlags.Public)!;
-
     public static void OverrideOutboxPath(ResilientSessionClient client, string path)
     {
-        OutboxPathField.SetValue(client, path);
+        client.OutboxPathForTesting = path;
     }
 
-    public static async Task PersistOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)
+    public static Task PersistOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)
     {
-        var task = (Task)PersistOutboxMethod.Invoke(client, new object[] { cancellationToken })!;
-        await task.ConfigureAwait(false);
+        return client.PersistOutboxForTestingAsync(cancellationToken);
     }
 
-    public static async Task LoadOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)
+    public static Task LoadOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)
     {
-        var task = (Task)LoadOutboxMethod.Invoke(client, new object[] { cancellationToken })!;
-        await task.ConfigureAwait(false);
+        return client.LoadOutboxForTestingAsync(cancellationToken);
     }
 
     public static Dictionary<Guid, string> GetOutboxSnapshot(ResilientSessionClient client)
     {
-        var entries = (System.Collections.IDictionary)OutboxEntriesField.GetValue(client)!;
-        var snapshot = new Dictionary<Guid, string>();
-        foreach (var key in entries.Keys)
-        {
-            if (key is not Guid id)
-            {
-                continue;
-            }
-
-            var entry = entries[id];
-            var payload = (string)PayloadProperty.GetValue(entry)!;
-            snapshot[id] = payload;
-        }
-
-        return snapshot;
+        return new Dictionary<Guid, string>(client.GetOutboxSnapshotForTesting());
     }
 
     public static void SetLastRemoteActivity(ResilientSessionClient client, DateTime timestamp)
     {
-        LastRemoteActivityField.SetValue(client, timestamp.Ticks);
+        client.SetLastRemoteActivityForTesting(timestamp);
     }
 
     public static Task RunHeartbeatLoopAsync(ResilientSessionClient client, CancellationToken cancellationToken)
     {
-        return (Task)HeartbeatLoopMethod.Invoke(client, new object[] { cancellationToken })!;
+        return client.RunHeartbeatLoopForTestingAsync(cancellationToken);
     }
 
     public static TimeSpan GetBackoffDelay(ResilientSessionClient client, int attempt)
     {
-        return (TimeSpan)BackoffDelayMethod.Invoke(client, new object[] { attempt })!;
+        return client.GetBackoffDelayForTesting(attempt);
     }
 
     public static void NotifySendFailure(ResilientSessionClient client, Exception exception)
     {
-        NotifySendFailureMethod.Invoke(client, new object[] { exception });
+        client.NotifySendFailureForTesting(exception);
     }
 }
