@@ -109,14 +109,26 @@ public class ResilientSessionIntegrationTests
                     continue;
                 }
 
-                var inflightField = sessionState.GetType().GetField("_inflight", BindingFlags.Instance | BindingFlags.NonPublic);
-                if (inflightField is null)
+                var outboundProperty = sessionState.GetType().GetProperty("Outbound", BindingFlags.Instance | BindingFlags.Public);
+                if (outboundProperty is null)
                 {
                     continue;
                 }
 
-                var inflight = (ConcurrentDictionary<Guid, SessionFrame>) inflightField.GetValue(sessionState)!;
-                if (!inflight.IsEmpty)
+                var outbound = outboundProperty.GetValue(sessionState);
+                if (outbound is null)
+                {
+                    continue;
+                }
+
+                var inflightProperty = outbound.GetType().GetProperty("InflightCount", BindingFlags.Instance | BindingFlags.Public);
+                if (inflightProperty is null)
+                {
+                    continue;
+                }
+
+                var inflightCount = (int) (inflightProperty.GetValue(outbound) ?? 0);
+                if (inflightCount != 0)
                 {
                     drained = false;
                     break;
