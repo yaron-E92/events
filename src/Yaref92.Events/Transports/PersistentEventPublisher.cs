@@ -1,5 +1,6 @@
-﻿using System.Collections.Concurrent;
-using System.Net.Sockets;
+﻿using System;
+using System.Collections.Concurrent;
+using System.Linq;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
@@ -17,7 +18,7 @@ internal sealed class PersistentEventPublisher(
     private readonly IEventAggregator? _localAggregator = localAggregator;
     private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
     private readonly ConcurrentDictionary<SessionKey, byte> _activeSessions = new();
-    private TcpClient? _anonymousConnection;
+    private readonly ConcurrentDictionary<SessionKey, byte> _startedSessions = new();
 
     public IEventSerializer EventSerializer { get; } = eventSerializer;
 
@@ -25,21 +26,12 @@ internal sealed class PersistentEventPublisher(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
-        SessionKey sessionKey = _activeSessions.SingleOrDefault(session => session.Key.Host.Equals(host) && session.Key.Port == port).Key;
-        if (sessionKey is not null)
-        {
-            var session = _sessions.GetOrAdd(sessionKey, key =>
-            {
-                var peerSession = new ResilientPeerSession(key, _options, _localAggregator, EventSerializer);
-                _listener.RegisterPersistentSession(peerSession);
-                return peerSession;
-            });
+        var sessionKey = _sessions.Keys.FirstOrDefault(session =>
+            session.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && session.Port == port)
+            ?? new SessionKey(Guid.NewGuid(), host, port);
 
-            return session.StartAsync(cancellationToken);
-        }
-
-        _anonymousConnection = new TcpClient(host, port);
-        return Task.CompletedTask;
+        var session = GetOrCreateSession(sessionKey);
+        return EnsureSessionStartedAsync(session, cancellationToken);
     }
 
     public Task PublishAsync(string payload, CancellationToken cancellationToken)
@@ -58,18 +50,12 @@ internal sealed class PersistentEventPublisher(
             throw new ArgumentException("The session key for the joined session is invalid", nameof(domainEvent));
         }
 
-        return Task.Run(() =>
+        return Task.Run(async () =>
         {
-
-            SessionKey sessionKey = domainEvent.SessionKey;
-            if (!_sessions.TryGetValue(sessionKey, out var session))
-            {
-                session = new ResilientPeerSession(sessionKey, _options, _localAggregator, EventSerializer);
-                _sessions[sessionKey] = session;
-                _listener.RegisterPersistentSession(session);
-            }
-            _ = session.StartAsync(cancellationToken);
-            _activeSessions.TryAdd(domainEvent.SessionKey, 0);
+            var sessionKey = domainEvent.SessionKey;
+            var session = GetOrCreateSession(sessionKey);
+            _activeSessions.TryAdd(sessionKey, 0);
+            await EnsureSessionStartedAsync(session, cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
     }
 
@@ -95,6 +81,34 @@ internal sealed class PersistentEventPublisher(
 
         _sessions.Clear();
         _activeSessions.Clear();
-        _anonymousConnection?.Dispose();
+        _startedSessions.Clear();
+    }
+
+    private IResilientPeerSession GetOrCreateSession(SessionKey sessionKey)
+    {
+        return _sessions.GetOrAdd(sessionKey, key =>
+        {
+            var client = _listener.GetOrCreatePersistentClient(key, CreatePersistentClient);
+            var peerSession = new ResilientPeerSession(key, client, _options, _localAggregator, EventSerializer);
+            _listener.RegisterPersistentSession(peerSession);
+            return peerSession;
+        });
+    }
+
+    private ResilientSessionClient CreatePersistentClient(SessionKey sessionKey)
+    {
+        return new ResilientSessionClient(sessionKey, _options, _localAggregator);
+    }
+
+    private Task EnsureSessionStartedAsync(IResilientPeerSession session, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (_startedSessions.TryAdd(session.SessionKey, 0))
+        {
+            return session.StartAsync(cancellationToken);
+        }
+
+        return Task.CompletedTask;
     }
 }

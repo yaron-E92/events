@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 using Yaref92.Events.Abstractions;
@@ -62,6 +63,15 @@ public sealed class PersistentSessionListener : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(session);
 
         _inboundSession.RegisterPersistentClient(session.SessionKey, session.PersistentClient);
+    }
+
+    public ResilientSessionClient GetOrCreatePersistentClient(
+        SessionKey sessionKey,
+        Func<SessionKey, ResilientSessionClient> clientFactory)
+    {
+        ArgumentNullException.ThrowIfNull(clientFactory);
+
+        return _inboundSession.GetOrCreatePersistentClient(sessionKey, clientFactory);
     }
 
     public void Broadcast(string payload)

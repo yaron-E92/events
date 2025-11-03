@@ -1,3 +1,5 @@
+using System;
+
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 namespace Yaref92.Events.Transports;
@@ -11,14 +13,31 @@ internal sealed class ResilientPeerSession : IResilientPeerSession
     public ResilientPeerSession(SessionKey sessionKey,
         ResilientSessionOptions options,
         IEventAggregator? eventAggregator, IEventSerializer eventSerializer)
+        : this(sessionKey,
+            new ResilientSessionClient(sessionKey, options, eventAggregator),
+            options,
+            eventAggregator,
+            eventSerializer)
     {
+    }
+
+    public ResilientPeerSession(SessionKey sessionKey,
+        ResilientSessionClient client,
+        ResilientSessionOptions options,
+        IEventAggregator? eventAggregator,
+        IEventSerializer eventSerializer)
+    {
+        ArgumentNullException.ThrowIfNull(sessionKey);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(eventSerializer);
+
         SessionKey = sessionKey;
         Options = options;
-        _client = new ResilientSessionClient(sessionKey, options, eventAggregator);
+        _client = client;
         _localAggregator = eventAggregator;
         _eventSerializer = eventSerializer;
         _client.FrameReceived += OnFrameReceivedAsync;
-        _ = StartAsync(CancellationToken.None);
     }
 
     public string SessionToken => _client.SessionToken;
