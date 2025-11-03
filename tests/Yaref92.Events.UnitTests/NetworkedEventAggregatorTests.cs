@@ -3,6 +3,7 @@
 using NSubstitute;
 
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Transports.EventHandlers;
 
 namespace Yaref92.Events.UnitTests;
 
@@ -32,7 +33,7 @@ internal class NetworkedEventAggregatorTests
         _localAggregator.RegisterEventType<DummyEvent>().Returns(true);
         bool handlerRegistered = false;
         _transport
-            .When(t => t.Subscribe<DummyEvent>(Arg.Any<Func<DummyEvent, CancellationToken, Task>>()))
+            .When(t => t.Subscribe<DummyEvent>())
             .Do(_ => handlerRegistered = true);
 
         // Act
@@ -119,13 +120,13 @@ internal class NetworkedEventAggregatorTests
         _localAggregator.RegisterEventType<DummyEvent>().Returns(true);
         Func<DummyEvent, CancellationToken, Task> handler = null;
         _transport
-            .When(t => t.Subscribe<DummyEvent>(Arg.Any<Func<DummyEvent, CancellationToken, Task>>()))
-            .Do(call => handler = call.Arg<Func<DummyEvent, CancellationToken, Task>>());
+            .When(t => t.Subscribe<DummyEvent>())
+            .Do(call => _localAggregator?.SubscribeToEventType(new EventReceivedHandler<DummyEvent>(typeof(DummyEvent), localAggregator: _localAggregator)));
         _networkedAggregator.RegisterEventType<DummyEvent>();
         DummyEvent evt = new();
 
         // Act
-        await handler(evt, CancellationToken.None);
+        await _networkedAggregator.PublishEventAsync(evt, CancellationToken.None);
 
         // Assert
         await _localAggregator.Received(1).PublishEventAsync(evt, Arg.Any<CancellationToken>());

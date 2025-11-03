@@ -1,4 +1,4 @@
-using System.Threading.Tasks;
+﻿using System.Threading.Tasks;
 
 using FluentAssertions;
 
@@ -20,33 +20,33 @@ public class TCPEventTransportTests
         int portB = 15001;
 
         var aggregatorA = new EventAggregator();
-        aggregatorA.RegisterEventType<DummyEvent>();
-
         var aggregatorB = new EventAggregator();
-        aggregatorB.RegisterEventType<DummyEvent>();
 
         var tcsA = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         var tcsB = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        aggregatorA.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(tcsA));
-        aggregatorB.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(tcsB));
-
         await using var transportA = new TCPEventTransport(portA, eventAggregator: aggregatorA);
         await using var transportB = new TCPEventTransport(portB, eventAggregator: aggregatorB);
+
+        using NetworkedEventAggregator networkedEventAggregatorA = new(aggregatorA, transportA);
+        networkedEventAggregatorA.RegisterEventType<DummyEvent>();
+        using NetworkedEventAggregator networkedEventAggregatorB = new(aggregatorB, transportB);
+        networkedEventAggregatorB.RegisterEventType<DummyEvent>();
+
+        networkedEventAggregatorA.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(tcsA));
+        networkedEventAggregatorB.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(tcsB));
+
         await transportA.StartListeningAsync();
         await transportB.StartListeningAsync();
         await transportA.ConnectToPeerAsync("localhost", portB);
         await transportB.ConnectToPeerAsync("localhost", portA);
 
-        transportA.Subscribe<DummyEvent>();
-        transportB.Subscribe<DummyEvent>();
-
         var evt1 = new DummyEvent();
         var evt2 = new DummyEvent();
 
         // Act
-        await transportA.PublishAsync(evt1);
-        await transportB.PublishAsync(evt2);
+        await networkedEventAggregatorA.PublishEventAsync(evt1);
+        await networkedEventAggregatorB.PublishEventAsync(evt2);
 
         // Assert
         (await Task.WhenAny(tcsB.Task, Task.Delay(2000))).Should().Be(tcsB.Task);
@@ -62,8 +62,12 @@ public class TCPEventTransportTests
 
         public Task OnNextAsync(TEvent domainEvent, CancellationToken cancellationToken = default)
         {
-            _source.TrySetResult(domainEvent);
-            return Task.CompletedTask;
+            if (_source.TrySetResult(domainEvent))
+            {
+                return Task.CompletedTask;
+
+            }
+            return Task.FromException(new InvalidOperationException("Event was already set."));
         }
     }
 }

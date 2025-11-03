@@ -1,16 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-
+﻿#if DEBUG
 namespace Yaref92.Events.Transports;
 
 public sealed partial class ResilientSessionClient
 {
-    internal string OutboxPathForTesting
+    internal void SetOutboxPathForTesting(string outboxPath)
     {
-        get => _outboxPath;
-        set => _outboxPath = value;
+        _outboxPath = outboxPath;
     }
 
     internal Task PersistOutboxForTestingAsync(CancellationToken cancellationToken)
@@ -45,3 +40,4 @@ public sealed partial class ResilientSessionClient
     internal void NotifySendFailureForTesting(Exception exception)
         => NotifySendFailure(exception);
 }
+#endif

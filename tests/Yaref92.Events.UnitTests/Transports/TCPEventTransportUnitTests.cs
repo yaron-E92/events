@@ -65,7 +65,7 @@ public class TCPEventTransportUnitTests
     {
         // Arrange
         await using var transport = new TCPEventTransport(0);
-        var sessions = GetPersistentSessionsDictionary(transport);
+        ConcurrentDictionary<string, ResilientSessionClient> sessions = GetPersistentSessionsDictionary(transport);
 
         var tempDirectory = CreateTempDirectory();
         try
@@ -97,7 +97,7 @@ public class TCPEventTransportUnitTests
     public async Task PublishAsync_WhenPersistentSessionThrows_PropagatesException()
     {
         await using var transport = new TCPEventTransport(0);
-        var sessions = GetPersistentSessionsDictionary(transport);
+        ConcurrentDictionary<string, ResilientSessionClient> sessions = GetPersistentSessionsDictionary(transport);
 
         var tempDirectory = CreateTempDirectory();
         try
@@ -105,7 +105,7 @@ public class TCPEventTransportUnitTests
             var session = CreateSession(tempDirectory);
             sessions.TryAdd("peer", session);
             await session.DisposeAsync().ConfigureAwait(false);
-
+            transport.ConnectToPeerAsync("localhost", 12345).Wait();
             Func<Task> act = () => transport.PublishAsync(new DummyEvent());
             await act.Should().ThrowAsync<ObjectDisposedException>().ConfigureAwait(false);
 

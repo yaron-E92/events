@@ -8,6 +8,7 @@ using FluentAssertions;
 
 using NUnit.Framework;
 
+using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.UnitTests.Transports;
@@ -27,7 +28,8 @@ public class ResilientSessionClientTests
             Guid firstId;
             Guid secondId;
 
-            await using (var writer = new ResilientSessionClient(Guid.NewGuid(), "localhost", 12345))
+            Guid userId = Guid.NewGuid();
+            await using (var writer = new ResilientSessionClient(userId, "localhost", 12345))
             {
                 ResilientSessionClientTestHelper.OverrideOutboxPath(writer, outboxPath);
                 firstId = await writer.EnqueueEventAsync("first", CancellationToken.None).ConfigureAwait(false);
@@ -35,7 +37,7 @@ public class ResilientSessionClientTests
                 await ResilientSessionClientTestHelper.PersistOutboxAsync(writer, CancellationToken.None).ConfigureAwait(false);
             }
 
-            await using var reader = new ResilientSessionClient(Guid.NewGuid(), "localhost", 12345);
+            await using var reader = new ResilientSessionClient(userId, "localhost", 12345);
             ResilientSessionClientTestHelper.OverrideOutboxPath(reader, outboxPath);
             await ResilientSessionClientTestHelper.LoadOutboxAsync(reader, CancellationToken.None).ConfigureAwait(false);
 
@@ -98,7 +100,7 @@ internal static class ResilientSessionClientTestHelper
 {
     public static void OverrideOutboxPath(ResilientSessionClient client, string path)
     {
-        client.OutboxPathForTesting = path;
+        client.SetOutboxPathForTesting(path);
     }
 
     public static Task PersistOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)

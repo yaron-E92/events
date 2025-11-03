@@ -9,6 +9,7 @@ using FluentAssertions;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Sessions.Events;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.IntegrationTests;
