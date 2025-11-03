@@ -25,7 +25,7 @@ public sealed partial class ResilientSessionClient : IAsyncDisposable
 
     private readonly Dictionary<Guid, OutboxEntry> _outboxEntries = new();
     private readonly string _sessionToken;
-    private readonly string _outboxPath;
+    private string _outboxPath;
 
     private long _lastRemoteActivityTicks;
     private bool _initialized;
