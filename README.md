@@ -190,7 +190,7 @@ All frames use the same identifier contract: `SessionFrame.Id` is always a `Guid
 
 `ResilientSessionClient` establishes the session token, persists the outbox, performs exponential backoff when sockets fail, forwards inbound frames to registered callbacks, and clears the outbox when ACKs arrive. Publishing code simply enqueues payloads—the client handles retries, replay, and heartbeat bookkeeping.
 
-See [docs/networking/resilient-tcp.md](docs/networking/resilient-tcp.md) for a deeper dive into the frame format, configuration options, and integration guidance.
+See [docs/networking/resilient-tcp.md](docs/networking/resilient-tcp.md) for a deeper dive into the frame format, configuration options, and integration guidance. For an end-to-end walkthrough on wiring the transport into your application, check the [Implementation Guide](docs/implementation-guide.md).
 
 ### API Reference
 
