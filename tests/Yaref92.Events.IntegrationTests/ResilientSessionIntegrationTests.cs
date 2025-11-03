@@ -36,6 +36,27 @@ public class ResilientSessionIntegrationTests
         var firstDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        server.FrameReceived += (key, frame, cancellationToken) =>
+        {
+            if (frame.Kind == SessionFrameKind.Event && frame.Payload is not null)
+            {
+                lock (deliveries)
+                {
+                    deliveries.Add(frame.Payload);
+                    if (deliveries.Count == 1)
+                    {
+                        firstDeliveryTcs.TrySetResult();
+                    }
+                    else if (deliveries.Count == 2)
+                    {
+                        replayDeliveryTcs.TrySetResult();
+                    }
+                }
+            }
+
+            return Task.CompletedTask;
+        };
+
         await server.StartAsync().ConfigureAwait(false);
 
         await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
@@ -93,6 +114,59 @@ public class ResilientSessionIntegrationTests
         peerAPayloads.Should().ContainSingle(p => p == payload);
         peerBPayloads.Should().HaveCount(2).And.OnlyContain(p => p == payload);
         peerB.ConnectionCount.Should().BeGreaterThanOrEqualTo(2);
+    }
+
+    [Test]
+    public async Task InboundSession_Dispatches_Event_Frames_With_Canonical_Acks()
+    {
+        var options = new ResilientSessionOptions
+        {
+            HeartbeatInterval = TimeSpan.FromMilliseconds(25),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(80),
+            BackoffInitialDelay = TimeSpan.FromMilliseconds(20),
+            BackoffMaxDelay = TimeSpan.FromMilliseconds(50),
+        };
+
+        var port = GetFreeTcpPort();
+        await using var server = new PersistentInboundSession(port, options);
+
+        var sessionKeyTcs = new TaskCompletionSource<SessionKey>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var frameTcs = new TaskCompletionSource<SessionFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.FrameReceived += (key, frame, cancellationToken) =>
+        {
+            if (frame.Kind == SessionFrameKind.Event)
+            {
+                sessionKeyTcs.TrySetResult(key);
+                frameTcs.TrySetResult(frame);
+            }
+
+            return Task.CompletedTask;
+        };
+
+        await server.StartAsync().ConfigureAwait(false);
+
+        await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
+        await clientHost.StartAsync(CancellationToken.None).ConfigureAwait(false);
+
+        var payload = $"dispatch-{Guid.NewGuid():N}";
+        var messageId = await clientHost.Client.EnqueueEventAsync(payload, CancellationToken.None).ConfigureAwait(false);
+
+        var frame = await frameTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        var sessionKey = await sessionKeyTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        await clientHost.WaitForAckCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await clientHost.WaitForOutboxCountAsync(0, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        frame.Kind.Should().Be(SessionFrameKind.Event);
+        frame.Id.Should().Be(messageId);
+        frame.Payload.Should().Be(payload);
+
+        sessionKey.UserId.Should().Be(clientHost.Client.SessionKey.UserId);
+        sessionKey.Host.Should().Be(clientHost.Client.SessionKey.Host);
+        sessionKey.Port.Should().Be(clientHost.Client.SessionKey.Port);
+
+        clientHost.AcknowledgedMessageIds.Should().ContainSingle(id => id == messageId);
     }
 
     private static async Task WaitForServerInflightToDrainAsync(PersistentInboundSession server, TimeSpan timeout)
