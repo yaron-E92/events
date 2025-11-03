@@ -2,9 +2,8 @@
 using Microsoft.Extensions.Logging;
 using Yaref92.Events.Abstractions;
 using System.Collections.Immutable;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.Threading;
+using Yaref92.Events.Transports.Events;
+using Yaref92.Events.Transports.EventHandlers;
 
 namespace Yaref92.Events;
 
@@ -306,9 +305,15 @@ public class EventAggregator : IEventAggregator
     /// </remarks>
     protected void ValidateEventRegistration<T>() where T : class, IDomainEvent
     {
-        if (!_eventTypes.ContainsKey(typeof(T)))
+        Type eventType = typeof(T);
+        ValidateEventRegistration(eventType);
+    }
+
+    private void ValidateEventRegistration(Type eventType)
+    {
+        if (!_eventTypes.ContainsKey(eventType))
         {
-            throw new MissingEventTypeException($"The event type {nameof(T)} was not registered");
+            throw new MissingEventTypeException($"The event type {eventType.Name} was not registered");
         }
     }
 
@@ -355,26 +360,8 @@ public class EventAggregator : IEventAggregator
     /// </example>
     public virtual void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
     {
-        ValidateEventRegistration<T>();
+        ValidateEventOrNestedEventRegistration<T>(subscriber);
         SubscribeSubscriber<T>(subscriber);
-    }
-
-    /// <summary>
-    /// Adds a subscriber (sync or async) to the internal subscriber dictionary for the event type.
-    /// </summary>
-    /// <typeparam name="T">The event type.</typeparam>
-    /// <param name="subscriber">The subscriber instance.</param>
-    /// <remarks>
-    /// Used internally by both sync and async subscription methods.
-    /// </remarks>
-    protected void SubscribeSubscriber<T>(IEventHandler subscriber) where T : class, IDomainEvent
-    {
-        var dict = _subscribersByType.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<IEventHandler, byte>());
-        if (!dict.TryAdd(subscriber, 0))
-        {
-            _logger?.LogWarning("Subscriber {SubscriberType} is already subscribed to event type {EventType}.",
-                subscriber?.GetType().FullName, typeof(T).FullName);
-        }
     }
 
     /// <summary>
@@ -390,8 +377,38 @@ public class EventAggregator : IEventAggregator
     /// </remarks>
     public virtual void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
     {
-        ValidateEventRegistration<T>();
+        ValidateEventOrNestedEventRegistration<T>(subscriber);
         SubscribeSubscriber<T>(subscriber);
+    }
+
+    private void ValidateEventOrNestedEventRegistration<T>(IEventHandler subscriber) where T : class, IDomainEvent
+    {
+        if (typeof(T).Name.Contains(nameof(EventReceived)))
+        {
+            ValidateEventRegistration((subscriber as IEventReceivedHandler)!.InnerEventType);
+        }
+        else
+        {
+            ValidateEventRegistration<T>();
+        }
+    }
+
+    /// <summary>
+    /// Adds a subscriber (sync or async) to the internal subscriber dictionary for the event type.
+    /// </summary>
+    /// <typeparam name="T">The event type.</typeparam>
+    /// <param name="subscriber">The subscriber instance.</param>
+    /// <remarks>
+    /// Used internally by both sync and async subscription methods.
+    /// </remarks>
+    protected void SubscribeSubscriber<T>(IEventHandler subscriber) where T : class, IDomainEvent
+    {
+        var dict = _subscribersByType.GetOrAdd(typeof(T), _ => new ConcurrentDictionary<IEventHandler, byte>());
+        if (!dict.TryAdd(subscriber, 0))
+        {
+            _logger?.LogWarning("Subscriber {SubscriberType} is already subscribed to event type {InnerEventType}.",
+                subscriber?.GetType().FullName, typeof(T).FullName);
+        }
     }
 
     /// <summary>

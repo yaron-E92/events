@@ -1,14 +1,8 @@
-using System;
-using System.IO;
-using System.Net.Sockets;
-using System.Threading;
-using System.Threading.Tasks;
-
-using Yaref92.Events.Sessions;
+﻿using System.Net.Sockets;
 
 namespace Yaref92.Events.Transports;
 
-internal sealed class SessionState : IAsyncDisposable
+public sealed class SessionState : IAsyncDisposable
 {
     private readonly object _lock = new();
 

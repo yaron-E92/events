@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Yaref92.Events.Transports;
 
-internal sealed class SessionOutboundBuffer : IDisposable
+public sealed class SessionOutboundBuffer : IDisposable
 {
     private readonly ConcurrentQueue<SessionFrame> _queue = new();
     private readonly ConcurrentDictionary<Guid, SessionFrame> _inflight = new();

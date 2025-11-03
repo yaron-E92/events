@@ -79,7 +79,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 
     public void Subscribe<TEvent>() where TEvent : class, IDomainEvent
     {
-        _localAggregator?.SubscribeToEventType(new EventReceivedHandler<TEvent>(_localAggregator));
+        _localAggregator?.SubscribeToEventType(new EventReceivedHandler<TEvent>(typeof(TEvent), _localAggregator));
     }
 
     public async ValueTask DisposeAsync()
