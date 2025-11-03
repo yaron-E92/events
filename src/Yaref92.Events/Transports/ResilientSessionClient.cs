@@ -9,7 +9,7 @@ using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports;
 
-public sealed class ResilientSessionClient : IAsyncDisposable
+public sealed partial class ResilientSessionClient : IAsyncDisposable
 {
     private const string OutboxFileName = "outbox.json";
     private static readonly SemaphoreSlim OutboxFileLock = new(1, 1);
@@ -613,7 +613,9 @@ public sealed class ResilientSessionClient : IAsyncDisposable
                 return;
             }
 
-            if (model.Sessions.TryGetValue(SessionKey, out var entries))
+            var sessionKeyString = SessionKey.ToString();
+            if (!string.IsNullOrWhiteSpace(sessionKeyString) &&
+                model.Sessions.TryGetValue(sessionKeyString, out var entries))
             {
                 foreach (var entry in entries)
                 {
@@ -675,13 +677,19 @@ public sealed class ResilientSessionClient : IAsyncDisposable
                 model = new OutboxFileModel();
             }
 
+            var sessionKeyString = SessionKey.ToString();
+            if (string.IsNullOrWhiteSpace(sessionKeyString))
+            {
+                return;
+            }
+
             if (snapshot.Count == 0)
             {
-                model.Sessions.Remove(SessionKey);
+                model.Sessions.Remove(sessionKeyString);
             }
             else
             {
-                model.Sessions[SessionKey] = snapshot;
+                model.Sessions[sessionKeyString] = snapshot;
             }
 
             var output = JsonSerializer.Serialize(model, OutboxSerializerOptions);
@@ -740,6 +748,6 @@ public sealed class ResilientSessionClient : IAsyncDisposable
 
     private sealed class OutboxFileModel
     {
-        public Dictionary<SessionKey, List<StoredOutboxEntry>> Sessions { get; set; } = new();
+        public Dictionary<string, List<StoredOutboxEntry>> Sessions { get; set; } = new();
     }
 }
