@@ -13,11 +13,15 @@ internal sealed class SessionOutboundBuffer : IDisposable
     private readonly ConcurrentDictionary<Guid, SessionFrame> _inflight = new();
     private readonly SemaphoreSlim _signal = new(0);
 
-    public void EnqueueEvent(string payload)
+    public void EnqueueEvent(Guid messageId, string payload)
     {
+        if (messageId == Guid.Empty)
+        {
+            throw new ArgumentException("A non-empty message identifier is required.", nameof(messageId));
+        }
+
         ArgumentNullException.ThrowIfNull(payload);
 
-        Guid messageId = Guid.NewGuid();
         var frame = SessionFrame.CreateMessage(messageId, payload);
         EnqueueFrame(frame);
     }

@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports;
 
@@ -16,6 +17,8 @@ public sealed class PersistentInboundSession : IAsyncDisposable
     private readonly ResilientSessionOptions _options;
     private readonly ConcurrentDictionary<SessionKey, SessionState> _sessionStates = new();
     private readonly ConcurrentDictionary<TcpClient, Task> _clientTasks = new();
+    private static readonly JsonSerializerOptions EventEnvelopeSerializerOptions = new(JsonSerializerDefaults.Web);
+
     private readonly ConcurrentDictionary<SessionKey, ResilientSessionClient> _pendingPersistentClients = new();
     private readonly ConcurrentDictionary<IPEndPoint, Guid> _anonymousSessionIds = new();
     private readonly CancellationTokenSource _cts = new();
@@ -97,9 +100,14 @@ public sealed class PersistentInboundSession : IAsyncDisposable
             throw new ArgumentNullException(nameof(payload));
         }
 
+        if (!TryExtractEventId(payload, out var eventId))
+        {
+            throw new InvalidOperationException("Broadcast payload is missing a valid event identifier.");
+        }
+
         foreach (var session in _sessionStates.Values.Where(static session => session.HasAuthenticated))
         {
-            session.Outbound.EnqueueEvent(payload);
+            session.Outbound.EnqueueEvent(eventId, payload);
         }
     }
 
@@ -135,6 +143,27 @@ public sealed class PersistentInboundSession : IAsyncDisposable
         {
             _cts.Dispose();
         }
+    }
+
+    private static bool TryExtractEventId(string payload, out Guid eventId)
+    {
+        eventId = Guid.Empty;
+
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<EventEnvelope>(payload, EventEnvelopeSerializerOptions);
+            if (envelope is { EventId: var id } && id != Guid.Empty)
+            {
+                eventId = id;
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // invalid payload
+        }
+
+        return false;
     }
 
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)
@@ -181,7 +210,6 @@ public sealed class PersistentInboundSession : IAsyncDisposable
         var stream = client.GetStream();
         var lengthBuffer = new byte[4];
         SessionState? sessionState = null;
-        SessionConnection? connection = null;
         CancellationTokenSource? connectionCts = null;
 
         try
@@ -194,8 +222,6 @@ public sealed class PersistentInboundSession : IAsyncDisposable
 
             sessionState = initialization.Session ??
                 throw new InvalidOperationException("Initialization succeeded without a session state.");
-            connection = initialization.Connection ??
-                throw new InvalidOperationException("Initialization succeeded without a connection.");
             connectionCts = initialization.ConnectionCancellation ??
                 throw new InvalidOperationException("Initialization succeeded without a cancellation source.");
 
@@ -219,20 +245,9 @@ public sealed class PersistentInboundSession : IAsyncDisposable
         }
         finally
         {
-            if (connectionCts is not null)
-            {
-                await connectionCts.CancelAsync().ConfigureAwait(false);
-                connectionCts.Dispose();
-            }
-
-            if (connection is not null)
-            {
-                await connection.DisposeAsync().ConfigureAwait(false);
-            }
-
-            sessionState?.Detach();
             if (sessionState is not null)
             {
+                await sessionState.CloseConnectionAsync().ConfigureAwait(false);
                 await OnSessionLeftAsync(sessionState.Key, serverToken).ConfigureAwait(false);
             }
 
@@ -265,9 +280,9 @@ public sealed class PersistentInboundSession : IAsyncDisposable
         }
 
         var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-        var connection = await session.AttachAsync(client, connectionCts.Token, stream, RunSendLoopAsync).ConfigureAwait(false);
+        await session.AttachAsync(client, stream, connectionCts, RunSendLoopAsync).ConfigureAwait(false);
 
-        return SessionInitializationResult.Success(session, connection, connectionCts, pendingFrame);
+        return SessionInitializationResult.Success(session, connectionCts, pendingFrame);
     }
 
     private (SessionState? Session, SessionFrame? PendingFrame) ResolveSession(TcpClient client, SessionFrame firstFrame)
@@ -524,167 +539,14 @@ public sealed class PersistentInboundSession : IAsyncDisposable
     private readonly record struct SessionInitializationResult(
         bool IsSuccess,
         SessionState? Session,
-        SessionConnection? Connection,
         CancellationTokenSource? ConnectionCancellation,
         SessionFrame? PendingFrame)
     {
         public static SessionInitializationResult Success(
             SessionState session,
-            SessionConnection connection,
             CancellationTokenSource cancellation,
-            SessionFrame? pendingFrame) => new(true, session, connection, cancellation, pendingFrame);
+            SessionFrame? pendingFrame) => new(true, session, cancellation, pendingFrame);
 
-        public static SessionInitializationResult Failed() => new(false, null, null, null, null);
-    }
-
-    public sealed class SessionState : IAsyncDisposable
-    {
-        private readonly object _lock = new();
-
-        private SessionConnection? _connection;
-        private ResilientSessionClient? _persistentClient;
-        private long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
-
-        public SessionState(SessionKey key)
-        {
-            Key = key;
-            Outbound = new SessionOutboundBuffer();
-        }
-
-        public SessionKey Key { get; }
-
-        public bool HasAuthenticated { get; private set; }
-
-        public SessionOutboundBuffer Outbound { get; }
-
-        public ResilientSessionClient? PersistentClient => _persistentClient;
-
-        public void RegisterAuthentication()
-        {
-            HasAuthenticated = true;
-            Touch();
-        }
-
-        public void AttachPersistentClient(ResilientSessionClient client)
-        {
-            _persistentClient = client ?? throw new ArgumentNullException(nameof(client));
-        }
-
-        public void Touch()
-        {
-            Volatile.Write(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks);
-            _persistentClient?.RecordRemoteActivity();
-        }
-
-        public bool IsExpired(DateTime utcNow, TimeSpan timeout)
-        {
-            var ticks = Volatile.Read(ref _lastHeartbeatTicks);
-            var last = new DateTime(ticks, DateTimeKind.Utc);
-            return utcNow - last > timeout;
-        }
-
-        public async Task<SessionConnection> AttachAsync(TcpClient client, CancellationToken serverToken, NetworkStream stream,
-            Func<SessionState, NetworkStream, CancellationToken, Task> sendLoopFactory)
-        {
-            SessionConnection? previous;
-            lock (_lock)
-            {
-                previous = _connection;
-                _connection = null;
-            }
-
-            if (previous is not null)
-            {
-                await previous.DisposeAsync().ConfigureAwait(false);
-            }
-
-            Outbound.RequeueInflight();
-
-            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-            var sendTask = Task.Run(() => sendLoopFactory(this, stream, linkedCts.Token), linkedCts.Token);
-            var connection = new SessionConnection(client, stream, linkedCts, sendTask);
-
-            lock (_lock)
-            {
-                _connection = connection;
-            }
-
-            Touch();
-            _persistentClient?.RecordRemoteActivity();
-            return connection;
-        }
-
-        public void Detach()
-        {
-            lock (_lock)
-            {
-                _connection = null;
-            }
-
-            Outbound.RequeueInflight();
-        }
-
-        public async Task CloseConnectionAsync()
-        {
-            SessionConnection? connection;
-            lock (_lock)
-            {
-                connection = _connection;
-                _connection = null;
-            }
-
-            if (connection is not null)
-            {
-                await connection.DisposeAsync().ConfigureAwait(false);
-                Outbound.RequeueInflight();
-            }
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await CloseConnectionAsync().ConfigureAwait(false);
-            Outbound.Dispose();
-        }
-    }
-
-    public sealed class SessionConnection : IAsyncDisposable
-    {
-        public SessionConnection(TcpClient client, NetworkStream stream, CancellationTokenSource cancellation, Task sendTask)
-        {
-            Client = client;
-            Stream = stream;
-            Cancellation = cancellation;
-            SendTask = sendTask;
-        }
-
-        public TcpClient Client { get; }
-
-        public NetworkStream Stream { get; }
-
-        public CancellationTokenSource Cancellation { get; }
-
-        public Task SendTask { get; }
-
-        public async ValueTask DisposeAsync()
-        {
-            await Cancellation.CancelAsync().ConfigureAwait(false);
-            try
-            {
-                await SendTask.ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or SocketException)
-            {
-                await Console.Error.WriteLineAsync($"{nameof(SessionConnection)} send loop closed with {ex}")
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // expected on disposal
-            }
-
-            await Stream.DisposeAsync().ConfigureAwait(false);
-            Client.Dispose();
-            Cancellation.Dispose();
-        }
+        public static SessionInitializationResult Failed() => new(false, null, null, null);
     }
 }
