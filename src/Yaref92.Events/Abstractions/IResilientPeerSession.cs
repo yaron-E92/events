@@ -34,11 +34,11 @@ internal interface IResilientPeerSession : IAsyncDisposable
     /// </summary>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    Task InitConnectionsAsync(CancellationToken cancellationToken);
+    //Task InitConnectionsAsync(CancellationToken cancellationToken);
 
     //Task PublishToAllAsync(string payload, CancellationToken cancellationToken);// SHOULD NOT BE THE RESPONSIBILITY OF THE SESSION
 
-    void AttachResilientConnection(IResilientConnection resilientConnection);
+    //void AttachResilientConnection(IResilientConnection resilientConnection);
 
     //void EnqueueEvent(Guid eventId, string payload);// SHOULD NOT BE THE RESPONSIBILITY OF THE SESSION
 

@@ -4,8 +4,8 @@ namespace Yaref92.Events.Sessions;
 
 public sealed class SessionOutboundBuffer : IDisposable
 {
-    private readonly ConcurrentQueue<SessionFrame> _queue = new();
-    private readonly ConcurrentDictionary<Guid, SessionFrame> _inflight = new();
+    private readonly ConcurrentQueue<SessionFrame> _frameQueue = new();
+    private readonly ConcurrentDictionary<Guid, SessionFrame> _inflightEventFrames = new();
     private readonly SemaphoreSlim _signal = new(0);
 
     public void EnqueueEvent(Guid eventId, string payload)
@@ -25,17 +25,17 @@ public sealed class SessionOutboundBuffer : IDisposable
     {
         ArgumentNullException.ThrowIfNull(frame);
 
-        _queue.Enqueue(frame);
+        _frameQueue.Enqueue(frame);
         _signal.Release();
     }
 
     public bool TryDequeue(out SessionFrame frame)
     {
-        if (_queue.TryDequeue(out frame))
+        if (_frameQueue.TryDequeue(out frame))
         {
             if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
             {
-                _inflight[frame.Id] = frame;
+                _inflightEventFrames[frame.Id] = frame;
             }
 
             return true;
@@ -53,16 +53,16 @@ public sealed class SessionOutboundBuffer : IDisposable
     {
         if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
         {
-            _inflight.TryRemove(frame.Id, out _);
+            _inflightEventFrames.TryRemove(frame.Id, out _);
         }
 
-        _queue.Enqueue(frame);
+        _frameQueue.Enqueue(frame);
         _signal.Release();
     }
 
-    public bool TryAcknowledge(Guid messageId)
+    public bool TryAcknowledge(Guid eventId)
     {
-        if (_inflight.TryRemove(messageId, out _))
+        if (_inflightEventFrames.TryRemove(eventId, out _))
         {
             return true;
         }
@@ -72,27 +72,27 @@ public sealed class SessionOutboundBuffer : IDisposable
 
     public void RequeueInflight()
     {
-        if (_inflight.IsEmpty)
+        if (_inflightEventFrames.IsEmpty)
         {
             return;
         }
 
-        List<SessionFrame> frames = _inflight.Values.OrderBy(frame => frame.Id).ToList();
-        _inflight.Clear();
-        if (frames.Count == 0)
+        List<SessionFrame> eventFrames = [.. _inflightEventFrames.Values.OrderBy(frame => frame.Id)];
+        _inflightEventFrames.Clear();
+        if (eventFrames.Count == 0)
         {
             return;
         }
 
-        foreach (var frame in frames)
+        foreach (var frame in eventFrames)
         {
-            _queue.Enqueue(frame);
+            _frameQueue.Enqueue(frame);
         }
 
-        _signal.Release(frames.Count);
+        _signal.Release(eventFrames.Count);
     }
 
-    public int InflightCount => _inflight.Count;
+    public int InflightEventsCount => _inflightEventFrames.Count;
 
     public void Dispose()
     {
