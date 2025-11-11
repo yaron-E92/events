@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text.Json;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -143,6 +144,28 @@ public class TCPEventTransportUnitTests
             await DisposeSessionsAsync(sessions.Values).ConfigureAwait(false);
             DeleteTempDirectory(tempDirectory);
         }
+    }
+
+    [Test]
+    public async Task OnEventReceived_WithNoSubscribers_DoesNotThrow()
+    {
+        await using var transport = new TCPEventTransport(0);
+        var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 12345);
+        var dummyEvent = new DummyEvent();
+
+        var method = typeof(TCPEventTransport).GetMethod("OnEventReceived", BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull();
+
+        Func<Task> act = async () =>
+        {
+            var invocation = (Task?)method!.Invoke(transport, new object[] { dummyEvent, sessionKey });
+            if (invocation is not null)
+            {
+                await invocation.ConfigureAwait(false);
+            }
+        };
+
+        await act.Should().NotThrowAsync().ConfigureAwait(false);
     }
 
     [Test]
