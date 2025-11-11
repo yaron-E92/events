@@ -184,7 +184,39 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     {
         ArgumentNullException.ThrowIfNull(frame);
 
+        var shouldSchedulePersist = false;
+
+        if (frame.Kind == SessionFrameKind.Event
+            && frame.Id != Guid.Empty
+            && frame.Payload is string payload)
+        {
+            _stateLock.Wait();
+            try
+            {
+                if (!_outboxEntries.TryGetValue(frame.Id, out var entry)
+                    || !string.Equals(entry.Payload, payload, System.StringComparison.Ordinal))
+                {
+                    entry = new OutboxEntry(frame.Id, payload);
+                    _outboxEntries[frame.Id] = entry;
+                }
+
+                entry.IsQueued = true;
+            }
+            finally
+            {
+                _stateLock.Release();
+            }
+
+            shouldSchedulePersist = true;
+        }
+
         OutboundBuffer.EnqueueFrame(frame);
+
+        if (shouldSchedulePersist)
+        {
+            SchedulePersist();
+        }
+
         _sendSignal.Release();
     }
 
@@ -523,6 +555,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             {
                 if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
                 {
+                    TryMarkEventQueued(frame.Id);
                     AcknowledgedEventIds[frame.Id] = AcknowledgementState.SendingFailed;
                     OutboundBuffer.Return(frame);
                 }
@@ -606,6 +639,25 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             if (_outboxEntries.TryGetValue(messageId, out var entry))
             {
                 entry.IsQueued = false;
+                return true;
+            }
+        }
+        finally
+        {
+            _stateLock.Release();
+        }
+
+        return false;
+    }
+
+    private bool TryMarkEventQueued(Guid messageId)
+    {
+        _stateLock.Wait();
+        try
+        {
+            if (_outboxEntries.TryGetValue(messageId, out var entry))
+            {
+                entry.IsQueued = true;
                 return true;
             }
         }
