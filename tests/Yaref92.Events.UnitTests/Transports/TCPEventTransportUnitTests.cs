@@ -75,7 +75,7 @@ public class TCPEventTransportUnitTests
             sessions.TryAdd(sessionB.Key, sessionB);
 
             // Act
-            await transport.PublishAsync(new DummyEvent()).ConfigureAwait(false);
+            await transport.PublishEventAsync(new DummyEvent()).ConfigureAwait(false);
 
             // Assert
             var snapshotA = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionA.PersistentClient);
@@ -132,7 +132,7 @@ public class TCPEventTransportUnitTests
             sessions.TryAdd(sessionKey, session);
             await session.DisposeAsync().ConfigureAwait(false);
             transport.ConnectToPeerAsync("localhost", 12345).Wait();
-            Func<Task> act = () => transport.PublishAsync(new DummyEvent());
+            Func<Task> act = () => transport.PublishEventAsync(new DummyEvent());
             await act.Should().ThrowAsync<ObjectDisposedException>().ConfigureAwait(false);
 
             sessions.Should().ContainKey(sessionKey);
@@ -253,13 +253,13 @@ public class TCPEventTransportUnitTests
 
         public SessionKey Key { get; }
 
-        public string SessionToken => _client.SessionToken;
+        public string AuthToken => _client.SessionToken;
 
         public ResilientSessionConnection PersistentClient => _client;
 
         public int StartInvocationCount { get; private set; }
 
-        public Task StartAsync(CancellationToken cancellationToken)
+        public Task InitConnectionsAsync(CancellationToken cancellationToken)
         {
             StartInvocationCount++;
             return Task.CompletedTask;

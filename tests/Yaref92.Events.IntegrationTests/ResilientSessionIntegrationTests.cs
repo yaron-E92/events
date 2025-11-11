@@ -323,10 +323,10 @@ public class ResilientSessionIntegrationTests
 
 internal sealed class NoopEventTransport : IEventTransport
 {
-    public Task AcceptIncomingTrafficAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+    public Task AcceptIncomingEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
         => Task.CompletedTask;
 
-    public Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+    public Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
         => Task.CompletedTask;
 
     public void Subscribe<TEvent>() where TEvent : class, IDomainEvent

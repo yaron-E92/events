@@ -1,13 +1,23 @@
-﻿
+﻿using System.Net.Sockets;
+
+using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.Abstractions;
 
-public interface IInboundResilientConnection : IResilientConnection
+internal interface IInboundResilientConnection : IResilientConnection
 {
-    event ResilientSessionConnection.SessionFrameReceivedHandler? FrameReceived;
+    /// <summary>
+    /// Triggered when a frame is received from the remote endpoint through a transient connection
+    /// Triggers the session's frame handling method.
+    /// </summary>
+    event SessionFrameReceivedHandler? FrameReceived;
+
+    public delegate Task SessionFrameReceivedHandler(SessionFrame frame, SessionKey sessionKey, CancellationToken cancellationToken);
 
     Task<AcknowledgementState> WaitForAck(Guid eventId, CancellationToken cancellationToken);
 
     Task InitAsync(CancellationToken cancellationToken);
+
+    Task AttachTransientConnection(TcpClient transientConnection, CancellationTokenSource incomingConnectionCts);
 }

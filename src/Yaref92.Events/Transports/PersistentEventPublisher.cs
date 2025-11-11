@@ -7,7 +7,7 @@ using Yaref92.Events.Transports.ConnectionManagers;
 
 namespace Yaref92.Events.Transports;
 
-internal sealed class PersistentEventPublisher : IAsyncDisposable, IAsyncEventHandler<SessionJoined>, IAsyncEventHandler<SessionLeft>
+internal sealed class PersistentEventPublisher : IPersistentFramePublisher, IAsyncEventHandler<SessionJoined>, IAsyncEventHandler<SessionLeft>
 {
     private readonly PersistentPortListener _listener;
     private readonly ResilientSessionOptions _options;
@@ -16,6 +16,7 @@ internal sealed class PersistentEventPublisher : IAsyncDisposable, IAsyncEventHa
     private readonly ConcurrentDictionary<SessionKey, byte> _activeSessions = new();
     private readonly ConcurrentDictionary<SessionKey, byte> _startedSessions = new();
     private readonly OutboundConnectionManager _outboundConnectionManager;
+    public IOutboundConnectionManager ConnectionManager => _outboundConnectionManager;
 
     public PersistentEventPublisher(
         PersistentPortListener listener,
@@ -55,11 +56,12 @@ internal sealed class PersistentEventPublisher : IAsyncDisposable, IAsyncEventHa
         return session;
     }
 
-    public Task PublishAsync(string payload, CancellationToken cancellationToken)
+    public Task PublishToAllAsync(Guid eventId, string eventEnvelopePayload, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        var tasks = _outboundConnectionManager.QueueBroadcast(payload); _sessions.Values.Select(session => session.PublishAsync(payload, cancellationToken));
+        var tasks = _outboundConnectionManager.QueueBroadcast(payload);
+        _sessions.Values.Select(session => session.PublishAsync(payload, cancellationToken));
         return Task.WhenAll(tasks);
     }
 
@@ -107,13 +109,10 @@ internal sealed class PersistentEventPublisher : IAsyncDisposable, IAsyncEventHa
 
     private IResilientPeerSession GetOrCreateSession(SessionKey sessionKey)
     {
-        return _sessions.GetOrAdd(sessionKey, key =>
-        {
-            var connection = _outboundConnectionManager.GetOrCreatePersistentClient(key, CreatePersistentClient);
+        var connection = _outboundConnectionManager.GetOrCreatePersistentClient(key, CreatePersistentClient);
             var peerSession = SessionManager.GetOrGenerate(key);
-            _listener.RegisterPersistentSession(peerSession);
+            _listener.RegisterIncomingSessionConnection(peerSession);
             return peerSession;
-        });
     }
 
     private ResilientSessionConnection CreatePersistentClient(SessionKey sessionKey)
@@ -139,7 +138,7 @@ internal sealed class PersistentEventPublisher : IAsyncDisposable, IAsyncEventHa
 
         if (_startedSessions.TryAdd(session.Key, 0))
         {
-            return session.StartAsync(cancellationToken);
+            return session.InitConnectionsAsync(cancellationToken);
         }
 
         return Task.CompletedTask;

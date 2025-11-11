@@ -56,7 +56,7 @@ internal class NetworkedEventAggregatorTests
 
         // Assert
         _localAggregator.Received(1).PublishEvent(evt);
-        _transport.Received(1).PublishAsync(evt, Arg.Any<CancellationToken>());
+        _transport.Received(1).PublishEventAsync(evt, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -70,7 +70,7 @@ internal class NetworkedEventAggregatorTests
 
         // Assert
         await _localAggregator.Received(1).PublishEventAsync(evt, Arg.Any<CancellationToken>());
-        await _transport.Received(1).PublishAsync(evt, Arg.Any<CancellationToken>());
+        await _transport.Received(1).PublishEventAsync(evt, Arg.Any<CancellationToken>());
     }
 
     [Test]

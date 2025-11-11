@@ -6,7 +6,7 @@ using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Transports;
 
-public class SessionManager(int listenPort, ResilientSessionOptions options, IEventSerializer serializer, IEventAggregator? localAggregator)
+internal class SessionManager(int listenPort, ResilientSessionOptions options, IEventSerializer serializer, IEventAggregator? localAggregator) : ISessionManager
 {
     private readonly ResilientSessionOptions _options = options;
     private readonly IEventSerializer _serializer = serializer;
@@ -17,40 +17,98 @@ public class SessionManager(int listenPort, ResilientSessionOptions options, IEv
 
     public IEnumerable<IResilientPeerSession> AuthenticatedSessions => _sessions.Values.Where(static session => session.HasAuthenticated);
 
-    public IEnumerable<IResilientPeerSession> AnonymousSessions => _sessions.Values.Where(session => _anonymousSessionIds.ContainsKey(session.Key.AsEndPoint()));
+    public IEnumerable<IResilientPeerSession> ValidAnonymousSessions => _sessions.Values.Where(session => _anonymousSessionIds.ContainsKey(session.Key.AsEndPoint()) && (session.HasAuthenticated || !_options.DoAnonymousSessionsRequireAuthentication));
 
-    public IEnumerable<IOutboundResilientConnection> OutboundConnections => _sessions.Values.Select(session => session.OutboundConnection);
+    public ResilientSessionOptions Options => _options;
 
-    public IResilientPeerSession GetOrGenerate(SessionKey sessionKey)
+    /// <summary>
+    /// Using the authentication frame, resolve the session or throw if authentication fails.
+    /// Then return the resolved or created session.
+    /// </summary>
+    /// <param name="remoteEndPoint">Endpoint representing the remote host&port</param>
+    /// <param name="authFrame">
+    /// A <see cref="SessionFrame"/> containing the auth secret.
+    /// In no-auth scenarios, this frame may contain a null payload.
+    /// </param>
+    /// <returns></returns>
+    /// <exception cref="System.Security.Authentication.AuthenticationException"></exception>
+    /// <remarks>The Session will be generated if necessary</remarks>
+    internal IResilientPeerSession ResolveSession(EndPoint? remoteEndPoint, SessionFrame authFrame)
     {
-        IResilientPeerSession session = _sessions.GetOrAdd(sessionKey, key => new ResilientPeerSession(key, _options, _localAggregator, _serializer));
+        if (!SessionFrameContract.TryValidateAuthentication(authFrame, _options, out SessionKey? sessionKey))
+        {
+            throw new System.Security.Authentication.AuthenticationException("Failed to validate session authentication frame.");
+        }
+        if (sessionKey.IsAnonymousKey)
+        {
+            HydrateAnonymousSessionId(sessionKey, remoteEndPoint);
+        }
+
+        var session = GetOrGenerate(sessionKey, sessionKey.IsAnonymousKey);
+        session.RegisterAuthentication();
         return session;
     }
 
-    
-
-    internal SessionKey CreateFallbackSessionKey(EndPoint? endpoint)
+    public IResilientPeerSession GetOrGenerate(SessionKey sessionKey, bool isAnonymous = false)
     {
+        IResilientPeerSession session =
+            _sessions.GetOrAdd(sessionKey,
+                key => new ResilientPeerSession(key, _options, _localAggregator, _serializer)
+                {
+                    IsAnonymous = isAnonymous,
+                });
+        return session;
+    }
+
+    //internal SessionKey CreateFallbackSessionKey(EndPoint? remoteEndpoint)
+    //{
+    //    remoteEndpoint ??= new DnsEndPoint(IPAddress.Any.ToString(), _listenerPort);
+    //    Guid identifier;
+    //    if (remoteEndpoint is DnsEndPoint dnsEndPoint)
+    //    {
+    //        identifier = _anonymousSessionIds.GetOrAdd(dnsEndPoint, static _ => Guid.NewGuid());
+    //        return new SessionKey(identifier, dnsEndPoint.Host, dnsEndPoint.Port);
+    //    }
+
+    //    var fallbackHost = FallbackHost(remoteEndpoint);
+    //    var fallbackPort = FallbackPort(remoteEndpoint);
+
+    //    identifier = _anonymousSessionIds.GetOrAdd(new DnsEndPoint(fallbackHost, fallbackPort), static _ => Guid.NewGuid());
+    //    return new SessionKey(identifier, fallbackHost, fallbackPort);
+    //}
+
+    internal void HydrateAnonymousSessionId(SessionKey sessionKey, EndPoint? remoteEndPoint)
+    {
+        remoteEndPoint ??= new DnsEndPoint(IPAddress.Any.ToString(), _listenerPort);
         Guid identifier;
-        if (endpoint is DnsEndPoint dnsEndPoint)
+        if (remoteEndPoint is DnsEndPoint dnsEndPoint)
         {
             identifier = _anonymousSessionIds.GetOrAdd(dnsEndPoint, static _ => Guid.NewGuid());
-            return new SessionKey(identifier, dnsEndPoint.Host, dnsEndPoint.Port);
         }
-
-        var fallbackHost = endpoint switch
+        else
         {
-            IPEndPoint ip => ip.Address.ToString(),
-            _ => IPAddress.Any.ToString(),
-        };
+            string fallbackHost = FallbackHost(remoteEndPoint);
+            int fallbackPort = FallbackPort(remoteEndPoint);
+            identifier = _anonymousSessionIds.GetOrAdd(new DnsEndPoint(fallbackHost, fallbackPort), static _ => Guid.NewGuid());
+        }
+        sessionKey.HydrateAnonymouseId(identifier);
+    }
 
-        var fallbackPort = endpoint switch
+    private int FallbackPort(EndPoint remoteEndPoint)
+    {
+        return remoteEndPoint switch
         {
             IPEndPoint ip when ip.Port > 0 => ip.Port,
             _ => _listenerPort,
         };
+    }
 
-        identifier = _anonymousSessionIds.GetOrAdd(new DnsEndPoint(fallbackHost, fallbackPort), static _ => Guid.NewGuid());
-        return new SessionKey(identifier, fallbackHost, fallbackPort);
+    private static string FallbackHost(EndPoint remoteEndPoint)
+    {
+        return remoteEndPoint switch
+        {
+            IPEndPoint ip => ip.Address.ToString(),
+            _ => IPAddress.Any.ToString(),
+        };
     }
 }

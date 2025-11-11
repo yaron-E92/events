@@ -12,7 +12,7 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
 {
     private readonly IEventAggregator _localAggregator;
     private readonly IEventTransport _transport;
-    private readonly ConcurrentDictionary<Guid, DateTime> _recentEventIds = new();
+    private readonly ConcurrentDictionary<Guid, DateTime> _recentIncomingEventIds = new();
     private readonly TimeSpan _deduplicationWindow;
     private readonly Timer _cleanupTimer;
     private bool _disposed;
@@ -21,11 +21,31 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     {
         _localAggregator = localAggregator ?? throw new ArgumentNullException(nameof(localAggregator));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _transport.EventReceived += OnEventReceived; // Subscribe to incoming network events from transport
         _deduplicationWindow = deduplicationWindow ?? TimeSpan.FromMinutes(15);
         _cleanupTimer = new Timer(_deduplicationWindow.TotalMilliseconds / 2);
         _cleanupTimer.Elapsed += (s, e) => CleanupOldEventIds();
         _cleanupTimer.AutoReset = true;
         _cleanupTimer.Start();
+    }
+
+    /// <summary>
+    /// Publishes an incoming domain event received from the transport to local subscribers, if it hasn't been seen before.
+    /// </summary>
+    /// <param name="incomingDomainEvent"></param>
+    /// <returns>
+    /// true if successfully published or if it already received this event in the deduplication window.
+    /// false if there was an error publishing the event locally.
+    /// </returns>
+    async Task<bool> OnEventReceived(IDomainEvent incomingDomainEvent)
+    {
+        if (TryMarkSeen(incomingDomainEvent))
+        {
+            Task task = PublishIncomingEventLocallyAsync(incomingDomainEvent, CancellationToken.None);
+            await task.ConfigureAwait(false);
+            return task.IsCompletedSuccessfully;
+        }
+        return true;
     }
 
     public ISet<Type> EventTypes => _localAggregator.EventTypes;
@@ -43,7 +63,7 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     {
         _localAggregator.PublishEvent(domainEvent);
         // Fire and forget network publish
-        _ = _transport.PublishAsync(domainEvent);
+        _ = _transport.PublishEventAsync(domainEvent);
     }
 
     public async Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
@@ -51,7 +71,7 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
         Task[] tasks =
         [
             _localAggregator.PublishEventAsync(domainEvent, cancellationToken),
-            _transport.PublishAsync(domainEvent, cancellationToken),
+            _transport.PublishEventAsync(domainEvent, cancellationToken),
         ];
         await Task.WhenAll(tasks).ConfigureAwait(false);
     }
@@ -76,20 +96,31 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
         _localAggregator.UnsubscribeFromEventType(subscriber);
     }
 
-    // Deduplication: returns true if this is the first time the event is seen (not a duplicate)
+    // Deduplication: returns true if this is the first time the event is seen (not a duplicate). False if already seen.
     private bool TryMarkSeen(IDomainEvent evt)
     {
-        return _recentEventIds.TryAdd(evt.EventId, DateTime.UtcNow);
+        return _recentIncomingEventIds.TryAdd(evt.EventId, DateTime.UtcNow);
+    }
+
+    private Task PublishIncomingEventLocallyAsync(IDomainEvent domainEvent, CancellationToken cancellationToken)
+    {
+        if (_localAggregator is null)
+        {
+            return Task.FromException(new InvalidOperationException("Can't publish locally without a local aggregator"));
+        }
+
+        dynamic aggregator = _localAggregator;
+        return (Task) aggregator.PublishEventAsync((dynamic) domainEvent, cancellationToken);
     }
 
     private void CleanupOldEventIds()
     {
         DateTime threshold = DateTime.UtcNow - _deduplicationWindow;
-        foreach (var kvp in _recentEventIds)
+        foreach (var kvp in _recentIncomingEventIds)
         {
             if (kvp.Value < threshold)
             {
-                _recentEventIds.TryRemove(kvp.Key, out _);
+                _recentIncomingEventIds.TryRemove(kvp.Key, out _);
             }
         }
     }
@@ -101,4 +132,4 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
         _cleanupTimer?.Dispose();
         _disposed = true;
     }
-} 
+}

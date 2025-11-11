@@ -10,15 +10,27 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 {
     private readonly IEventSerializer _serializer;
     private readonly IEventAggregator? _localAggregator;
-    private readonly PersistentPortListener _listener;
-    private readonly PersistentEventPublisher _publisher;
+    private readonly TempListener _listener;
+    private readonly TempPublisher _publisher;
     private readonly SessionManager _sessionManager;
 
 #if DEBUG
     internal IEventSerializer SerializerForTesting => _serializer;
-    internal PersistentPortListener ListenerForTesting => _listener;
-    internal PersistentEventPublisher PublisherForTesting => _publisher; 
+    //internal PersistentPortListener ListenerForTesting => _listener;
+    //internal PersistentEventPublisher PublisherForTesting => _publisher; 
 #endif
+
+    IPersistentPortListener IEventTransport.PersistentPortListener => _listener;
+
+    IPersistentFramePublisher IEventTransport.PersistentFramePublisher => _publisher;
+
+    private event Func<IDomainEvent, Task<bool>> EventReceived;
+
+    event Func<IDomainEvent, Task<bool>> IEventTransport.EventReceived 
+    {
+        add => EventReceived += value;
+        remove => EventReceived -= value;
+    }
 
     public TCPEventTransport(
         int listenPort,
@@ -44,24 +56,34 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 
         _sessionManager = new SessionManager(listenPort, sessionOptions, _serializer, _localAggregator);
 
-        _listener = new PersistentPortListener(listenPort, sessionOptions, this, _sessionManager);
+        _listener = new TempListener(listenPort, sessionOptions, _serializer, _sessionManager);
 
-        _publisher = new PersistentEventPublisher(_listener, sessionOptions, _localAggregator, serializer ?? new JsonEventSerializer(), _sessionManager);
-        _listener.SessionJoined += async (s, e) =>
+        _publisher = new TempPublisher(_listener, sessionOptions, _localAggregator, serializer ?? new JsonEventSerializer(), _sessionManager);
+        _listener.SessionConnectionAccepted += async (sessionKey, cancellationToken) =>
         {
-            await _publisher?.OnNextAsync(new Sessions.Events.SessionJoined(s), CancellationToken.None)!;
+            await _publisher?.ConnectionManager.ConnectAsync(sessionKey, cancellationToken)!;
         };
-        _listener.SessionLeft += async (s, e) =>
+        _listener.SessionConnectionRemoved += async (s, e) =>
         {
             await _publisher?.OnNextAsync(new Sessions.Events.SessionLeft(s), CancellationToken.None)!;
         };
-        _listener.FrameReceived += OnListenerFrameReceived;
+        _listener.ConnectionManager.EventReceived += OnEventReceived;
     }
 
-    private Task OnListenerFrameReceived(SessionKey sessionKey, SessionFrame _, CancellationToken cancellationToken)
+    // Invoked from the listener'sessionKey inbound connection manager when an event is received
+    private async Task OnEventReceived(IDomainEvent domainEvent, SessionKey sessionKey)
     {
-        return _publisher.AcknowledgeFrameReceipt(sessionKey, cancellationToken);
+        bool eventReceievedSuccessfully = await EventReceived.Invoke(domainEvent);
+        if (eventReceievedSuccessfully)
+        {
+            _publisher.AcknowledgeEventReceipt(domainEvent.EventId, sessionKey);
+        }
     }
+
+    //private Task OnListenerFrameReceived(SessionKey sessionKey, SessionFrame _, CancellationToken cancellationToken)
+    //{
+    //    return _publisher.AcknowledgeFrameReceipt(sessionKey, cancellationToken);
+    //}
 
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
     {
@@ -80,7 +102,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
             throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
         }
 
-        return _publisher.ConnectAsync(userId, host, port, cancellationToken);
+        return _publisher.ConnectionManager.ConnectAsync(userId, host, port, cancellationToken);
     }
 
     /// <summary>
@@ -89,20 +111,20 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
     /// <typeparam name="T">The type of the domain event, which must implement <see cref="IDomainEvent"/>.</typeparam>
     /// <param name="domainEvent">The domain event to be processed. Cannot be <see langword="null"/>.</param>
     /// <param name="cancellationToken">A token to monitor for cancellation requests. The default value is <see cref="CancellationToken.None"/>.</param>
-    /// <remarks>The persistent listener uses it's event handlers to fire this event</remarks>
+    /// <remarks>The persistent listener uses it'sessionKey event handlers to fire this event</remarks>
     /// <returns>A task that represents the asynchronous operation.</returns>
-    public async Task AcceptIncomingTrafficAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+    public async Task AcceptIncomingEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
         await _listener.HandleReceivedEventAsync(new EventReceived<T>(DateTime.UtcNow, domainEvent), cancellationToken);
     }
 
-    public async Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+    public async Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
 
-        var payload = _serializer.Serialize(domainEvent);
-        await _publisher.PublishAsync(payload, cancellationToken).ConfigureAwait(false);
+        var eventEnvelopeJson = _serializer.Serialize(domainEvent);
+        await _publisher.PublishAsync(eventEnvelopeJson, cancellationToken).ConfigureAwait(false);
     }
 
     public void Subscribe<TEvent>() where TEvent : class, IDomainEvent
@@ -116,8 +138,35 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         await _listener.DisposeAsync().ConfigureAwait(false);
     }
 
-    public void AcknowledgeEventReceipt(Guid eventId, SessionKey sessionKey)
+    void IEventTransport.AcknowledgeEventReceipt(Guid eventId, SessionKey sessionKey)
     {
         _publisher.EnqueueAck(eventId, sessionKey);
+    }
+
+    private async Task PublishIncomingEventLocallyAsync(string eventEnvelopePayload, CancellationToken cancellationToken)
+    {
+        if (_localAggregator is null)
+        {
+            return;
+        }
+
+        (_, IDomainEvent? domainEvent) = _serializer.Deserialize(eventEnvelopePayload);
+        if (domainEvent is null)
+        {
+            return;
+        }
+
+        await PublishDomainEventAsync(domainEvent, cancellationToken).ConfigureAwait(false);
+    }
+
+    private Task PublishDomainEventAsync(IDomainEvent domainEvent, CancellationToken cancellationToken)
+    {
+        if (_localAggregator is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        dynamic aggregator = _localAggregator;
+        return (Task) aggregator.PublishEventAsync((dynamic) domainEvent, cancellationToken);
     }
 }
