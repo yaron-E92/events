@@ -10,7 +10,7 @@ using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports.ConnectionManagers;
 
-public sealed class OutboundConnectionManager : IAsyncDisposable
+internal sealed class OutboundConnectionManager : IOutboundConnectionManager
 {
     private readonly ResilientSessionOptions _options;
     //private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
@@ -31,20 +31,6 @@ public sealed class OutboundConnectionManager : IAsyncDisposable
         _options = options ?? new ResilientSessionOptions();
         SessionManager = sessionManager;
     }
-
-    //public ConcurrentDictionary<SessionKey, IResilientPeerSession> Sessions
-    //{
-    //    get
-    //    {
-    //        ConcurrentDictionary<SessionKey, IResilientPeerSession> copy = new();
-    //        foreach (var kvp in _sessions)
-    //        {
-    //            copy[kvp.Key] = kvp.Value;
-    //        }
-
-    //        return copy;
-    //    }
-    //}
 
     public SessionManager SessionManager { get; }
 
@@ -74,36 +60,13 @@ public sealed class OutboundConnectionManager : IAsyncDisposable
         return connection;
     }
 
-    //public Task StartAsync(CancellationToken cancellationToken = default)
-    //{
-    //    if (_listener is not null)
-    //    {
-    //        throw new InvalidOperationException("Listener already started.");
-    //    }
-
-    //    cancellationToken.ThrowIfCancellationRequested();
-
-    //    _listener = new TcpListener(IPAddress.Any, _port);
-    //    _listener.Start();
-
-    //    _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token), _cts.Token);
-    //    _monitorLoop = Task.Run(() => MonitorConnectionsAsync(_cts.Token), _cts.Token);
-
-    //    return Task.CompletedTask;
-    //}
-
-    public void QueueBroadcast(string payload)
+    public void QueueEventBroadcast(Guid eventId, string eventEnvelopeJson)
     {
-        ArgumentNullException.ThrowIfNull(payload);
-
-        if (!TryExtractEventId(payload, out var eventId))
-        {
-            throw new InvalidOperationException("Broadcast payload is missing a valid event identifier.");
-        }
+        ArgumentNullException.ThrowIfNull(eventEnvelopeJson);
 
         foreach (IResilientPeerSession session in SessionManager.AuthenticatedSessions)
         {
-            session.EnqueueEvent(eventId, payload);
+            session.OutboundConnection.EnqueueFrame(SessionFrame.CreateEventFrame(eventId, eventEnvelopeJson));
         }
     }
 
@@ -115,7 +78,7 @@ public sealed class OutboundConnectionManager : IAsyncDisposable
         await Task.WhenAll(tasks)
             .WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        foreach (var outboundConnection in SessionManager.OutboundConnections.Cast<ResilientSessionConnection>())
+        foreach (var outboundConnection in SessionManager.AuthenticatedSessions.Select(session => session.OutboundConnection).Cast<ResilientSessionConnection>())
         {
             await outboundConnection.DisposeAsync().ConfigureAwait(false);
         }
@@ -136,27 +99,6 @@ public sealed class OutboundConnectionManager : IAsyncDisposable
         {
             _cts.Dispose();
         }
-    }
-
-    private static bool TryExtractEventId(string payload, out Guid eventId)
-    {
-        eventId = Guid.Empty;
-
-        try
-        {
-            var envelope = JsonSerializer.Deserialize<EventEnvelope>(payload, EventEnvelopeSerializerOptions);
-            if (envelope is { EventId: var id } && id != Guid.Empty)
-            {
-                eventId = id;
-                return true;
-            }
-        }
-        catch (JsonException)
-        {
-            // invalid payload
-        }
-
-        return false;
     }
 
     internal async Task HandleConnectionAsync(TcpClient outgoingTransientConnection, CancellationToken serverToken)
@@ -235,89 +177,67 @@ public sealed class OutboundConnectionManager : IAsyncDisposable
         throw new NotImplementedException();
     }
 
-    private (SessionState? Session, SessionFrame? PendingFrame) ResolveSession(TcpClient client, SessionFrame firstFrame)
-    {
-        if (SessionFrameContract.TryValidateAuthentication(firstFrame, _options, out var sessionKey))
-        {
-            var token = firstFrame.Token;
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                return default;
-            }
+    //private (IResilientPeerSession Session, SessionFrame? PendingFrame) ResolveSession(TcpClient client, SessionFrame firstFrame)
+    //{
+    //    if (SessionFrameContract.TryValidateAuthentication(firstFrame, _options, out var sessionKey))
+    //    {
+    //        var token = firstFrame.Token;
+    //        if (string.IsNullOrWhiteSpace(token))
+    //        {
+    //            return default;
+    //        }
 
-            if (!TryExtractSessionKey(token, out var parsedSessionKey))
-            {
-                if (_options.RequireAuthentication)
-                {
-                    return default;
-                }
+    //        if (!TryExtractSessionKey(token, out var parsedSessionKey))
+    //        {
+    //            if (_options.RequireAuthentication)
+    //            {
+    //                return default;
+    //            }
 
-                parsedSessionKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
-            }
+    //            parsedSessionKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
+    //        }
 
-            var resolvedKey = parsedSessionKey ?? sessionKey;
-            if (resolvedKey is null)
-            {
-                return default;
-            }
+    //        var resolvedKey = parsedSessionKey ?? sessionKey;
+    //        if (resolvedKey is null)
+    //        {
+    //            return default;
+    //        }
 
-            var session = _sessions.GetOrAdd(resolvedKey, key => new SessionState(key));
-            session.RegisterAuthentication();
-            return (session, null);
-        }
+    //        IResilientPeerSession session = SessionManager.GetOrGenerate(resolvedKey);
+    //        session.RegisterAuthentication();
+    //        return (session, null);
+    //    }
 
-        if (_options.RequireAuthentication)
-        {
-            return default;
-        }
+    //    if (_options.RequireAuthentication)
+    //    {
+    //        return default;
+    //    }
 
-        var fallbackKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
-        var existing = _sessions.GetOrAdd(fallbackKey, key => new SessionState(key));
-        existing.RegisterAuthentication();
-        return (existing, firstFrame);
-    }
+    //    var fallbackKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
+    //    var existing = _sessions.GetOrAdd(fallbackKey, key => new SessionState(key));
+    //    existing.RegisterAuthentication();
+    //    return (existing, firstFrame);
+    //}
 
-    internal static bool TryExtractSessionKey(string token, out SessionKey sessionKey)
-    {
-        sessionKey = default!;
-        var separatorIndex = token.LastIndexOf('-');
-        var normalizedToken = separatorIndex > 0 ? token[..separatorIndex] : token;
+    //internal static bool TryExtractSessionKey(string token, out SessionKey sessionKey)
+    //{
+    //    sessionKey = default!;
+    //    var separatorIndex = token.LastIndexOf('-');
+    //    var normalizedToken = separatorIndex > 0 ? token[..separatorIndex] : token;
 
-        if (!SessionKey.TryParse(normalizedToken, out var parsed) || parsed is null)
-        {
-            return false;
-        }
+    //    if (!SessionKey.TryParse(normalizedToken, out var parsed) || parsed is null)
+    //    {
+    //        return false;
+    //    }
 
-        sessionKey = parsed;
-        return true;
-    }
+    //    sessionKey = parsed;
+    //    return true;
+    //}
 
-    internal SessionKey CreateFallbackSessionKey(EndPoint? endpoint)
-    {
-        if (endpoint is IPEndPoint ipEndPoint)
-        {
-            IPEndPoint key = new(ipEndPoint.Address, ipEndPoint.Port);
-            var identifier = _anonymousSessionIds.GetOrAdd(key, static _ => Guid.NewGuid());
-            var host = key.Address.ToString();
-            return new SessionKey(identifier, host, key.Port);
-        }
-
-        var fallbackHost = endpoint switch
-        {
-            DnsEndPoint dns when !string.IsNullOrWhiteSpace(dns.Host) => dns.Host,
-            _ => IPAddress.Any.ToString(),
-        };
-
-        var fallbackPort = endpoint switch
-        {
-            DnsEndPoint dns when dns.Port > 0 => dns.Port,
-            _ => _port,
-        };
-        //IPEndPoint ipKey =  new IPEndPoint(new IpAddress(fallbackHost), fallbackPort);
-        //Guid sessionId = _anonymousSessionIds.GetOrAdd(ipKey, static _ => Guid.NewGuid());
-
-        return new SessionKey(Guid.NewGuid(), fallbackHost, fallbackPort);
-    }
+    //internal SessionKey CreateFallbackSessionKey(EndPoint? endpoint)
+    //{
+    //    return SessionManager.CreateFallbackSessionKey(endpoint);
+    //}
 
     private static async Task RunHeartbeatLoopAsync(IResilientPeerSession session, CancellationToken cancellationToken)
     {
@@ -326,9 +246,8 @@ public sealed class OutboundConnectionManager : IAsyncDisposable
             SessionFrame? frame = null;
             try
             {
-                
-
-                await WriteFrameAsync(stream, frame, cancellationToken).ConfigureAwait(false);
+                session.OutboundConnection.EnqueueFrame(SessionFrame.CreatePing());
+                //await session.InboundConnection.WaitForPong();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -440,17 +359,21 @@ public sealed class OutboundConnectionManager : IAsyncDisposable
         session.OutboundConnection.EnqueueFrame(SessionFrame.CreateAck(eventId));
     }
 
-    internal readonly record struct ConnectionInitializationResult(
-        bool IsSuccess,
-        IResilientPeerSession? Session,
-        CancellationTokenSource? ConnectionCancellation,
-        SessionFrame? PendingFrame)
+    public Task ConnectAsync(Guid userId, string host, int port, CancellationToken cancellationToken)
     {
-        public static ConnectionInitializationResult Success(
-            IResilientPeerSession session,
-            CancellationTokenSource cancellation,
-            SessionFrame? pendingFrame) => new(true, session, cancellation, pendingFrame);
+        throw new NotImplementedException();
+    }
 
-        public static ConnectionInitializationResult Failed() => new(false, null, null, null);
+    public Task ConnectAsync(SessionKey sessionKey, CancellationToken cancellationToken)
+    {
+        var outboundConnection = SessionManager.GetOrGenerate(sessionKey).OutboundConnection;
+        return outboundConnection.InitAsync(cancellationToken);
+    }
+
+    public void SendAck(Guid eventId, SessionKey sessionKey)
+    {
+        SessionManager.GetOrGenerate(sessionKey)
+            .OutboundConnection
+            .EnqueueFrame(SessionFrame.CreateAck(eventId));
     }
 }
