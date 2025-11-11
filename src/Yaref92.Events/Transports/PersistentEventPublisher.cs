@@ -1,4 +1,6 @@
-﻿using Yaref92.Events.Abstractions;
+﻿using System;
+using System.Threading;
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports.ConnectionManagers;
 
@@ -6,11 +8,32 @@ namespace Yaref92.Events.Transports;
 
 internal class PersistentEventPublisher(SessionManager sessionManager) : IPersistentFramePublisher
 {
+    private Task? _disposeTask;
+    private int _disposeState;
+
     public IOutboundConnectionManager ConnectionManager { get; } = new OutboundConnectionManager(sessionManager);
 
     public ValueTask DisposeAsync()
     {
-        throw new NotImplementedException();
+        if (Interlocked.CompareExchange(ref _disposeState, 1, 0) == 0)
+        {
+            _disposeTask = DisposeAsyncCore();
+        }
+
+        return _disposeTask is null ? ValueTask.CompletedTask : new ValueTask(_disposeTask);
+    }
+
+    private async Task DisposeAsyncCore()
+    {
+        try
+        {
+            await ConnectionManager.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(PersistentEventPublisher)} disposal failed: {ex}")
+                .ConfigureAwait(false);
+        }
     }
 
     public Task PublishToAllAsync(Guid eventId, string eventEnvelopePayload, CancellationToken cancellationToken)
