@@ -14,15 +14,15 @@ internal partial class ResilientPeerSession
 
         public SessionKey Key { get; }
 
-        public bool HasAuthenticated { get; private set; }
+        public bool RemoteEndpointHasAuthenticated { get; private set; }
 
         public bool IsAuthenticatedWithRemoteEndpoint { get; private set; }
 
-        public bool RemoteEndpointHasAuthenticated { get; private set; }
+        //public bool RemoteEndpointHasAuthenticated { get; private set; }
 
         public void RegisterAuthentication()
         {
-            HasAuthenticated = true;
+            RemoteEndpointHasAuthenticated = true;
             Touch();
         }
 

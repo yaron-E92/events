@@ -6,18 +6,30 @@ using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Transports;
 
-internal class SessionManager(int listenPort, ResilientSessionOptions options, IEventSerializer serializer, IEventAggregator? localAggregator) : ISessionManager
+internal class SessionManager : ISessionManager
 {
-    private readonly ResilientSessionOptions _options = options;
-    private readonly IEventSerializer _serializer = serializer;
-    private readonly IEventAggregator? _localAggregator = localAggregator;
+    private readonly ResilientSessionOptions _options;
+    private readonly IEventSerializer _serializer;
+    private readonly IEventAggregator? _localAggregator;
     private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
     private readonly ConcurrentDictionary<DnsEndPoint, Guid> _anonymousSessionIds = new();
-    private readonly int _listenerPort = listenPort;
+    private readonly int _listenerPort;
 
-    public IEnumerable<IResilientPeerSession> AuthenticatedSessions => _sessions.Values.Where(static session => session.HasAuthenticated);
+    public SessionManager(int listenPort, ResilientSessionOptions options, IEventSerializer serializer, IEventAggregator? localAggregator)
+    {
+        if (options is null || !options.Validate())
+        {
+            options = new ResilientSessionOptions();
+        }
+        _options = options;
+        _serializer = serializer;
+        _localAggregator = localAggregator;
+        _listenerPort = listenPort;
+    }
 
-    public IEnumerable<IResilientPeerSession> ValidAnonymousSessions => _sessions.Values.Where(session => _anonymousSessionIds.ContainsKey(session.Key.AsEndPoint()) && (session.HasAuthenticated || !_options.DoAnonymousSessionsRequireAuthentication));
+    public IEnumerable<IResilientPeerSession> AuthenticatedSessions => _sessions.Values.Where(static session => session.RemoteEndpointHasAuthenticated);
+
+    public IEnumerable<IResilientPeerSession> ValidAnonymousSessions => _sessions.Values.Where(session => _anonymousSessionIds.ContainsKey(session.Key.AsEndPoint()) && (session.RemoteEndpointHasAuthenticated || !_options.DoAnonymousSessionsRequireAuthentication));
 
     public ResilientSessionOptions Options => _options;
 
@@ -110,5 +122,11 @@ internal class SessionManager(int listenPort, ResilientSessionOptions options, I
             IPEndPoint ip => ip.Address.ToString(),
             _ => IPAddress.Any.ToString(),
         };
+    }
+
+    internal void TouchSession(SessionKey sessionKey)
+    {
+        IResilientPeerSession session = GetOrGenerate(sessionKey, sessionKey.IsAnonymousKey);
+        session.Touch();
     }
 }

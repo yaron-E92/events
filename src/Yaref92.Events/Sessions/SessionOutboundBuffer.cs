@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using System.Collections.Concurrent;
 
 namespace Yaref92.Events.Sessions;
 
@@ -13,16 +8,16 @@ public sealed class SessionOutboundBuffer : IDisposable
     private readonly ConcurrentDictionary<Guid, SessionFrame> _inflight = new();
     private readonly SemaphoreSlim _signal = new(0);
 
-    public void EnqueueEvent(Guid messageId, string payload)
+    public void EnqueueEvent(Guid eventId, string payload)
     {
-        if (messageId == Guid.Empty)
+        if (eventId == Guid.Empty)
         {
-            throw new ArgumentException("A non-empty message identifier is required.", nameof(messageId));
+            throw new ArgumentException("A non-empty message identifier is required.", nameof(eventId));
         }
 
         ArgumentNullException.ThrowIfNull(payload);
 
-        var frame = SessionFrame.CreateEventFrame(messageId, payload);
+        var frame = SessionFrame.CreateEventFrame(eventId, payload);
         EnqueueFrame(frame);
     }
 

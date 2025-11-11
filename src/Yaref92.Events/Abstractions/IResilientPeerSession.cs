@@ -24,7 +24,7 @@ internal interface IResilientPeerSession : IAsyncDisposable
     IOutboundResilientConnection OutboundConnection { get; }
 
     IInboundResilientConnection InboundConnection { get; }
-    bool HasAuthenticated { get; }
+    bool RemoteEndpointHasAuthenticated { get; }
     SessionOutboundBuffer OutboundBuffer { get; }
 
     event SessionFrameReceivedHandler? FrameReceived;

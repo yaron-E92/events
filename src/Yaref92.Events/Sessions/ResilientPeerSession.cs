@@ -23,7 +23,7 @@ internal sealed partial class ResilientPeerSession : IResilientPeerSession
     public SessionKey Key { get; }
     public ResilientSessionOptions Options { get; }
 
-    public bool HasAuthenticated => _state.HasAuthenticated;
+    public bool RemoteEndpointHasAuthenticated => _state.RemoteEndpointHasAuthenticated;
 
     public IOutboundResilientConnection OutboundConnection => _resilientConnection;
 
@@ -97,7 +97,6 @@ internal sealed partial class ResilientPeerSession : IResilientPeerSession
         await CloseConnectionAsync().ConfigureAwait(false);
         await OutboundConnection.DumpBuffer(OutboundBuffer);
         OutboundBuffer.Dispose();
-        InboundConnection.FrameReceived -= OnFrameReceivedAsync;
         await _resilientConnection.DisposeAsync().ConfigureAwait(false);
     }
 
