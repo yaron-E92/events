@@ -28,7 +28,7 @@ internal sealed class PersistentEventPublisher : IPersistentFramePublisher, IAsy
         _localAggregator = localAggregator;
         EventSerializer = eventSerializer;
         SessionManager = sessionManager;
-        _outboundConnectionManager = new(_options, SessionManager);
+        _outboundConnectionManager = new(SessionManager);
     }
 #if DEBUG
     //internal ConcurrentDictionary<SessionKey, IResilientPeerSession> SessionsForTesting => _sessionManager.;

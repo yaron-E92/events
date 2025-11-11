@@ -10,13 +10,13 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 {
     private readonly IEventSerializer _serializer;
     private readonly IEventAggregator? _localAggregator;
-    private readonly TempListener _listener;
+    private readonly IPersistentPortListener _listener;
     private readonly TempPublisher _publisher;
     private readonly SessionManager _sessionManager;
 
 #if DEBUG
     internal IEventSerializer SerializerForTesting => _serializer;
-    //internal PersistentPortListener ListenerForTesting => _listener;
+    internal IPersistentPortListener ListenerForTesting => _listener;
     //internal PersistentEventPublisher PublisherForTesting => _publisher; 
 #endif
 
@@ -30,6 +30,12 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
     {
         add => EventReceived += value;
         remove => EventReceived -= value;
+    }
+
+    public event IEventTransport.SessionInboundConnectionDroppedHandler SessionInboundConnectionDropped
+    {
+        add => _listener.SessionInboundConnectionDropped += value;
+        remove => _listener.SessionInboundConnectionDropped -= value;
     }
 
     public TCPEventTransport(
@@ -56,21 +62,33 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 
         _sessionManager = new SessionManager(listenPort, sessionOptions, _serializer, _localAggregator);
 
-        _listener = new TempListener(listenPort, sessionOptions, _serializer, _sessionManager);
+        _listener = new PersistentPortListener(listenPort, _serializer, _sessionManager);
 
-        _publisher = new TempPublisher(_listener, sessionOptions, _localAggregator, serializer ?? new JsonEventSerializer(), _sessionManager);
-        _listener.SessionConnectionAccepted += async (sessionKey, cancellationToken) =>
-        {
-            await _publisher?.ConnectionManager.ConnectAsync(sessionKey, cancellationToken)!;
-        };
-        _listener.SessionConnectionRemoved += async (s, e) =>
-        {
-            await _publisher?.OnNextAsync(new Sessions.Events.SessionLeft(s), CancellationToken.None)!;
-        };
+        _publisher = new TempPublisher(_sessionManager, _serializer);
+        _listener.SessionConnectionAccepted += OnSessionConnectionAcceptedByListener;
+        SessionInboundConnectionDropped += OnSessionInboundConnectionDropped;
         _listener.ConnectionManager.EventReceived += OnEventReceived;
+        _listener.ConnectionManager.AckReceived += OnAckReceived;
     }
 
-    // Invoked from the listener'sessionKey inbound connection manager when an event is received
+    private async Task OnAckReceived(Guid eventId, SessionKey sessionKey)
+    {
+        await _publisher.ConnectionManager.OnAckReceived(eventId, sessionKey);
+        throw new NotImplementedException();
+    }
+
+    private async Task<bool> OnSessionInboundConnectionDropped(SessionKey key, CancellationToken token)
+    {
+        return await _publisher.ConnectionManager.TryReconnectAsync(key, token);
+    }
+
+    // Invoked from the listener when a resilient inbound session connection is accepted
+    private async Task OnSessionConnectionAcceptedByListener(SessionKey sessionKey, CancellationToken cancellationToken)
+    {
+        await _publisher?.ConnectionManager.ConnectAsync(sessionKey, cancellationToken)!;
+    }
+
+    // Invoked from the listener's inbound connection manager when an event is received
     private async Task OnEventReceived(IDomainEvent domainEvent, SessionKey sessionKey)
     {
         bool eventReceievedSuccessfully = await EventReceived.Invoke(domainEvent);
@@ -79,11 +97,6 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
             _publisher.AcknowledgeEventReceipt(domainEvent.EventId, sessionKey);
         }
     }
-
-    //private Task OnListenerFrameReceived(SessionKey sessionKey, SessionFrame _, CancellationToken cancellationToken)
-    //{
-    //    return _publisher.AcknowledgeFrameReceipt(sessionKey, cancellationToken);
-    //}
 
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
     {

@@ -17,8 +17,20 @@ internal interface IPersistentPortListener : IAsyncDisposable
     /// </summary>
     IInboundConnectionManager ConnectionManager { get; }
 
+    /// <summary>
+    /// Triggered when a session connection is accepted.
+    /// Triggers the transport's session connection accepted handling method,
+    /// which ensures the publisher sets up its outbound connection for that session.
+    /// </summary>
     event Func<SessionKey, CancellationToken, Task>? SessionConnectionAccepted;
-    event Func<SessionKey, CancellationToken, Task>? SessionConnectionRemoved;
+
+    /// <summary>
+    /// Trigerred by the <see cref="ConnectionManager"/> when an inbound session connection is dropped.
+    /// Triggers the transport's <see cref="IEventTransport.SessionInboundConnectionDroppedHandler"/>,
+    /// which handles the dropped connection appropriately using an attempted reconnect by the publisher,
+    /// followed by session cleanup if reconnect attempts are exhausted.
+    /// </summary>
+    event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
     event Func<SessionKey, SessionFrame, CancellationToken, Task>? FrameReceived;
 
     /// <summary>

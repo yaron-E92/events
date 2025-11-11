@@ -28,44 +28,42 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     }
 
     private readonly IEventSerializer _serializer; // To deserialize incoming event frames
+    private Task? _monitorConnectionsLoop;
 
     public InboundConnectionManager(SessionManager sessionManager, IEventSerializer serializer)
     {
         SessionManager = sessionManager;
         _serializer = serializer;
+        _monitorConnectionsLoop = Task.Run(() => MonitorConnectionsAsync(_cts.Token), _cts.Token);
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken = default)
+    private async Task MonitorConnectionsAsync(CancellationToken monitorToken)
     {
-        await _cts.CancelAsync().ConfigureAwait(false);
-
-        var tasks = _receiveFramesTasks.Values.ToArray();
-        await Task.WhenAll(tasks)
-            .WaitAsync(cancellationToken).ConfigureAwait(false);
-
-        //foreach (var session in SessionManager.Sessions.Values)
-        //{
-        //    await session.DisposeAsync().ConfigureAwait(false);
-        //}
-
-        //_sessions.Clear();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        try
+        while (!monitorToken.IsCancellationRequested)
         {
-            await StopAsync().ConfigureAwait(false);
+            foreach (IInboundResilientConnection? inboundConnectionPastTimeout in SessionManager.AuthenticatedSessions.Concat(SessionManager.ValidAnonymousSessions)
+                                                                                                           .DistinctBy(session => session.Key)
+                                                                                                           .Select(session => session.InboundConnection)
+                                                                                                           .Where(inboundConnection => inboundConnection.IsPastTimeout))
+            {
+                _ = Task.Run(() => ReactToStaleConnection(inboundConnectionPastTimeout.SessionKey, monitorToken), monitorToken);
+            }
+            await Task.Delay(SessionManager.Options.HeartbeatInterval, monitorToken).ConfigureAwait(false);
         }
-        catch (Exception ex)
+    }
+
+    private async Task ReactToStaleConnection(SessionKey sessionKey, CancellationToken monitorToken)
+    {
+        bool? didManageToReconnect = await SessionInboundConnectionDropped?.Invoke(sessionKey, monitorToken)!;
+        if (didManageToReconnect is not true)
         {
-            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} disposal failed: {ex}")
+            // Connection could not be re-established
+            // React to stale connection, e.g., notify session manager or log
+            await Console.Error.WriteLineAsync($"Session {sessionKey} connection is stale and could not be re-established.")
                 .ConfigureAwait(false);
         }
-        finally
-        {
-            _cts.Dispose();
-        }
+        // If connection was re-established, react accordingly...
+        // ... but, technically nothing to do here since the session's InboundConnection would have been updated
     }
 
     public async Task<ConnectionInitializationResult> HandleIncomingTransientConnectionAsync(TcpClient incomingTransientConnection, CancellationToken serverToken)
@@ -113,7 +111,6 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         try
         {
             session = SessionManager.ResolveSession(transientConnection.Client.RemoteEndPoint, authFrame);
-            session.FrameReceived += OnFrameReceivedAsync; // When the InboundConnectionManager of the session receives a frame, we need to hook into the frame received event
         }
         catch (System.Security.Authentication.AuthenticationException)
         {
@@ -125,6 +122,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             // TODO Log failure due to session resolution failure
             return ConnectionInitializationResult.Failed();
         }
+        session.FrameReceived += OnFrameReceivedAsync; // When the InboundConnection of the session receives a frame, we need to hook into the frame received event
 
         var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
         await session.InboundConnection.AttachTransientConnection(transientConnection, connectionCts).ConfigureAwait(false);
@@ -134,191 +132,71 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
     private async Task OnFrameReceivedAsync(SessionFrame frame, SessionKey sessionKey, CancellationToken cancellationToken)
     {
+        SessionManager.TouchSession(sessionKey);
         switch (frame.Kind)
         {
             case SessionFrameKind.Event when frame.Payload is not null:
-                IDomainEvent? domainEvent = _serializer.Deserialize(frame.Payload).domainEvent;
-
-                if (domainEvent is not null)
-                {
-                    await EventReceived?.Invoke(domainEvent, sessionKey)!;
-                }
+                await OnEventFrameReceievedAsync(frame, sessionKey);
                 break;
             case SessionFrameKind.Ack when frame.Id != Guid.Empty:
-                Acknowledge(frame.Id);
+                await AckReceived?.Invoke(frame.Id, sessionKey)!;
                 break;
-            case SessionFrameKind.Ping:
-                EnqueueFrame(SessionFrame.CreatePong());
-                break;
-        }
-    }
-
-    //internal static bool TryExtractSessionKey(string token, out SessionKey sessionKey)
-    //{
-    //    sessionKey = default!;
-    //    var separatorIndex = token.LastIndexOf('-');
-    //    var normalizedToken = separatorIndex > 0 ? token[..separatorIndex] : token;
-
-    //    if (!SessionKey.TryParse(normalizedToken, out var parsed) || parsed is null)
-    //    {
-    //        return false;
-    //    }
-
-    //    sessionKey = parsed;
-    //    return true;
-    //}
-
-    //internal SessionKey CreateFallbackSessionKey(EndPoint? endpoint) => SessionManager.CreateFallbackSessionKey(endpoint);
-
-    private async Task ProcessIncomingFramesAsync(
-        SessionState session,
-        NetworkStream stream,
-        byte[] lengthBuffer,
-        CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            var result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
-            if (!result.IsSuccess)
-            {
-                break;
-            }
-
-            await ProcessFrameAsync(session, result.Frame!, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    private async Task ProcessFrameAsync(SessionState session, SessionFrame frame, CancellationToken cancellationToken)
-    {
-        switch (frame.Kind)
-        {
             case SessionFrameKind.Ping: // RESPOND WITH PONG USING Publisher/Transport
-                session.Touch();
-                session.Outbound.EnqueueFrame(SessionFrame.CreatePong());
+                await PingReceived?.Invoke(sessionKey);
                 break;
-            case SessionFrameKind.Pong: // Just touch the session
-                session.Touch();
-                break;
-            case SessionFrameKind.Ack when frame.Id != Guid.Empty: // Ensure that the outbound message for this session key is acknowledged and removed
-                var ackId = frame.Id;
-                if (session.Outbound.TryAcknowledge(ackId))
-                {
-                    session.Touch();
-                }
-                session.PersistentClient?.Acknowledge(ackId);
-                break;
-            case SessionFrameKind.Event when frame.Payload is not null: // Process event
-                session.Touch();
-
-                var messageId = frame.Id;
-                if (messageId == Guid.Empty)
-                {
-                    break;
-                }
-
-                try
-                {
-                    var handler = FrameReceived;
-                    if (handler is not null)
-                    {
-                        await handler(session.Key, frame, cancellationToken).ConfigureAwait(false);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} frame handler failed: {ex}")
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    session.Outbound.EnqueueFrame(SessionFrame.CreateAck(messageId));
-                    session.PersistentClient?.RecordRemoteActivity();
-                }
-
+            case SessionFrameKind.Pong: // Just touch the session, which already happened
                 break;
         }
     }
 
-    //private static async Task RunReceiveLoopAsync(IResilientPeerSession session, NetworkStream stream, CancellationToken cancellationToken)
-    //{
-    //    while (!cancellationToken.IsCancellationRequested)
-    //    {
-    //        SessionFrame? frame = null;
-    //        try
-    //        {
-    //            if (!session.OutboundBuffer.TryDequeue(out frame))
-    //            {
-    //                await session.OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
-    //                continue;
-    //            }
-
-    //            await session.InboundConnection.(stream, frame, cancellationToken).ConfigureAwait(false);
-    //        }
-    //        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-    //        {
-    //            break;
-    //        }
-    //        catch (Exception ex) when (ex is IOException or SocketException)
-    //        {
-    //            if (frame is not null)
-    //            {
-    //                session.OutboundBuffer.Return(frame);
-    //            }
-
-    //            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} send loop error: {ex}").ConfigureAwait(false);
-    //            break;
-    //        }
-    //    }
-    //}
-
-    private static async Task WriteFrameAsync(NetworkStream stream, SessionFrame frame, CancellationToken cancellationToken)
+    private async Task OnEventFrameReceievedAsync(SessionFrame frame, SessionKey sessionKey)
     {
-        var payload = JsonSerializer.SerializeToUtf8Bytes(frame, SessionFrameSerializer.Options);
-        var lengthPrefix = BitConverter.GetBytes(payload.Length);
-        await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
-        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
-    }
-
-    //private async Task OnSessionJoinedAsync(SessionKey key, CancellationToken cancellationToken)
-    //{
-    //    var handler = SessionConnectionAccepted;
-    //    if (handler is null)
-    //    {
-    //        return;
-    //    }
-
-    //    try
-    //    {
-    //        await handler.Invoke(key, cancellationToken).ConfigureAwait(false);
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} session join handler failed: {ex}")
-    //            .ConfigureAwait(false);
-    //    }
-    //}
-
-    private async Task OnSessionLeftAsync(SessionKey key, CancellationToken cancellationToken)
-    {
-        var handler = SessionLeft;
-        if (handler is null)
+        var sessionWithValidAuthentication = SessionManager.AuthenticatedSessions.Concat(SessionManager.ValidAnonymousSessions)
+                      .DistinctBy(session => session.Key)
+                      .FirstOrDefault(session => session.Key == sessionKey);
+        if (sessionWithValidAuthentication == null)
         {
+            // Session is not authenticated or valid anonymous,
+            // log, ignore the event, and inform the sender if necessary
             return;
         }
+        sessionWithValidAuthentication.Touch();
+        IDomainEvent? domainEvent = _serializer.Deserialize(frame.Payload).domainEvent;
 
-        try
+        if (domainEvent is not null)
         {
-            await handler.Invoke(key, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} session leave handler failed: {ex}")
-                .ConfigureAwait(false);
+            await EventReceived?.Invoke(domainEvent, sessionKey)!;
         }
     }
 
     public void RegisterIncomingSessionConnection(SessionKey sessionKey)
     {
         throw new NotImplementedException();
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        await _cts.CancelAsync().ConfigureAwait(false);
+
+        Task[] tasks = [.._receiveFramesTasks.Values.Cast<Task>(), _monitorConnectionsLoop ?? Task.CompletedTask];
+        await Task.WhenAll(tasks)
+            .WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await StopAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} disposal failed: {ex}")
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _cts.Dispose();
+        }
     }
 }

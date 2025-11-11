@@ -1,25 +1,20 @@
 ﻿using System.Collections.Concurrent;
-using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports.ConnectionManagers;
 
 internal sealed class OutboundConnectionManager(SessionManager sessionManager) : IOutboundConnectionManager
 {
-    private readonly ResilientSessionOptions _options;
-    //private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
     private readonly ConcurrentDictionary<TcpClient, Task> _heartbeatTasks = new();
     private ConcurrentDictionary<TcpClient, Task> _sendTasks = new();
-    private static readonly JsonSerializerOptions EventEnvelopeSerializerOptions = new(JsonSerializerDefaults.Web);
 
     private readonly ConcurrentDictionary<SessionKey, IOutboundResilientConnection> _pendingPersistentClients = new();
-    private readonly ConcurrentDictionary<IPEndPoint, Guid> _anonymousSessionIds = new();
     private readonly CancellationTokenSource _cts = new();
 
     public event Func<SessionKey, CancellationToken, Task>? SessionJoined;
@@ -122,6 +117,7 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
 
             _sendTasks[outgoingTransientConnection] = Task.Run(() =>
                 RunSendLoopAsync(session, connectionCts.Token), serverToken);
+            _ = _sendTasks[outgoingTransientConnection].ContinueWith(task => _sendTasks.TryRemove(outgoingTransientConnection, out _), TaskContinuationOptions.ExecuteSynchronously);
         }
         catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
         {
@@ -208,7 +204,7 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
     //    }
 
     //    var fallbackKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
-    //    var existing = _sessions.GetOrAdd(fallbackKey, key => new SessionState(key));
+    //    var existing = _sessions.GetOrAdd(fallbackKey, sessionKey => new SessionState(sessionKey));
     //    existing.RegisterAuthentication();
     //    return (existing, firstFrame);
     //}
@@ -262,30 +258,18 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
 
     private static async Task RunSendLoopAsync(IResilientPeerSession session, CancellationToken cancellationToken)//touched
     {
-        SessionFrame? frame;
         while (!cancellationToken.IsCancellationRequested)
         {
-            frame = null;
             try
             {
-                if (!session.OutboundBuffer.TryDequeue(out frame))
+                if (!session.OutboundBuffer.TryDequeue(out SessionFrame? frame))
                 {
                     await session.OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
                 session.OutboundConnection.EnqueueFrame(frame);
-                Task<AcknowledgementState> ackTask = Task.Run(() => session.InboundConnection.WaitForAck(frame.Id, cancellationToken));
-                _ = ackTask.ContinueWith(task =>
-                {
-                    AcknowledgementState acknowledgementState = AcknowledgementState.None;
-        
-                    if (task.IsCompletedSuccessfully)
-                    {
-                        acknowledgementState = task.Result;
-                    }
-                    _ = ProcessAcknowledgementState(session, acknowledgementState, frame).ConfigureAwait(false);
-                }, TaskContinuationOptions.ExecuteSynchronously);
+                WaitForAckIfEventFrame(session, frame, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -299,6 +283,24 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
         }
     }
 
+    private static void WaitForAckIfEventFrame(IResilientPeerSession session, SessionFrame frame, CancellationToken cancellationToken)
+    {
+        if (frame is {Kind: SessionFrameKind.Event} eventFrame)
+        {
+            Task<AcknowledgementState> ackTask = Task.Run(() => session.InboundConnection.WaitForAck(eventFrame.Id, cancellationToken));
+            _ = ackTask.ContinueWith(task =>
+            {
+                AcknowledgementState acknowledgementState = AcknowledgementState.None;
+
+                if (task.IsCompletedSuccessfully)
+                {
+                    acknowledgementState = task.Result;
+                }
+                _ = ProcessAcknowledgementState(session, acknowledgementState, eventFrame).ConfigureAwait(false);
+            }, TaskContinuationOptions.ExecuteSynchronously); 
+        }
+    }
+
     private static async Task ProcessAcknowledgementState(IResilientPeerSession session, AcknowledgementState acknowledgementState, SessionFrame? frame)
     {
         if (acknowledgementState != AcknowledgementState.Acknowledged && frame is not null)
@@ -306,26 +308,30 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
             session.OutboundBuffer.Return(frame);
             await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} send loop did not receive ack for frame {frame}").ConfigureAwait(false);
         }
-    }
-
-    private async Task OnSessionJoinedAsync(SessionKey key, CancellationToken cancellationToken)
-    {
-        var handler = SessionJoined;
-        if (handler is null)
+        else if (acknowledgementState == AcknowledgementState.Acknowledged && frame is {Kind: SessionFrameKind.Event} eventFrame)
         {
-            return;
-        }
-
-        try
-        {
-            await handler.Invoke(key, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} outboundConnection join handler failed: {ex}")
-                .ConfigureAwait(false);
+            session.OutboundBuffer.TryAcknowledge(eventFrame.Id);
         }
     }
+
+    //private async Task OnSessionJoinedAsync(SessionKey key, CancellationToken cancellationToken)
+    //{
+    //    var handler = SessionJoined;
+    //    if (handler is null)
+    //    {
+    //        return;
+    //    }
+
+    //    try
+    //    {
+    //        await handler.Invoke(key, cancellationToken).ConfigureAwait(false);
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} outboundConnection join handler failed: {ex}")
+    //            .ConfigureAwait(false);
+    //    }
+    //}
 
     private async Task OnSessionLeftAsync(SessionKey key, CancellationToken cancellationToken)
     {
@@ -350,12 +356,19 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
     {
         var session = SessionManager.GetOrGenerate(sessionKey);
         session.OutboundBuffer.EnqueueFrame(SessionFrame.CreateAck(eventId));
-        session.OutboundConnection.EnqueueFrame(SessionFrame.CreateAck(eventId));
     }
 
     public Task ConnectAsync(Guid userId, string host, int port, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException();
+        SessionKey sessionKey = new(userId, host, port)
+        {
+            IsAnonymousKey = userId == Guid.Empty,
+        };
+        if (sessionKey.IsAnonymousKey)
+        {
+            SessionManager.HydrateAnonymousSessionId(sessionKey, new DnsEndPoint(host, port));
+        }
+        return ConnectAsync(sessionKey, cancellationToken);
     }
 
     public Task ConnectAsync(SessionKey sessionKey, CancellationToken cancellationToken)

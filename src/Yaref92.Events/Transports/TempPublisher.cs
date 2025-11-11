@@ -1,28 +1,14 @@
-﻿
-using Yaref92.Events.Abstractions;
+﻿using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports.ConnectionManagers;
 
 namespace Yaref92.Events.Transports;
-internal class TempPublisher : IPersistentFramePublisher
+
+internal class TempPublisher(SessionManager sessionManager, IEventSerializer eventSerializer) : IPersistentFramePublisher
 {
-    public TempPublisher(IPersistentPortListener listener, ResilientSessionOptions sessionOptions, IEventAggregator? localAggregator, IEventSerializer eventSerializer, SessionManager sessionManager)
-    {
-        Listener = listener;
-        SessionOptions = sessionOptions;
-        LocalAggregator = localAggregator;
-        EventSerializer = eventSerializer;
-        SessionManager = sessionManager;
-        ConnectionManager = new OutboundConnectionManager(SessionOptions, SessionManager);
-    }
+    public IOutboundConnectionManager ConnectionManager { get; } = new OutboundConnectionManager(sessionManager);
 
-    public IOutboundConnectionManager ConnectionManager { get; }
-
-    public IPersistentPortListener Listener { get; }
-    public ResilientSessionOptions SessionOptions { get; }
-    public IEventAggregator? LocalAggregator { get; }
-    public IEventSerializer EventSerializer { get; }
-    public SessionManager SessionManager { get; }
+    public IEventSerializer EventSerializer { get; } = eventSerializer;
 
     public ValueTask DisposeAsync()
     {
@@ -43,6 +29,6 @@ internal class TempPublisher : IPersistentFramePublisher
     /// <param name="sessionKey">Key for the session representing the remote receiver of the ack</param>
     public void AcknowledgeEventReceipt(Guid eventId, SessionKey sessionKey)
     {
-        _ = ConnectionManager.SendAck(eventId, sessionKey);
+        ConnectionManager.SendAck(eventId, sessionKey);
     }
 }
