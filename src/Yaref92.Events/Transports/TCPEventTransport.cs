@@ -1,4 +1,5 @@
-﻿using Yaref92.Events.Abstractions;
+﻿using System.Threading;
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
 
@@ -9,6 +10,8 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
     private readonly IEventSerializer _serializer;
     private readonly IPersistentPortListener _listener;
     private readonly PersistentEventPublisher _publisher;
+    private Task? _disposeTask;
+    private int _disposeState;
 
 #if DEBUG
     internal IEventSerializer SerializerForTesting => _serializer;
@@ -123,9 +126,21 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         await _publisher.PublishToAllAsync(domainEvent.EventId, eventEnvelopeJson, cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        await _publisher.DisposeAsync().ConfigureAwait(false);
-        await _listener.DisposeAsync().ConfigureAwait(false);
+        if (Interlocked.CompareExchange(ref _disposeState, 1, 0) == 0)
+        {
+            _disposeTask = DisposeAsyncCore();
+        }
+
+        return _disposeTask is null ? ValueTask.CompletedTask : new ValueTask(_disposeTask);
+    }
+
+    private async Task DisposeAsyncCore()
+    {
+        Task publisherDispose = _publisher.DisposeAsync().AsTask();
+        Task listenerDispose = _listener.DisposeAsync().AsTask();
+
+        await Task.WhenAll(publisherDispose, listenerDispose).ConfigureAwait(false);
     }
 }
