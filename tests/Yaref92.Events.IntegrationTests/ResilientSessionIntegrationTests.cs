@@ -8,6 +8,7 @@ using System.Text.Json;
 using FluentAssertions;
 
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Connections;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Sessions.Events;
 using Yaref92.Events.Transports;
@@ -197,7 +198,7 @@ public class ResilientSessionIntegrationTests
                     continue;
                 }
 
-                var inflightProperty = outbound.GetType().GetProperty("InflightCount", BindingFlags.Instance | BindingFlags.Public);
+                var inflightProperty = outbound.GetType().GetProperty("InflightEventsCount", BindingFlags.Instance | BindingFlags.Public);
                 if (inflightProperty is null)
                 {
                     continue;
@@ -358,13 +359,13 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     public TestPersistentClientHost(string host, int port, ResilientSessionOptions options)
     {
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
-        Client = new ResilientSessionConnection(Guid.NewGuid(), host, port, options);
+        Client = new ResilientCompositSessionConnection(Guid.NewGuid(), host, port, options);
         SetOutboxPath(Client, _outboxPath);
         Client.ConnectionEstablished += OnConnectionEstablishedAsync;
         Client.FrameReceived += OnFrameReceivedAsync;
     }
 
-    public ResilientSessionConnection Client { get; }
+    public ResilientCompositSessionConnection Client { get; }
 
     public IReadOnlyCollection<string> ReceivedPayloads => _payloads.ToArray();
 
@@ -501,14 +502,14 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private ValueTask OnConnectionEstablishedAsync(ResilientSessionConnection session, CancellationToken cancellationToken)
+    private ValueTask OnConnectionEstablishedAsync(ResilientCompositSessionConnection session, CancellationToken cancellationToken)
     {
         var connections = Interlocked.Increment(ref _connectionCount);
         NotifyWaiters(_connectionWaiters, connections);
         return ValueTask.CompletedTask;
     }
 
-    private async ValueTask OnFrameReceivedAsync(ResilientSessionConnection session, SessionFrame frame, CancellationToken cancellationToken)
+    private async ValueTask OnFrameReceivedAsync(ResilientCompositSessionConnection session, SessionFrame frame, CancellationToken cancellationToken)
     {
         switch (frame.Kind)
         {
@@ -543,7 +544,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     private IReadOnlyCollection<Guid> GetOutboxEntries()
     {
-        var entriesField = typeof(ResilientSessionConnection).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var entriesField = typeof(ResilientCompositSessionConnection).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var entries = (System.Collections.IDictionary) entriesField.GetValue(Client)!;
         var keys = new List<Guid>();
         foreach (var key in entries.Keys)
@@ -557,9 +558,9 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         return keys;
     }
 
-    private static void SetOutboxPath(ResilientSessionConnection client, string path)
+    private static void SetOutboxPath(ResilientCompositSessionConnection client, string path)
     {
-        var field = typeof(ResilientSessionConnection).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var field = typeof(ResilientCompositSessionConnection).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
         field.SetValue(client, path);
     }
 
