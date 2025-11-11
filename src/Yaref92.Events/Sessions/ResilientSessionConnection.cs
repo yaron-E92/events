@@ -2,15 +2,17 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
-using System.Threading;
 
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Caching;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports.Events;
 
+using static Yaref92.Events.Abstractions.IInboundResilientConnection;
+
 namespace Yaref92.Events.Transports;
 
-public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutboundResilientConnection, IInboundResilientConnection
+internal sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutboundResilientConnection, IInboundResilientConnection
 {
     private const string OutboxFileName = "outbox.json";
     private static readonly SemaphoreSlim OutboxFileLock = new(1, 1);
@@ -28,22 +30,22 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
     private readonly Dictionary<Guid, OutboxEntry> _outboxEntries = [];
     private readonly string _sessionToken;
     private long _lastRemoteActivityTicks;
-    private bool _initialized;
+    private bool _outboxLoaded;
 
     private readonly TaskCompletionSource _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private CancellationTokenSource _cts = new();
     private static readonly LingerOption _lingerOption = new(true, 5);
-    private CancellationTokenSource? _activeConnectionCts;
+    private CancellationTokenSource? _activeOutboundConnectionCts;
 
     private Task? _runInboundTask;
     private Task? _runOutboundTask;
     private readonly object _runLock = new();
-
+    private readonly SemaphoreSlim _transientConnectionSemaphore = new(0, 1);
     private Task _sendLoop = Task.CompletedTask;
     private Task _heartbeatLoop = Task.CompletedTask;
-    private Task _receiveLoop = Task.CompletedTask;
-
-    public delegate Task SessionFrameReceivedHandler(ResilientSessionConnection client, SessionFrame frame, CancellationToken cancellationToken);
+    private Task _transientReceiveLoop = Task.CompletedTask;
+    private CancellationTokenSource _incomingConnectionCts;
+    private TcpClient _transientConnection;
 
     public delegate Task SessionConnectionEstablishedHandler(ResilientSessionConnection client, CancellationToken cancellationToken);
 
@@ -57,7 +59,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
     {
     }
 
-    public ResilientSessionConnection(
+    internal ResilientSessionConnection(
         Guid userId,
         string host,
         int port,
@@ -70,17 +72,17 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         FrameReceived += frameHandler;
     }
 
-    public ResilientSessionConnection(
+    internal ResilientSessionConnection(
         string host,
         int port,
         SessionFrameReceivedHandler frameHandler,
         ResilientSessionOptions? options = null,
         IEventAggregator? eventAggregator = null)
-        : this(Guid.NewGuid(), host, port, frameHandler, options, eventAggregator)
+        : this(Guid.Empty, host, port, frameHandler, options, eventAggregator)
     {
     }
 
-    public ResilientSessionConnection(
+    internal ResilientSessionConnection(
         SessionKey sessionKey,
         ResilientSessionOptions? options = null,
         IEventAggregator? eventAggregator = null)
@@ -94,17 +96,35 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         _lastRemoteActivityTicks = DateTime.UtcNow.Ticks;
     }
 
-    async Task IInboundResilientConnection.InitAsync(CancellationToken cancellationToken)
+    Task IInboundResilientConnection.InitAsync(CancellationToken cancellationToken)
     {
-        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         StartRunInboundLoop();
+        return Task.CompletedTask;
     }
 
     async Task IOutboundResilientConnection.InitAsync(CancellationToken cancellationToken)
     {
-        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureOutboxLoadedAsync(cancellationToken).ConfigureAwait(false);
         StartRunOutboundLoop();
         await _firstConnectionCompletion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Cancels any existing incoming connection and attaches the new transient connection for receiving frames.
+    /// It is done in a thread-safe manner.
+    /// </summary>
+    /// <param name="transientConnection"></param>
+    /// <param name="incomingConnectionCts"></param>
+    /// <remarks>
+    /// The resilient connection has a receive loop that waits for transient connections to be attached.
+    /// When a new transient connection is attached, the receive loop starts processing frames from it.
+    /// </remarks>
+    async Task IInboundResilientConnection.AttachTransientConnection(TcpClient transientConnection, CancellationTokenSource incomingConnectionCts)
+    {
+        await _incomingConnectionCts?.CancelAsync()!;
+        _incomingConnectionCts = incomingConnectionCts;
+        _transientConnection = transientConnection;
+        _transientConnectionSemaphore.Release();
     }
 
     public DnsEndPoint RemoteEndPoint => new(SessionKey.Host, SessionKey.Port);
@@ -117,42 +137,41 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
 
     public ConcurrentQueue<SessionFrame> EventQueue => _eventQueue;
 
-    public event SessionFrameReceivedHandler? FrameReceived;
+    private event SessionFrameReceivedHandler? FrameReceived;
+
+    event SessionFrameReceivedHandler? IInboundResilientConnection.FrameReceived
+    {
+        add => FrameReceived += value;
+        remove => FrameReceived -= value;
+    }
 
     public event SessionConnectionEstablishedHandler? ConnectionEstablished;
 
-    //public async Task StartAsync(CancellationToken cancellationToken)
+    //public async Task<Guid> EnqueueEventAsync(string payload, CancellationToken cancellationToken)
     //{
-    //    await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-    //    StartRunLoop();
-    //    await _firstConnectionCompletion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    //    ArgumentNullException.ThrowIfNull(payload);
+
+    //    Guid eventId;
+    //    await _stateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+    //    try
+    //    {
+    //        eventId = Guid.NewGuid();
+    //        var entry = new OutboxEntry(eventId, payload)
+    //        {
+    //            IsQueued = true,
+    //        };
+    //        _outboxEntries[eventId] = entry;
+    //        EventQueue.Enqueue(SessionFrame.CreateEventFrame(eventId, payload));
+    //    }
+    //    finally
+    //    {
+    //        _stateLock.Release();
+    //    }
+
+    //    _sendSignal.Release();
+    //    _ = SchedulePersist();
+    //    return eventId;
     //}
-
-    public async Task<Guid> EnqueueEventAsync(string payload, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(payload);
-
-        Guid eventId;
-        await _stateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            eventId = Guid.NewGuid();
-            var entry = new OutboxEntry(eventId, payload)
-            {
-                IsQueued = true,
-            };
-            _outboxEntries[eventId] = entry;
-            EventQueue.Enqueue(SessionFrame.CreateEventFrame(eventId, payload));
-        }
-        finally
-        {
-            _stateLock.Release();
-        }
-
-        _sendSignal.Release();
-        _ = SchedulePersist();
-        return eventId;
-    }
 
     public void EnqueueFrame(SessionFrame frame)
     {
@@ -203,7 +222,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
 
     public async Task AbortActiveConnectionAsync()
     {
-        var connectionCts = Volatile.Read(ref _activeConnectionCts);
+        var connectionCts = Volatile.Read(ref _activeOutboundConnectionCts);
         if (connectionCts is null)
         {
             return;
@@ -259,9 +278,9 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         _cts?.Dispose();
     }
 
-    private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
+    private async Task EnsureOutboxLoadedAsync(CancellationToken cancellationToken)
     {
-        if (_initialized)
+        if (_outboxLoaded)
         {
             return;
         }
@@ -269,13 +288,13 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         await _stateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_initialized)
+            if (_outboxLoaded)
             {
                 return;
             }
 
             await LoadOutboxAsync(cancellationToken).ConfigureAwait(false);
-            _initialized = true;
+            _outboxLoaded = true;
         }
         finally
         {
@@ -293,9 +312,13 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
 
     private async Task RunInboundAsync(CancellationToken cancellationToken)
     {
-        TcpClient client = new();
-        using TcpClient tcpConnection = await ActivateTcpConnectionAsync(cancellationToken).ConfigureAwait(false);
-        _receiveLoop = Task.Run(() => RunReceiveLoopAsync(tcpConnection, cancellationToken), cancellationToken);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await _transientConnectionSemaphore.WaitAsync(cancellationToken);
+            await _transientReceiveLoop;
+            _transientReceiveLoop = Task.Run(() => RunTransientConnectionReceiveLoopAsync(_transientConnection, _incomingConnectionCts.Token), _incomingConnectionCts.Token);
+            //_transientReceiveLoop.ContinueWith(SessionLeft) // Figure out how to notify session left
+        }
     }
 
     private void StartRunOutboundLoop()
@@ -313,8 +336,8 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         {
             try
             {
-                using TcpClient tcpConnection = await ActivateTcpConnectionAsync(cancellationToken).ConfigureAwait(false);
-                await ActivateOutboundConnectionLoops(tcpConnection, cancellationToken).ConfigureAwait(false);
+                using TcpClient transientOutboundConnection = await ActivateTcpConnectionAsync(cancellationToken).ConfigureAwait(false);
+                await ActivateOutboundConnectionLoops(transientOutboundConnection, cancellationToken).ConfigureAwait(false);
                 await RunUntilCancellationOrDisconnectAsync(cancellationToken).ConfigureAwait(false);
                 attempt = 0;
             }
@@ -354,7 +377,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
 
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var connectionToken = connectionCts.Token;
-        Volatile.Write(ref _activeConnectionCts, connectionCts);
+        Volatile.Write(ref _activeOutboundConnectionCts, connectionCts);
         try
         {
             await client.ConnectAsync(SessionKey.Host, SessionKey.Port, connectionToken).ConfigureAwait(false);
@@ -395,7 +418,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         {
             _sendLoop = Task.Run(() => RunSendLoopAsync(tcpConnection, connectionToken), connectionToken);
             _heartbeatLoop = Task.Run(() => RunHeartbeatLoopAsync(connectionToken), connectionToken);
-            //_receiveLoop = Task.Run(() => RunReceiveLoopAsync(tcpConnection, connectionToken), connectionToken);
+            //_transientReceiveLoop = Task.Run(() => RunTransientConnectionReceiveLoopAsync(transientOutboundConnection, connectionToken), connectionToken);
         }
         finally
         {
@@ -408,7 +431,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         try
         {
             var completed = await Task.WhenAny(_sendLoop, _heartbeatLoop).ConfigureAwait(false);
-            _activeConnectionCts?.CancelAsync().ConfigureAwait(false);
+            _activeOutboundConnectionCts?.CancelAsync().ConfigureAwait(false);
 
             try
             {
@@ -416,7 +439,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
             }
             catch (Exception ex) when (ex is IOException or SocketException)
             {
-                if (_activeConnectionCts?.IsCancellationRequested is not true)
+                if (_activeOutboundConnectionCts?.IsCancellationRequested is not true)
                 {
                     throw;
                 }
@@ -427,7 +450,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         }
         finally
         {
-            Volatile.Write(ref _activeConnectionCts, null);
+            Volatile.Write(ref _activeOutboundConnectionCts, null);
         }
     }
 
@@ -460,7 +483,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
 
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var connectionToken = connectionCts.Token;
-        Volatile.Write(ref _activeConnectionCts, connectionCts);
+        Volatile.Write(ref _activeOutboundConnectionCts, connectionCts);
         try
         {
             Volatile.Write(ref _lastRemoteActivityTicks, DateTime.UtcNow.Ticks);
@@ -476,7 +499,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
 
             var sendTask = RunSendLoopAsync(client, connectionToken);
             var heartbeatTask = RunHeartbeatLoopAsync(connectionToken);
-            var receiveTask = RunReceiveLoopAsync(client, connectionToken);
+            var receiveTask = RunTransientConnectionReceiveLoopAsync(client, connectionToken);
 
             var completed = await Task.WhenAny(sendTask, heartbeatTask, receiveTask).ConfigureAwait(false);
             await connectionCts.CancelAsync().ConfigureAwait(false);
@@ -498,7 +521,7 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         }
         finally
         {
-            Volatile.Write(ref _activeConnectionCts, null);
+            Volatile.Write(ref _activeOutboundConnectionCts, null);
         }
     }
 
@@ -562,12 +585,12 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         }
     }
 
-    private async Task RunReceiveLoopAsync(TcpClient client, CancellationToken cancellationToken)
+    private async Task RunTransientConnectionReceiveLoopAsync(TcpClient client, CancellationToken incomingConnectionCancellation) //touched
     {
         var stream = client.GetStream();
         var lengthBuffer = new byte[4];
 
-        while (!cancellationToken.IsCancellationRequested)
+        while (!incomingConnectionCancellation.IsCancellationRequested)
         {
             if (!client.Connected)
             {
@@ -576,19 +599,20 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
             SessionFrameIO.FrameReadResult result;
             try
             {
-                result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
+                result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, incomingConnectionCancellation).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (incomingConnectionCancellation.IsCancellationRequested)
             {
                 break;
             }
 
             if (!result.IsSuccess || result.Frame is null)
             {
-                break;
+                // TODO Log this
+                continue;
             }
 
-            await HandleInboundFrameAsync(result.Frame, cancellationToken).ConfigureAwait(false);
+            await HandleInboundFrameAsync(result.Frame, incomingConnectionCancellation).ConfigureAwait(false);
         }
 
         if (!client.Connected)
@@ -597,32 +621,17 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
         }
     }
 
-    private async Task HandleInboundFrameAsync(SessionFrame frame, CancellationToken cancellationToken)
+    private async Task HandleInboundFrameAsync(SessionFrame frame, CancellationToken cancellationToken) //touched
     {
         if (ShouldRecordRemoteActivity(frame.Kind))
         {
             RecordRemoteActivity();
         }
 
-        await RaiseFrameReceivedAsync(frame, cancellationToken).ConfigureAwait(false);
-
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return;
-        }
-
-        switch (frame.Kind)
-        {
-            case SessionFrameKind.Ack when frame.Id != Guid.Empty:
-                Acknowledge(frame.Id);
-                break;
-            case SessionFrameKind.Ping:
-                EnqueueFrame(SessionFrame.CreatePong());
-                break;
-        }
+        await FrameReceived?.Invoke(frame, SessionKey, cancellationToken)!;
     }
 
-    private static bool ShouldRecordRemoteActivity(SessionFrameKind kind)
+    public static bool ShouldRecordRemoteActivity(SessionFrameKind kind) //touched
     {
         return kind switch
         {
@@ -633,21 +642,6 @@ public sealed partial class ResilientSessionConnection : IAsyncDisposable, IOutb
             SessionFrameKind.Auth => true,
             _ => false,
         };
-    }
-
-    private async Task RaiseFrameReceivedAsync(SessionFrame frame, CancellationToken cancellationToken)
-    {
-        //var handlers = FrameReceived;
-        //if (handlers is null)
-        //{
-        //    return;
-        //}
-        await FrameReceived?.Invoke(this, frame, cancellationToken)!;
-
-        //foreach (SessionFrameReceivedHandler handler in handlers.GetInvocationList())
-        //{
-        //    await handler(this, frame, cancellationToken).ConfigureAwait(false);
-        //}
     }
 
     private async Task RaiseConnectionEstablishedAsync(CancellationToken cancellationToken)

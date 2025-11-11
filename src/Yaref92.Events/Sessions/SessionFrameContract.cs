@@ -9,7 +9,7 @@ internal static class SessionFrameContract
         ArgumentNullException.ThrowIfNull(sessionKey);
         ArgumentNullException.ThrowIfNull(options);
 
-        var prefix = sessionKey.ToString() ?? throw new InvalidOperationException("Session key produced an invalid token prefix.");
+        var prefix = sessionKey.ToString() ?? throw new InvalidOperationException("Session key produced an invalid sessionToken prefix.");
         if (!options.RequireAuthentication)
         {
             return $"{prefix}{TokenSecretDelimiter}{Guid.NewGuid():N}";
@@ -25,7 +25,7 @@ internal static class SessionFrameContract
 
         if (string.IsNullOrWhiteSpace(sessionToken))
         {
-            throw new ArgumentException("Session token must be provided.", nameof(sessionToken));
+            throw new ArgumentException("Session sessionToken must be provided.", nameof(sessionToken));
         }
 
         var payload = options.RequireAuthentication
@@ -35,6 +35,18 @@ internal static class SessionFrameContract
         return SessionFrame.CreateAuth(sessionToken, payload);
     }
 
+    /// <summary>
+    /// If the frame is an authentication frame, attempts to validate it according to the provided options.<br/>
+    /// The session key is output if validation is successful.
+    /// </summary>
+    /// <param name="frame"></param>
+    /// <param name="options"></param>
+    /// <param name="sessionKey">An anonymous session will have an empty user id at the end of this method</param>
+    /// <returns>true if the authentication is valid or not required, false otherwise</returns>
+    /// <remarks>
+    /// In the case that authentication is not required, or if it is generally but not for an anonymouse session and this is one,
+    /// then the sessionToken does not need to contain a secret.
+    /// </remarks>
     public static bool TryValidateAuthentication(SessionFrame frame, ResilientSessionOptions options, out SessionKey sessionKey)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -43,10 +55,11 @@ internal static class SessionFrameContract
         sessionKey = null!;
         if (frame.Kind != SessionFrameKind.Auth)
         {
+            // TODO: Log invalid frame kind for authentication
             return false;
         }
 
-        if (!TryParseSessionToken(frame.Token, out sessionKey, out var embeddedSecret))
+        if (!TryParseSessionToken(frame.Token, out sessionKey, out string? embeddedSecret))
         {
             return false;
         }
@@ -58,6 +71,11 @@ internal static class SessionFrameContract
 
         var expectedSecret = options.AuthenticationToken;
         if (string.IsNullOrEmpty(expectedSecret))
+        {
+            return true;
+        }
+
+        if (sessionKey.IsAnonymousKey && !options.DoAnonymousSessionsRequireAuthentication)
         {
             return true;
         }
@@ -103,27 +121,36 @@ internal static class SessionFrameContract
         return secret;
     }
 
-    private static bool TryParseSessionToken(string? token, out SessionKey sessionKey, out string? embeddedSecret)
+    /// <summary>
+    /// Using the format "userId@host:port||secret" for the session token, attempts to parse the sessionToken into its components.
+    /// It then constructs a <see cref="SessionKey"/> from the parsed components.
+    /// </summary>
+    /// <param name="sessionToken"></param>
+    /// <param name="sessionKey"></param>
+    /// <param name="embeddedAuthSecret"></param>
+    /// <returns></returns>
+    /// <remarks>A <see cref="Guid.Empty"/> means it is an anonymous session</remarks>
+    public static bool TryParseSessionToken(string? sessionToken, out SessionKey sessionKey, out string? embeddedAuthSecret)
     {
         sessionKey = null!;
-        embeddedSecret = null;
+        embeddedAuthSecret = null;
 
-        if (string.IsNullOrWhiteSpace(token))
+        if (string.IsNullOrWhiteSpace(sessionToken))
         {
             return false;
         }
 
-        var baseToken = token;
-        var delimiterIndex = token.IndexOf(TokenSecretDelimiter, StringComparison.Ordinal);
+        var baseToken = sessionToken;
+        var delimiterIndex = sessionToken.IndexOf(TokenSecretDelimiter, StringComparison.Ordinal);
         if (delimiterIndex >= 0)
         {
             var secretIndex = delimiterIndex + TokenSecretDelimiter.Length;
-            if (secretIndex < token.Length)
+            if (secretIndex < sessionToken.Length)
             {
-                embeddedSecret = token[secretIndex..];
+                embeddedAuthSecret = sessionToken[secretIndex..];
             }
 
-            baseToken = token[..delimiterIndex];
+            baseToken = sessionToken[..delimiterIndex];
         }
 
         var atIndex = baseToken.IndexOf('@');
@@ -137,7 +164,7 @@ internal static class SessionFrameContract
         var hostPart = baseToken[(atIndex + 1)..colonIndex];
         var portPart = baseToken[(colonIndex + 1)..];
 
-        if (!Guid.TryParse(userIdPart, out var userId))
+        if (!TryParseUserId(userIdPart, out Guid userId))
         {
             return false;
         }
@@ -157,7 +184,20 @@ internal static class SessionFrameContract
             return false;
         }
 
-        sessionKey = new SessionKey(userId, hostPart, port);
+        sessionKey = new SessionKey(userId, hostPart, port)
+        {
+            IsAnonymousKey = userId == Guid.Empty,
+        };
         return true;
+    }
+
+    private static bool TryParseUserId(string userIdPart, out Guid userId)
+    {
+        if (string.IsNullOrWhiteSpace(userIdPart) || userIdPart.Equals("anonymous", StringComparison.OrdinalIgnoreCase))
+        {
+            userId = Guid.Empty;
+            return true;
+        }
+        return Guid.TryParse(userIdPart, out userId);
     }
 }

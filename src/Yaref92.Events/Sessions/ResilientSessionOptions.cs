@@ -3,6 +3,7 @@
 public sealed class ResilientSessionOptions
 {
     public bool RequireAuthentication { get; init; }
+    public bool DoAnonymousSessionsRequireAuthentication { get; init; }
 
     public string? AuthenticationToken { get; init; }
 

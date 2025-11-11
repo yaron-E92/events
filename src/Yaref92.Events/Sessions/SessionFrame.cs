@@ -22,6 +22,11 @@ public sealed class SessionFrame
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public Guid Id { get; init; }
 
+    /// <summary>
+    /// Session authentication token.
+    /// Starts with "userId@host:port", followed by "||"
+    /// and either a Guif or secret if authentication is required.
+    /// </summary>
     [JsonPropertyName("token")]
     public string? Token { get; init; }
 
@@ -44,21 +49,21 @@ public sealed class SessionFrame
 
     public static SessionFrame CreatePong() => new() { Kind = SessionFrameKind.Pong };
 
-    public static SessionFrame CreateAck(Guid messageId) => new()
+    public static SessionFrame CreateAck(Guid eventId) => new()
     {
         Kind = SessionFrameKind.Ack,
-        Id = messageId,
+        Id = eventId,
     };
 
-    public static SessionFrame CreateEventFrame(Guid messageId, string payload)
+    public static SessionFrame CreateEventFrame(Guid eventId, string eventEnvelopeJson)
     {
-        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(eventEnvelopeJson);
 
         return new SessionFrame
         {
             Kind = SessionFrameKind.Event,
-            Id = messageId,
-            Payload = payload,
+            Id = eventId,
+            Payload = eventEnvelopeJson,
         };
     }
 }
