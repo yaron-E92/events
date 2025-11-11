@@ -1,28 +1,39 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Linq;
+﻿using System.Collections.Concurrent;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Sessions.Events;
+using Yaref92.Events.Transports.ConnectionManagers;
 
 namespace Yaref92.Events.Transports;
 
-internal sealed class PersistentEventPublisher(
-    PersistentSessionListener listener,
-    ResilientSessionOptions options,
-    IEventAggregator? localAggregator, IEventSerializer eventSerializer) : IAsyncDisposable, IAsyncEventHandler<SessionJoined>, IAsyncEventHandler<SessionLeft>
+internal sealed class PersistentEventPublisher : IAsyncDisposable, IAsyncEventHandler<SessionJoined>, IAsyncEventHandler<SessionLeft>
 {
-    private readonly PersistentSessionListener _listener = listener ?? throw new ArgumentNullException(nameof(listener));
-    private readonly ResilientSessionOptions _options = options ?? throw new ArgumentNullException(nameof(options));
-    private readonly IEventAggregator? _localAggregator = localAggregator;
-    private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
+    private readonly PersistentPortListener _listener;
+    private readonly ResilientSessionOptions _options;
+    private readonly IEventAggregator? _localAggregator;
+    //private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
     private readonly ConcurrentDictionary<SessionKey, byte> _activeSessions = new();
     private readonly ConcurrentDictionary<SessionKey, byte> _startedSessions = new();
+    private readonly OutboundConnectionManager _outboundConnectionManager;
 
-    internal ConcurrentDictionary<SessionKey, IResilientPeerSession> SessionsForTesting => _sessions;
-
-    public IEventSerializer EventSerializer { get; } = eventSerializer;
+    public PersistentEventPublisher(
+        PersistentPortListener listener,
+        ResilientSessionOptions options,
+        IEventAggregator? localAggregator, IEventSerializer eventSerializer, SessionManager sessionManager)
+    {
+        _listener = listener ?? throw new ArgumentNullException(nameof(listener));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _localAggregator = localAggregator;
+        EventSerializer = eventSerializer;
+        SessionManager = sessionManager;
+        _outboundConnectionManager = new(_options, SessionManager);
+    }
+#if DEBUG
+    //internal ConcurrentDictionary<SessionKey, IResilientPeerSession> SessionsForTesting => _sessionManager.;
+#endif
+    public IEventSerializer EventSerializer { get; }
+    public SessionManager SessionManager { get; }
 
     public Task ConnectAsync(string host, int port, CancellationToken cancellationToken)
     {
@@ -34,15 +45,21 @@ internal sealed class PersistentEventPublisher(
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
         var sessionKey = ResolveSessionKey(host, port, userId);
-        var session = GetOrCreateSession(sessionKey);
-        return EnsureSessionStartedAsync(session, cancellationToken);
+        return EnsureSessionExistenceAndStart(sessionKey, cancellationToken);
+    }
+
+    private async Task<IResilientPeerSession> EnsureSessionExistenceAndStart(SessionKey sessionKey, CancellationToken cancellationToken)
+    {
+        IResilientPeerSession session = GetOrCreateSession(sessionKey);
+        await EnsureSessionStartedAsync(session, cancellationToken);
+        return session;
     }
 
     public Task PublishAsync(string payload, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        var tasks = _sessions.Values.Select(session => session.PublishAsync(payload, cancellationToken));
+        var tasks = _outboundConnectionManager.QueueBroadcast(payload); _sessions.Values.Select(session => session.PublishAsync(payload, cancellationToken));
         return Task.WhenAll(tasks);
     }
 
@@ -57,7 +74,7 @@ internal sealed class PersistentEventPublisher(
         return Task.Run(async () =>
         {
             var sessionKey = domainEvent.SessionKey;
-            var session = GetOrCreateSession(sessionKey);
+            IResilientPeerSession session = GetOrCreateSession(sessionKey);
             _activeSessions.TryAdd(sessionKey, 0);
             await EnsureSessionStartedAsync(session, cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
@@ -92,16 +109,16 @@ internal sealed class PersistentEventPublisher(
     {
         return _sessions.GetOrAdd(sessionKey, key =>
         {
-            var client = _listener.GetOrCreatePersistentClient(key, CreatePersistentClient);
-            var peerSession = new ResilientPeerSession(key, client, _options, _localAggregator, EventSerializer);
+            var connection = _outboundConnectionManager.GetOrCreatePersistentClient(key, CreatePersistentClient);
+            var peerSession = SessionManager.GetOrGenerate(key);
             _listener.RegisterPersistentSession(peerSession);
             return peerSession;
         });
     }
 
-    private ResilientSessionClient CreatePersistentClient(SessionKey sessionKey)
+    private ResilientSessionConnection CreatePersistentClient(SessionKey sessionKey)
     {
-        return new ResilientSessionClient(sessionKey, _options, _localAggregator);
+        return new ResilientSessionConnection(sessionKey, _options, _localAggregator);
     }
 
     private SessionKey ResolveSessionKey(string host, int port, Guid userId)
@@ -120,11 +137,23 @@ internal sealed class PersistentEventPublisher(
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        if (_startedSessions.TryAdd(session.SessionKey, 0))
+        if (_startedSessions.TryAdd(session.Key, 0))
         {
             return session.StartAsync(cancellationToken);
         }
 
         return Task.CompletedTask;
+    }
+
+    internal async Task AcknowledgeFrameReceipt(SessionKey sessionKey, CancellationToken cancellationToken)
+    {
+        throw new NotImplementedException();
+        EnsureSessionExistenceAndStart(sessionKey, cancellationToken);
+
+    }
+
+    internal void EnqueueAck(Guid eventId, SessionKey sessionKey)
+    {
+        _outboundConnectionManager.EnqueueAck(eventId, sessionKey);
     }
 }

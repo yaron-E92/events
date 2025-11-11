@@ -4,6 +4,8 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Yaref92.Events.Sessions;
+
 /// <summary>
 /// Defines the contract for a network event transport capable of publishing and subscribing to domain events across process or network boundaries.
 /// </summary>
@@ -15,6 +17,7 @@ public interface IEventTransport
     /// <typeparam name="T">The event type, must implement <see cref="IDomainEvent"/>.</typeparam>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task AcceptIncomingTrafficAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent;
+    void AcknowledgeEventReceipt(Guid eventId, SessionKey sessionKey);
 
     /// <summary>
     /// Publishes an event asynchronously to the transport.

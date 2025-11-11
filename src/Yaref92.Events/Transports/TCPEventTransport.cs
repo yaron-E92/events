@@ -10,12 +10,15 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 {
     private readonly IEventSerializer _serializer;
     private readonly IEventAggregator? _localAggregator;
-    private readonly PersistentSessionListener _listener;
+    private readonly PersistentPortListener _listener;
     private readonly PersistentEventPublisher _publisher;
+    private readonly SessionManager _sessionManager;
 
+#if DEBUG
     internal IEventSerializer SerializerForTesting => _serializer;
-    internal PersistentSessionListener ListenerForTesting => _listener;
-    internal PersistentEventPublisher PublisherForTesting => _publisher;
+    internal PersistentPortListener ListenerForTesting => _listener;
+    internal PersistentEventPublisher PublisherForTesting => _publisher; 
+#endif
 
     public TCPEventTransport(
         int listenPort,
@@ -39,9 +42,25 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         _localAggregator?.RegisterEventType<PublishFailed>();
         _localAggregator?.SubscribeToEventType(new PublishFailedHandler());
 
-        _listener = new PersistentSessionListener(listenPort, sessionOptions, this);
+        _sessionManager = new SessionManager(listenPort, sessionOptions, _serializer, _localAggregator);
 
-        _publisher = new PersistentEventPublisher(_listener, sessionOptions, _localAggregator, serializer ?? new JsonEventSerializer());
+        _listener = new PersistentPortListener(listenPort, sessionOptions, this, _sessionManager);
+
+        _publisher = new PersistentEventPublisher(_listener, sessionOptions, _localAggregator, serializer ?? new JsonEventSerializer(), _sessionManager);
+        _listener.SessionJoined += async (s, e) =>
+        {
+            await _publisher?.OnNextAsync(new Sessions.Events.SessionJoined(s), CancellationToken.None)!;
+        };
+        _listener.SessionLeft += async (s, e) =>
+        {
+            await _publisher?.OnNextAsync(new Sessions.Events.SessionLeft(s), CancellationToken.None)!;
+        };
+        _listener.FrameReceived += OnListenerFrameReceived;
+    }
+
+    private Task OnListenerFrameReceived(SessionKey sessionKey, SessionFrame _, CancellationToken cancellationToken)
+    {
+        return _publisher.AcknowledgeFrameReceipt(sessionKey, cancellationToken);
     }
 
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
@@ -95,5 +114,10 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
     {
         await _publisher.DisposeAsync().ConfigureAwait(false);
         await _listener.DisposeAsync().ConfigureAwait(false);
+    }
+
+    public void AcknowledgeEventReceipt(Guid eventId, SessionKey sessionKey)
+    {
+        _publisher.EnqueueAck(eventId, sessionKey);
     }
 }
