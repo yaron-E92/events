@@ -12,5 +12,16 @@ internal interface IOutboundConnectionManager : IConnectionManager
     /// <param name="eventId"></param>
     /// <param name="eventEnvelopeJson"></param>
     void QueueEventBroadcast(Guid eventId, string eventEnvelopeJson);
+    Task<bool> TryReconnectAsync(SessionKey sessionKey, CancellationToken token);
     void SendAck(Guid eventId, SessionKey sessionKey);
+
+    /// <summary>
+    /// Triggered by the transport after it receieved the event that an ack was received.
+    /// Finds the correct session, and triggers its outbound connection's OnAckReceived
+    /// handler method
+    /// </summary>
+    /// <param name="eventId"></param>
+    /// <param name="sessionKey"></param>
+    /// <returns></returns>
+    Task OnAckReceived(Guid eventId, SessionKey sessionKey);
 }

@@ -14,6 +14,22 @@ internal interface IInboundConnectionManager : IConnectionManager
     event Func<IDomainEvent, SessionKey, Task> EventReceived;
 
     /// <summary>
+    /// The monitor loop triggers this event when an inbound session connection is stale.<br/>
+    /// This triggers the transport's <see cref="IEventTransport.SessionInboundConnectionDroppedHandler"/>
+    /// (through the listener), which handles the dropped connection appropriately using an attempted reconnect by the publisher,
+    /// </summary>
+    event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
+
+    /// <summary>
+    /// Triggered when the relevant session's inbound connection receives an Ack
+    /// for the event id Guid.<br/>
+    /// This triggers the Transport's event handler which triggers the publisher's
+    /// outbound connection manager Ack received handler method
+    /// </summary>
+    event Func<Guid, SessionKey, Task>? AckReceived;
+    event Func<SessionKey, Task>? PingReceived;
+
+    /// <summary>
     /// Handles an incoming transient connection by associating it with the appropriate
     /// session's <see cref="IInboundResilientConnection"/>, if possible.<br/>
     /// The transient connection is expected to send a session initiation auth frame.<br/>

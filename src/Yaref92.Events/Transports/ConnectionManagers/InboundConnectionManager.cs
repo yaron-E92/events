@@ -1,11 +1,9 @@
 ﻿using System.Collections.Concurrent;
-using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports.ConnectionManagers;
 
@@ -16,14 +14,12 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     private readonly CancellationTokenSource _cts = new();
 
     public SessionManager SessionManager { get; }
+    public event Func<Guid, SessionKey, Task>? AckReceived;
+    public event Func<SessionKey, Task>? PingReceived;
 
-    //public event Func<SessionKey, CancellationToken, Task>? SessionConnectionAccepted;
+    public event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
 
-    public event Func<SessionKey, CancellationToken, Task>? SessionLeft;
-
-    public event Func<SessionKey, SessionFrame, CancellationToken, Task>? FrameReceived;
-
-    public event Func<IDomainEvent, SessionKey, Task>? EventReceived;
+    private event Func<IDomainEvent, SessionKey, Task>? EventReceived;
 
     event Func<IDomainEvent, SessionKey, Task> IInboundConnectionManager.EventReceived 
     {

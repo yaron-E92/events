@@ -10,7 +10,7 @@ using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports.ConnectionManagers;
 
-internal sealed class OutboundConnectionManager : IOutboundConnectionManager
+internal sealed class OutboundConnectionManager(SessionManager sessionManager) : IOutboundConnectionManager
 {
     private readonly ResilientSessionOptions _options;
     //private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
@@ -26,13 +26,7 @@ internal sealed class OutboundConnectionManager : IOutboundConnectionManager
 
     public event Func<SessionKey, CancellationToken, Task>? SessionLeft;
 
-    public OutboundConnectionManager(ResilientSessionOptions? options = null, SessionManager sessionManager = null)
-    {
-        _options = options ?? new ResilientSessionOptions();
-        SessionManager = sessionManager;
-    }
-
-    public SessionManager SessionManager { get; }
+    public SessionManager SessionManager { get; } = sessionManager;
 
     public IOutboundResilientConnection GetOrCreateResilientConnection(
         SessionKey key,
@@ -370,10 +364,22 @@ internal sealed class OutboundConnectionManager : IOutboundConnectionManager
         return outboundConnection.InitAsync(cancellationToken);
     }
 
+    public async Task<bool> TryReconnectAsync(SessionKey sessionKey, CancellationToken token)
+    {
+        var outboundConnection = SessionManager.GetOrGenerate(sessionKey).OutboundConnection;
+        return await outboundConnection.RefreshConnectionAsync(token).ConfigureAwait(false);
+    }
+
     public void SendAck(Guid eventId, SessionKey sessionKey)
     {
         SessionManager.GetOrGenerate(sessionKey)
             .OutboundConnection
             .EnqueueFrame(SessionFrame.CreateAck(eventId));
+    }
+
+    public Task OnAckReceived(Guid eventId, SessionKey sessionKey)
+    {
+        SessionManager.GetOrGenerate(sessionKey).OutboundConnection.OnAckReceived(eventId);
+        return Task.CompletedTask;
     }
 }
