@@ -27,6 +27,10 @@ internal interface IInboundConnectionManager : IConnectionManager
     /// outbound connection manager Ack received handler method
     /// </summary>
     event Func<Guid, SessionKey, Task>? AckReceived;
+    /// <summary>
+    /// Triggered when the relevant session's inbound connection receives a Ping
+    /// Triggers the transport to send a pong back
+    /// </summary>
     event Func<SessionKey, Task>? PingReceived;
 
     /// <summary>
@@ -40,11 +44,4 @@ internal interface IInboundConnectionManager : IConnectionManager
     /// <param name="serverToken"></param>
     /// <returns>true if connected successfully, false otherwise</returns>
     Task<ConnectionInitializationResult> HandleIncomingTransientConnectionAsync(TcpClient incomingTransientConnection, CancellationToken serverToken);
-
-    /// <summary>
-    /// With the help of the SessionManager, ensures the session is managed,
-    /// and get or create its <see cref="IInboundResilientConnection"/>
-    /// </summary>
-    /// <param name="sessionKey"></param>
-    void RegisterIncomingSessionConnection(SessionKey sessionKey);
 }

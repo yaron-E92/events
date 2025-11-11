@@ -9,19 +9,17 @@ namespace Yaref92.Events.Transports;
 internal class SessionManager : ISessionManager
 {
     private readonly ResilientSessionOptions _options;
-    private readonly IEventAggregator? _localAggregator;
     private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
     private readonly ConcurrentDictionary<DnsEndPoint, Guid> _anonymousSessionIds = new();
     private readonly int _listenerPort;
 
-    public SessionManager(int listenPort, ResilientSessionOptions options, IEventAggregator? localAggregator)
+    public SessionManager(int listenPort, ResilientSessionOptions options)
     {
         if (options is null || !options.Validate())
         {
             options = new ResilientSessionOptions();
         }
         _options = options;
-        _localAggregator = localAggregator;
         _listenerPort = listenPort;
     }
 
@@ -63,7 +61,7 @@ internal class SessionManager : ISessionManager
     {
         IResilientPeerSession session =
             _sessions.GetOrAdd(sessionKey,
-                key => new ResilientPeerSession(key, _options, _localAggregator)
+                key => new ResilientPeerSession(key, _options)
                 {
                     IsAnonymous = isAnonymous,
                 });

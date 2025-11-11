@@ -1,5 +1,4 @@
-﻿using Yaref92.Events.Abstractions;
-using Yaref92.Events.Sessions;
+﻿using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Connections;
 
@@ -12,18 +11,16 @@ internal sealed partial class ResilientCompositSessionConnection : IAsyncDisposa
         Guid userId,
         string host,
         int port,
-        ResilientSessionOptions? options = null,
-        IEventAggregator? eventAggregator = null)
-        : this(new(userId, host, port), options, eventAggregator)
+        ResilientSessionOptions? options = null)
+        : this(new(userId, host, port), options)
     {
     }
 
     internal ResilientCompositSessionConnection(
         SessionKey sessionKey,
-        ResilientSessionOptions? options = null,
-        IEventAggregator? eventAggregator = null)
+        ResilientSessionOptions? options = null)
     {
-        OutboundConnection = new(options!, eventAggregator, sessionKey);
+        OutboundConnection = new(options!, sessionKey);
         InboundConnection = new ResilientInboundConnection(options!, sessionKey, OutboundConnection);
     }
 

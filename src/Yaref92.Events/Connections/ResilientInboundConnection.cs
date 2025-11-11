@@ -10,17 +10,16 @@ namespace Yaref92.Events.Connections;
 
 public class ResilientInboundConnection : IInboundResilientConnection
 {
-    private readonly string? _authenticationSecret;
     private readonly ResilientSessionOptions _options;
     private readonly object _runLock = new();
     private readonly string _sessionToken;
     private readonly SemaphoreSlim _stateLock = new(1, 1);
-    private readonly SemaphoreSlim _transientConnectionSemaphore = new(1, 1);
-    private CancellationTokenSource _cts = new();
+    private readonly SemaphoreSlim _transientConnectionAttachedSemaphore = new(0, 1);
+    private readonly CancellationTokenSource _cts = new();
     private CancellationTokenSource _incomingConnectionCts = new();
     private long _lastRemoteActivityTicks;
     private Task? _runInboundTask;
-    private TcpClient _transientConnection;
+    private TcpClient? _transientConnection;
     private Task _transientReceiveLoop = Task.CompletedTask;
 
     public ResilientInboundConnection(ResilientSessionOptions options, SessionKey sessionKey, ResilientOutboundConnection outboundConnection)
@@ -28,9 +27,8 @@ public class ResilientInboundConnection : IInboundResilientConnection
         _options = options!; // The SessionManager ensures options are valid
         SessionKey = sessionKey;
         OutboundConnection = outboundConnection;
-        _authenticationSecret = _options.AuthenticationToken;
         SessionKey = sessionKey;
-        _sessionToken = SessionFrameContract.CreateSessionToken(SessionKey, _options, _authenticationSecret);
+        _sessionToken = SessionFrameContract.CreateSessionToken(SessionKey, _options, _options.AuthenticationToken);
     }
 
     public bool IsPastTimeout => _lastRemoteActivityTicks < (DateTime.UtcNow - _options.HeartbeatTimeout).Ticks;
@@ -42,7 +40,6 @@ public class ResilientInboundConnection : IInboundResilientConnection
 
     public string SessionToken => _sessionToken;
 
-    internal event IResilientConnection.SessionConnectionEstablishedHandler? ConnectionEstablished;
     private event SessionFrameReceivedHandler? FrameReceived;
 
     event SessionFrameReceivedHandler? IInboundResilientConnection.FrameReceived
@@ -62,7 +59,7 @@ public class ResilientInboundConnection : IInboundResilientConnection
         await _incomingConnectionCts?.CancelAsync()!;
         _incomingConnectionCts = incomingConnectionCts;
         _transientConnection = transientConnection;
-        _transientConnectionSemaphore.Release();
+        _transientConnectionAttachedSemaphore.Release();
     }
 
     public static bool ShouldRecordRemoteActivity(SessionFrameKind kind) //touched
@@ -139,10 +136,9 @@ public class ResilientInboundConnection : IInboundResilientConnection
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            await _transientConnectionSemaphore.WaitAsync(cancellationToken);
+            await _transientConnectionAttachedSemaphore.WaitAsync(cancellationToken); // wait until there is a valid (meaning also non null) _transientConnection
             await _transientReceiveLoop;
-            _transientReceiveLoop = Task.Run(() => RunTransientConnectionReceiveLoopAsync(_transientConnection, _incomingConnectionCts.Token), _incomingConnectionCts.Token);
-            //_transientReceiveLoop.ContinueWith(SessionInboundConnectionDropped) // Figure out how to notify session left
+            _transientReceiveLoop = Task.Run(() => RunTransientConnectionReceiveLoopAsync(_transientConnection!, _incomingConnectionCts.Token), _incomingConnectionCts.Token);
         }
     }
 
@@ -169,7 +165,7 @@ public class ResilientInboundConnection : IInboundResilientConnection
 
             if (!result.IsSuccess || result.Frame is null)
             {
-                // TODO Log this
+                _ = Console.Error.WriteLineAsync("Frame read failed or resulted in null frame");
                 continue;
             }
 

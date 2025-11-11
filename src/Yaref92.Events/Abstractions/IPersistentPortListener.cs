@@ -31,7 +31,6 @@ internal interface IPersistentPortListener : IAsyncDisposable
     /// followed by session cleanup if reconnect attempts are exhausted.
     /// </summary>
     event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
-    event Func<SessionKey, SessionFrame, CancellationToken, Task>? FrameReceived;
 
     /// <summary>
     /// Starts the underlying <see cref="TcpListener"/> and start loops
@@ -48,11 +47,4 @@ internal interface IPersistentPortListener : IAsyncDisposable
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
     Task StopAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Register an incoming connection for the <paramref name="session"/> on the
-    /// <see cref="ConnectionManager"/>
-    /// </summary>
-    /// <param name="session"></param>
-    void RegisterIncomingSessionConnection(SessionKey sessionKey) => ConnectionManager.RegisterIncomingSessionConnection(sessionKey);
 }

@@ -4,11 +4,9 @@ using Yaref92.Events.Transports.ConnectionManagers;
 
 namespace Yaref92.Events.Transports;
 
-internal class PersistentEventPublisher(SessionManager sessionManager, IEventSerializer eventSerializer) : IPersistentFramePublisher
+internal class PersistentEventPublisher(SessionManager sessionManager) : IPersistentFramePublisher
 {
     public IOutboundConnectionManager ConnectionManager { get; } = new OutboundConnectionManager(sessionManager);
-
-    public IEventSerializer EventSerializer { get; } = eventSerializer;
 
     public ValueTask DisposeAsync()
     {

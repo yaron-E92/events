@@ -2,8 +2,6 @@
 using Microsoft.Extensions.Logging;
 using Yaref92.Events.Abstractions;
 using System.Collections.Immutable;
-using Yaref92.Events.Transports.Events;
-using Yaref92.Events.Transports.EventHandlers;
 
 namespace Yaref92.Events;
 

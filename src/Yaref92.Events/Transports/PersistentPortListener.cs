@@ -16,7 +16,6 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
         add => ConnectionManager.SessionInboundConnectionDropped += value;
         remove => ConnectionManager.SessionInboundConnectionDropped -= value;
     }
-    public event Func<SessionKey, SessionFrame, CancellationToken, Task>? FrameReceived;
 
     private TcpListener? _listener;
     private Task? _acceptLoop;

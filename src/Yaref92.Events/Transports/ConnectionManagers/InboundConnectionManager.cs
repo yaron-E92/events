@@ -10,7 +10,6 @@ namespace Yaref92.Events.Transports.ConnectionManagers;
 internal sealed partial class InboundConnectionManager : IInboundConnectionManager
 {
     private readonly ConcurrentDictionary<TcpClient, Task<bool>> _receiveFramesTasks = new();
-    private static readonly JsonSerializerOptions EventEnvelopeSerializerOptions = new(JsonSerializerDefaults.Web);
     private readonly CancellationTokenSource _cts = new();
 
     public SessionManager SessionManager { get; }
@@ -28,7 +27,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     }
 
     private readonly IEventSerializer _serializer; // To deserialize incoming event frames
-    private Task? _monitorConnectionsLoop;
+    private readonly Task? _monitorConnectionsLoop;
 
     public InboundConnectionManager(SessionManager sessionManager, IEventSerializer serializer)
     {
@@ -142,7 +141,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
                 await AckReceived?.Invoke(frame.Id, sessionKey)!;
                 break;
             case SessionFrameKind.Ping: // RESPOND WITH PONG USING Publisher/Transport
-                await PingReceived?.Invoke(sessionKey);
+                await PingReceived?.Invoke(sessionKey)!;
                 break;
             case SessionFrameKind.Pong: // Just touch the session, which already happened
                 break;
@@ -161,17 +160,12 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             return;
         }
         sessionWithValidAuthentication.Touch();
-        IDomainEvent? domainEvent = _serializer.Deserialize(frame.Payload).domainEvent;
+        IDomainEvent? domainEvent = _serializer.Deserialize(frame.Payload!).domainEvent;
 
         if (domainEvent is not null)
         {
             await EventReceived?.Invoke(domainEvent, sessionKey)!;
         }
-    }
-
-    public void RegisterIncomingSessionConnection(SessionKey sessionKey)
-    {
-        throw new NotImplementedException();
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)

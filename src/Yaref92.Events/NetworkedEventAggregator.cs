@@ -55,7 +55,6 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     {
         // Register locally and subscribe to network events of this type
         var registered = _localAggregator.RegisterEventType<T>();
-        _transport.Subscribe<T>();
         return registered;
     }
 

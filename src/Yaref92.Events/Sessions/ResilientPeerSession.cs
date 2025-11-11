@@ -34,10 +34,9 @@ internal sealed partial class ResilientPeerSession : IResilientPeerSession
     }
 
     public ResilientPeerSession(SessionKey sessionKey,
-        ResilientSessionOptions options,
-        IEventAggregator? eventAggregator)
+        ResilientSessionOptions options)
         : this(sessionKey,
-            new ResilientCompositSessionConnection(sessionKey, options, eventAggregator),
+            new ResilientCompositSessionConnection(sessionKey, options),
             options,
             null)
     {

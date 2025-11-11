@@ -1,5 +1,4 @@
-﻿using System;
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Yaref92.Events.Sessions;
@@ -25,7 +24,7 @@ public sealed class SessionFrame
     /// <summary>
     /// Session authentication token.
     /// Starts with "userId@host:port", followed by "||"
-    /// and either a Guif or secret if authentication is required.
+    /// and either a Guid or secret if authentication is required.
     /// </summary>
     [JsonPropertyName("token")]
     public string? Token { get; init; }

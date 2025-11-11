@@ -53,5 +53,5 @@ public interface IEventTransport
     /// Subscribes to events of a specific type received from the transport.
     /// </summary>
     /// <typeparam name="TEvent">The event type, must implement <see cref="IDomainEvent"/>.</typeparam>
-    void Subscribe<TEvent>() where TEvent : class, IDomainEvent;
+    //void Subscribe<TEvent>() where TEvent : class, IDomainEvent;
 }
