@@ -1,7 +1,8 @@
 ﻿
 using System.Globalization;
+using System.Net;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Sessions;
 
 public class SessionKey(Guid userId, string host, int port)
 {
@@ -90,4 +91,9 @@ public class SessionKey(Guid userId, string host, int port)
     }
 
     public override string? ToString() => $"{UserId}@{Host}:{Port}";
+
+    internal DnsEndPoint AsEndPoint()
+    {
+        return new DnsEndPoint(Host, Port);
+    }
 }

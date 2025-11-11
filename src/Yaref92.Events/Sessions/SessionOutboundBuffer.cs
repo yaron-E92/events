@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Sessions;
 
 public sealed class SessionOutboundBuffer : IDisposable
 {
@@ -22,7 +22,7 @@ public sealed class SessionOutboundBuffer : IDisposable
 
         ArgumentNullException.ThrowIfNull(payload);
 
-        var frame = SessionFrame.CreateMessage(messageId, payload);
+        var frame = SessionFrame.CreateEventFrame(messageId, payload);
         EnqueueFrame(frame);
     }
 

@@ -2,7 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Sessions;
 
 public enum SessionFrameKind
 {
@@ -50,7 +50,7 @@ public sealed class SessionFrame
         Id = messageId,
     };
 
-    public static SessionFrame CreateMessage(Guid messageId, string payload)
+    public static SessionFrame CreateEventFrame(Guid messageId, string payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
 

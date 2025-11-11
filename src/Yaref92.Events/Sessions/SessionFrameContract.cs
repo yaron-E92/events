@@ -1,6 +1,4 @@
-using Yaref92.Events.Sessions;
-
-namespace Yaref92.Events.Transports;
+﻿namespace Yaref92.Events.Sessions;
 
 internal static class SessionFrameContract
 {

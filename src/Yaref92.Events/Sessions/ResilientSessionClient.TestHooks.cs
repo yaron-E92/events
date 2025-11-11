@@ -1,11 +1,11 @@
 ﻿#if DEBUG
 namespace Yaref92.Events.Transports;
 
-public sealed partial class ResilientSessionClient
+public sealed partial class ResilientSessionConnection
 {
     internal void SetOutboxPathForTesting(string outboxPath)
     {
-        _outboxPath = outboxPath;
+        OutboxPath = outboxPath;
     }
 
     internal Task PersistOutboxForTestingAsync(CancellationToken cancellationToken)
