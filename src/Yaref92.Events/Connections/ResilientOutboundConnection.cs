@@ -6,8 +6,6 @@ using System.Text.Json;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Caching;
 using Yaref92.Events.Connections;
-using Yaref92.Events.Transports.ConnectionManagers;
-using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Sessions;
 
@@ -20,17 +18,13 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private static readonly JsonSerializerOptions OutboxSerializerOptions = new(JsonSerializerDefaults.Web);
     private readonly string _sessionToken;
 
-    private readonly ConcurrentQueue<SessionFrame> _controlQueue = new();
-
     private readonly Dictionary<Guid, OutboxEntry> _outboxEntries = [];
     private readonly SemaphoreSlim _reconnectGate;
 
     public SessionOutboundBuffer OutboundBuffer { get; }
 
     private readonly SemaphoreSlim _sendSignal = new(0, int.MaxValue);
-    private readonly ConcurrentQueue<SessionFrame> _eventQueue = new();
     private readonly ConcurrentDictionary<Guid, AcknowledgementState> _acknowledgedEventIds = new();
-    private readonly IEventAggregator? _eventAggregator;
     private readonly SemaphoreSlim _stateLock = new(1, 1);
     private CancellationTokenSource? _activeOutboundConnectionCts;
     private readonly CancellationTokenSource _cts = new();
@@ -44,14 +38,8 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private Task _sendLoop = Task.CompletedTask;
     private long _lastRemoteActivityTicks;
 
-    internal event Func<Guid, CancellationToken, Task<AcknowledgementState>> AckRequestedForEventSent;
-
     private readonly string? _authenticationSecret;
     private readonly object _runLock = new();
-
-    public ConcurrentQueue<SessionFrame> ControlQueue => _controlQueue;
-
-    public ConcurrentQueue<SessionFrame> EventQueue => _eventQueue;
 
     public DnsEndPoint RemoteEndPoint => new(SessionKey.Host, SessionKey.Port);
 
@@ -65,11 +53,10 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     internal event IResilientConnection.SessionConnectionEstablishedHandler? ConnectionEstablished;
 
-    public ResilientOutboundConnection(ResilientSessionOptions options, IEventAggregator? eventAggregator, SessionKey sessionKey)
+    public ResilientOutboundConnection(ResilientSessionOptions options, SessionKey sessionKey)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _lastRemoteActivityTicks = DateTime.UtcNow.Ticks;
-        _eventAggregator = eventAggregator;
         OutboxPath = Path.Combine(AppContext.BaseDirectory, OutboxFileName);
         SessionKey = sessionKey ?? throw new ArgumentNullException(nameof(sessionKey));
         _authenticationSecret = _options.AuthenticationToken;
@@ -167,6 +154,11 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             {
                 continue;
             }
+            if (FrameIsAcknowledgedEvent(frame))
+            {
+                // We do not want to save an acknowledged event to outbox
+                continue;
+            }
             await OutboxFileLock.WaitAsync();
             try
             {
@@ -181,25 +173,18 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         while (bufferHasFrames);
     }
 
+    private bool FrameIsAcknowledgedEvent(SessionFrame frame)
+    {
+        return frame is SessionFrame { Kind: SessionFrameKind.Event }
+                        && AcknowledgedEventIds.TryGetValue(frame.Id, out AcknowledgementState state)
+                        && state is AcknowledgementState.Acknowledged;
+    }
+
     public void EnqueueFrame(SessionFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
 
-        switch (frame.Kind)
-        {
-            case SessionFrameKind.Auth: // An auth frame is only sent immediately when connecting to remote endpoint, no queuing
-                break;
-            case SessionFrameKind.Ping:
-            case SessionFrameKind.Pong:
-            case SessionFrameKind.Ack:
-                ControlQueue.Enqueue(frame);
-                break;
-            case SessionFrameKind.Event:
-                EventQueue.Enqueue(frame);
-                break;
-            default:
-                break;
-        }
+        OutboundBuffer.EnqueueFrame(frame);
         _sendSignal.Release();
     }
 
@@ -211,6 +196,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         {
             removed = _outboxEntries.Remove(eventId);
             AcknowledgedEventIds[eventId] = AcknowledgementState.Acknowledged;
+            OutboundBuffer.TryAcknowledge(eventId);
         }
         finally
         {
@@ -352,43 +338,15 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         }
     }
 
-    private void NotifySendFailure(Exception exception)
-    {
-        Console.Error.WriteLine($"{nameof(ResilientCompositSessionConnection)} send failed for {RemoteEndPoint}: {exception}");
-
-        if (_eventAggregator is null)
-        {
-            return;
-        }
-
-        try
-        {
-            var publishFailed = new PublishFailed(RemoteEndPoint, exception);
-            var publishTask = _eventAggregator.PublishEventAsync(publishFailed);
-            publishTask.ContinueWith(t =>
-            {
-                if (t.IsFaulted && t.Exception is not null)
-                {
-                    Console.Error.WriteLine($"{nameof(ResilientCompositSessionConnection)} failed to publish {nameof(PublishFailed)}: {t.Exception.Flatten()}");
-                }
-            }, TaskContinuationOptions.ExecuteSynchronously);
-        }
-        catch (Exception aggregatorException)
-        {
-            Console.Error.WriteLine($"{nameof(ResilientCompositSessionConnection)} threw while publishing {nameof(PublishFailed)}: {aggregatorException}");
-        }
-    }
-
     private async Task PersistOutboxAsync(CancellationToken cancellationToken)
     {
         List<StoredOutboxEntry> snapshot;
         await _stateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            snapshot = _outboxEntries.Values
+            snapshot = [.. _outboxEntries.Values
                 .OrderBy(entry => entry.MessageId)
-                .Select(entry => new StoredOutboxEntry(entry.MessageId, entry.Payload))
-                .ToList();
+                .Select(entry => new StoredOutboxEntry(entry.MessageId, entry.Payload))];
         }
         finally
         {
@@ -441,15 +399,14 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         await _stateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            frames = _outboxEntries.Values
+            frames = [.. _outboxEntries.Values
                 .Where(entry => !entry.IsQueued)
                 .OrderBy(entry => entry.MessageId)
                 .Select(entry =>
                 {
                     entry.IsQueued = true;
                     return SessionFrame.CreateEventFrame(entry.MessageId, entry.Payload);
-                })
-                .ToList();
+                })];
         }
         finally
         {
@@ -458,7 +415,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
         foreach (var frame in frames)
         {
-            EventQueue.Enqueue(frame);
+            OutboundBuffer.EnqueueFrame(frame);
             _sendSignal.Release();
         }
     }
@@ -534,56 +491,6 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         }
     }
 
-    //private async Task RunConnectionOnceAsync(CancellationToken cancellationToken)
-    //{
-    //    using var client = new TcpClient();
-    //    ConfigureClient(client);
-    //    await client.ConnectAsync(SessionKey.Host, SessionKey.Port, cancellationToken).ConfigureAwait(false);
-
-    //    using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-    //    var connectionToken = connectionCts.Token;
-    //    Volatile.Write(ref _activeOutboundConnectionCts, connectionCts);
-    //    try
-    //    {
-    //        Volatile.Write(ref _lastRemoteActivityTicks, DateTime.UtcNow.Ticks);
-
-    //        SignalFirstConnectionSuccess();
-
-    //        await ReplayPendingEntriesAsync(connectionToken).ConfigureAwait(false);
-
-    //        var authFrame = SessionFrameContract.CreateAuthFrame(_sessionToken, _options, _authenticationSecret);
-    //        await WriteFrameAsync(client.GetStream(), authFrame, connectionToken).ConfigureAwait(false);
-
-    //        await RaiseConnectionEstablishedAsync(connectionToken).ConfigureAwait(false);
-
-    //        var sendTask = RunSendLoopAsync(client, connectionToken);
-    //        var heartbeatTask = RunHeartbeatLoopAsync(connectionToken);
-    //        var receiveTask = RunTransientConnectionReceiveLoopAsync(client, connectionToken);
-
-    //        var completed = await Task.WhenAny(sendTask, heartbeatTask, receiveTask).ConfigureAwait(false);
-    //        await connectionCts.CancelAsync().ConfigureAwait(false);
-
-    //        try
-    //        {
-    //            await Task.WhenAll(sendTask, heartbeatTask, receiveTask).ConfigureAwait(false);
-    //        }
-    //        catch (Exception ex) when (ex is IOException or SocketException)
-    //        {
-    //            if (!_cts.IsCancellationRequested)
-    //            {
-    //                throw;
-    //            }
-    //        }
-
-    //        ThrowIfConnectionFailed(completed);
-    //        ThrowIfSessionEndedUnexpectedly(cancellationToken);
-    //    }
-    //    finally
-    //    {
-    //        Volatile.Write(ref _activeOutboundConnectionCts, null);
-    //    }
-    //}
-
     private async Task RunSendLoopAsync(TcpClient client, CancellationToken cancellationToken)//touched
     {
         var stream = client.GetStream();
@@ -599,7 +506,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 await OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
                 continue;
             }
-            if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty && !TryMarkEventDequeued(frame.Id))
+            if (frame!.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty && !TryMarkEventDequeued(frame.Id))
             {
                 continue;
             }
@@ -607,7 +514,6 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             try
             {
                 await WriteFrameAsync(stream, frame, cancellationToken).ConfigureAwait(false);
-                RequestAckIfEventFrame(frame, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -615,10 +521,10 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             }
             catch (Exception ex) when (ex is IOException or SocketException)
             {
-                NotifySendFailure(ex);
                 if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
                 {
                     AcknowledgedEventIds[frame.Id] = AcknowledgementState.SendingFailed;
+                    OutboundBuffer.Return(frame);
                 }
                 await Console.Error.WriteLineAsync($"{nameof(ResilientOutboundConnection)} send loop error: {ex}").ConfigureAwait(false);
                 break;
@@ -628,37 +534,6 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         if (!client.Connected)
         {
             throw new TcpConnectionDisconnectedException();
-        }
-    }
-
-    private void RequestAckIfEventFrame(SessionFrame frame, CancellationToken cancellationToken)
-    {
-        if (frame is {Kind: SessionFrameKind.Event} eventFrame)
-        {
-            Task<AcknowledgementState> ackTask = AckRequestedForEventSent?.Invoke(eventFrame.Id, cancellationToken); // should cause the execution of InboundConnection.WaitForAck
-            _ = ackTask.ContinueWith(task =>
-            {
-                AcknowledgementState acknowledgementState = AcknowledgementState.None;
-
-                if (task.IsCompletedSuccessfully)
-                {
-                    acknowledgementState = task.Result;
-                }
-                _ = ProcessAcknowledgementState(acknowledgementState, eventFrame).ConfigureAwait(false);
-            }, TaskContinuationOptions.ExecuteSynchronously); 
-        }
-    }
-
-    private async Task ProcessAcknowledgementState(AcknowledgementState acknowledgementState, SessionFrame? frame)
-    {
-        if (acknowledgementState != AcknowledgementState.Acknowledged && frame is not null)
-        {
-            OutboundBuffer.Return(frame);
-            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} send loop did not receive ack for frame {frame}").ConfigureAwait(false);
-        }
-        else if (acknowledgementState == AcknowledgementState.Acknowledged && frame is {Kind: SessionFrameKind.Event} eventFrame)
-        {
-            OutboundBuffer.TryAcknowledge(eventFrame.Id);
         }
     }
 

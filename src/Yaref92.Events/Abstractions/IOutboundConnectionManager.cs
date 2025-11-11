@@ -4,6 +4,8 @@ namespace Yaref92.Events.Abstractions;
 
 internal interface IOutboundConnectionManager : IConnectionManager
 {
+    //event IOutboundResilientConnection.PublishFailedHandler PublishFailed;
+
     Task ConnectAsync(Guid userId, string host, int port, CancellationToken cancellationToken);
     Task ConnectAsync(SessionKey sessionKey, CancellationToken cancellationToken);
     /// <summary>
@@ -24,4 +26,12 @@ internal interface IOutboundConnectionManager : IConnectionManager
     /// <param name="sessionKey"></param>
     /// <returns></returns>
     Task OnAckReceived(Guid eventId, SessionKey sessionKey);
+
+    /// <summary>
+    /// Triggered by the transport after it is told a ping was received.
+    /// Sends a pong back using the <paramref name="sessionKey"/> to identify correct outbound connection
+    /// </summary>
+    /// <param name="sessionKey"></param>
+    /// <returns></returns>
+    void SendPong(SessionKey sessionKey);
 }

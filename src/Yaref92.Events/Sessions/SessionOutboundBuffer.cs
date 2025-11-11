@@ -2,25 +2,22 @@
 
 namespace Yaref92.Events.Sessions;
 
+/// <summary>
+/// In charge of the queueing of all outbound session frames.
+/// For event frames with non empty ids only, it keeps track of
+/// in flight events, and requeues them before dumping to outbox.
+/// null frames are not accepted, and therefore no null frame will ever be dequeued
+/// </summary>
 public sealed class SessionOutboundBuffer : IDisposable
 {
     private readonly ConcurrentQueue<SessionFrame> _frameQueue = new();
     private readonly ConcurrentDictionary<Guid, SessionFrame> _inflightEventFrames = new();
     private readonly SemaphoreSlim _signal = new(0);
 
-    public void EnqueueEvent(Guid eventId, string payload)
-    {
-        if (eventId == Guid.Empty)
-        {
-            throw new ArgumentException("A non-empty message identifier is required.", nameof(eventId));
-        }
-
-        ArgumentNullException.ThrowIfNull(payload);
-
-        var frame = SessionFrame.CreateEventFrame(eventId, payload);
-        EnqueueFrame(frame);
-    }
-
+    /// <summary>
+    /// Enqueues non null frames
+    /// </summary>
+    /// <param name="frame"></param>
     public void EnqueueFrame(SessionFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -29,9 +26,17 @@ public sealed class SessionOutboundBuffer : IDisposable
         _signal.Release();
     }
 
-    public bool TryDequeue(out SessionFrame frame)
+    /// <summary>
+    /// Tries to dequeue a frame.
+    /// A successfull result guarantess a non null frame
+    /// </summary>
+    /// <param name="frame"></param>
+    /// <returns>true if dequeue successfull and frame is not null, although the second is just
+    /// a precaution, since null frames are not accepted
+    /// </returns>
+    public bool TryDequeue(out SessionFrame? frame)
     {
-        if (_frameQueue.TryDequeue(out frame))
+        if (_frameQueue.TryDequeue(out frame) && frame is not null)
         {
             if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
             {

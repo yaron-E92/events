@@ -37,7 +37,7 @@ public sealed partial class ResilientOutboundConnection
     internal TimeSpan GetBackoffDelayForTesting(int attempt)
         => GetBackoffDelay(attempt);
 
-    internal void NotifySendFailureForTesting(Exception exception)
-        => NotifySendFailure(exception);
+    //internal void NotifySendFailureForTesting(Exception exception)
+    //    => NotifySendFailure(exception);
 }
 #endif

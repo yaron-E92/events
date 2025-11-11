@@ -9,16 +9,19 @@ internal interface IOutboundResilientConnection : IResilientConnection
 {
     DnsEndPoint RemoteEndPoint { get; }
     string OutboxPath { get; }
-    ConcurrentQueue<SessionFrame> ControlQueue { get; }
-    ConcurrentQueue<SessionFrame> EventQueue { get; }
     ConcurrentDictionary<Guid, AcknowledgementState> AcknowledgedEventIds { get; }
     SessionOutboundBuffer OutboundBuffer { get; }
 
     Task DumpBuffer();
-    //Task<Guid> EnqueueEventAsync(string payload, CancellationToken cancellationToken);
     void EnqueueFrame(SessionFrame frame);
 
     Task InitAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// When an ACK was received for this <paramref name="eventId"/>
+    /// remove event from outbox and add acknoledgement
+    /// </summary>
+    /// <param name="eventId"></param>
     void OnAckReceived(Guid eventId);
 
     /// <summary>
