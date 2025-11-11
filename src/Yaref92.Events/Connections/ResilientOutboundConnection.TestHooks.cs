@@ -1,7 +1,7 @@
 ﻿#if DEBUG
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Sessions;
 
-public sealed partial class ResilientSessionConnection
+public sealed partial class ResilientOutboundConnection
 {
     internal void SetOutboxPathForTesting(string outboxPath)
     {

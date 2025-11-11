@@ -11,8 +11,10 @@ internal interface IOutboundResilientConnection : IResilientConnection
     string OutboxPath { get; }
     ConcurrentQueue<SessionFrame> ControlQueue { get; }
     ConcurrentQueue<SessionFrame> EventQueue { get; }
+    ConcurrentDictionary<Guid, AcknowledgementState> AcknowledgedEventIds { get; }
+    SessionOutboundBuffer OutboundBuffer { get; }
 
-    Task DumpBuffer(SessionOutboundBuffer outboundBuffer);
+    Task DumpBuffer();
     //Task<Guid> EnqueueEventAsync(string payload, CancellationToken cancellationToken);
     void EnqueueFrame(SessionFrame frame);
 

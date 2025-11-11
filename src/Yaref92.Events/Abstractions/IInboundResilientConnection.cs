@@ -44,4 +44,5 @@ internal interface IInboundResilientConnection : IResilientConnection
     /// When a new transient connection is attached, the receive loop starts processing frames from it.
     /// </remarks>
     Task AttachTransientConnection(TcpClient transientConnection, CancellationTokenSource incomingConnectionCts);
+    void RecordRemoteActivity();
 }

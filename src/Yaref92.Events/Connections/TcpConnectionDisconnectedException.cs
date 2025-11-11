@@ -1,7 +1,7 @@
-﻿namespace Yaref92.Events.Sessions;
+﻿namespace Yaref92.Events.Connections;
 
 [Serializable]
-internal class TcpConnectionDisconnectedException : Exception
+public class TcpConnectionDisconnectedException : Exception
 {
     public TcpConnectionDisconnectedException()
     {
