@@ -25,8 +25,8 @@ public class TCPEventTransportTests
         var tcsA = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         var tcsB = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await using var transportA = new TCPEventTransport(portA, eventAggregator: aggregatorA);
-        await using var transportB = new TCPEventTransport(portB, eventAggregator: aggregatorB);
+        await using var transportA = new TCPEventTransport(portA);
+        await using var transportB = new TCPEventTransport(portB);
 
         using NetworkedEventAggregator networkedEventAggregatorA = new(aggregatorA, transportA);
         networkedEventAggregatorA.RegisterEventType<DummyEvent>();

@@ -27,7 +27,7 @@ public class TCPEventTransportUnitTests
     {
         // Arrange
         var aggregator = new FakeEventAggregator();
-        await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
+        await using var transport = new TCPEventTransport(0);
         transport.Subscribe<DummyEvent>();
 
         // Act
@@ -97,7 +97,7 @@ public class TCPEventTransportUnitTests
     public async Task ConnectAsync_WithProvidedUserId_ReusesExistingSession()
     {
         var aggregator = new FakeEventAggregator();
-        await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
+        await using var transport = new TCPEventTransport(0);
         var sessions = GetPersistentSessionsDictionary(transport);
 
         var tempDirectory = CreateTempDirectory();
@@ -150,12 +150,11 @@ public class TCPEventTransportUnitTests
     {
         // Arrange
         var aggregator = new FakeEventAggregator();
-        await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
+        await using var transport = new TCPEventTransport(0);
         var session = new ResilientCompositSessionConnection(
             Guid.NewGuid(),
             "localhost",
-            12345,
-            eventAggregator: aggregator);
+            12345);
         var exception = new IOException("boom");
 
         // Act
@@ -174,7 +173,7 @@ public class TCPEventTransportUnitTests
     {
         // Arrange
         var aggregator = new FakeEventAggregator();
-        await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
+        await using var transport = new TCPEventTransport(0);
         transport.Subscribe<MessageReceived>();
 
         // Act

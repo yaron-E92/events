@@ -264,7 +264,7 @@ public class ResilientSessionIntegrationTests
         fallbackKey.Port.Should().Be(sessionKey.Port);
 
         var listener = new PersistentPortListener(GetFreeTcpPort(), new ResilientSessionOptions(), new NoopEventTransport());
-        await using var publisher = new PersistentEventPublisher(listener, new ResilientSessionOptions(), null, new NoopEventSerializer());
+        await using var publisher = new PersistentEventPublisher(listener, null, new NoopEventSerializer());
 
         Func<Task> act = () => publisher.OnNextAsync(new SessionJoined(sessionKey), CancellationToken.None);
         await act.Should().NotThrowAsync<ArgumentException>();
