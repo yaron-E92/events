@@ -11,6 +11,7 @@ using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Sessions.Events;
 using Yaref92.Events.Transports;
+using Yaref92.Events.Transports.ConnectionManagers;
 
 namespace Yaref92.Events.IntegrationTests;
 
@@ -32,7 +33,7 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new PersistentInboundSession(port, options);
+        await using var server = new InboundConnectionManager(options);
         var deliveries = new List<string>();
         var firstDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -91,7 +92,7 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new PersistentInboundSession(port, options);
+        await using var server = new InboundConnectionManager(options);
         await server.StartAsync().ConfigureAwait(false);
 
         await using var peerA = new TestPersistentClientHost("127.0.0.1", port, options);
@@ -129,7 +130,7 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new PersistentInboundSession(port, options);
+        await using var server = new InboundConnectionManager(options);
 
         var sessionKeyTcs = new TaskCompletionSource<SessionKey>(TaskCreationOptions.RunContinuationsAsynchronously);
         var frameTcs = new TaskCompletionSource<SessionFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -170,7 +171,7 @@ public class ResilientSessionIntegrationTests
         clientHost.AcknowledgedMessageIds.Should().ContainSingle(id => id == messageId);
     }
 
-    private static async Task WaitForServerInflightToDrainAsync(PersistentInboundSession server, TimeSpan timeout)
+    private static async Task WaitForServerInflightToDrainAsync(InboundConnectionManager server, TimeSpan timeout)
     {
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < timeout)
@@ -184,7 +185,7 @@ public class ResilientSessionIntegrationTests
                     continue;
                 }
 
-                var outboundProperty = sessionState.GetType().GetProperty("Outbound", BindingFlags.Instance | BindingFlags.Public);
+                var outboundProperty = sessionState.GetType().GetProperty("OutboundBuffer", BindingFlags.Instance | BindingFlags.Public);
                 if (outboundProperty is null)
                 {
                     continue;
@@ -232,37 +233,36 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new PersistentInboundSession(port, options);
+        await using var server = new InboundConnectionManager(options);
         await server.StartAsync().ConfigureAwait(false);
 
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port).ConfigureAwait(false);
 
         var stream = client.GetStream();
-        var anonymousFrame = SessionFrame.CreateMessage(Guid.NewGuid(), "anonymous-payload");
+        var anonymousFrame = SessionFrame.CreateEventFrame(Guid.NewGuid(), "anonymous-payload");
         await SendFrameAsync(stream, anonymousFrame, CancellationToken.None).ConfigureAwait(false);
 
         await WaitForAuthenticatedSessionsAsync(server, 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
-        var sessions = server.Sessions;
+        ConcurrentDictionary<SessionKey, SessionState> sessions = server.Sessions;
         sessions.Should().HaveCount(1);
         var sessionEntry = sessions.Single();
         sessionEntry.Value.Should().NotBeNull();
         sessionEntry.Value.HasAuthenticated.Should().BeTrue();
 
-        var sessionKey = sessionEntry.Key;
+        SessionKey sessionKey = sessionEntry.Key;
         sessionKey.UserId.Should().NotBe(Guid.Empty);
         sessionKey.Host.Should().NotBeNullOrWhiteSpace();
         sessionKey.Port.Should().BeGreaterThan(0);
 
-        var fallbackFactory = typeof(PersistentInboundSession).GetMethod("CreateFallbackSessionKey", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var remoteEndPoint = (IPEndPoint) client.Client.RemoteEndPoint!;
-        var fallbackKey = (SessionKey) fallbackFactory.Invoke(server, [new IPEndPoint(remoteEndPoint.Address, remoteEndPoint.Port)])!;
+        SessionKey fallbackKey = server.CreateFallbackSessionKey(new IPEndPoint(remoteEndPoint.Address, remoteEndPoint.Port));
         fallbackKey.UserId.Should().Be(sessionKey.UserId);
         fallbackKey.Host.Should().Be(sessionKey.Host);
         fallbackKey.Port.Should().Be(sessionKey.Port);
 
-        var listener = new PersistentSessionListener(GetFreeTcpPort(), new ResilientSessionOptions(), new NoopEventTransport());
+        var listener = new PersistentPortListener(GetFreeTcpPort(), new ResilientSessionOptions(), new NoopEventTransport());
         await using var publisher = new PersistentEventPublisher(listener, new ResilientSessionOptions(), null, new NoopEventSerializer());
 
         Func<Task> act = () => publisher.OnNextAsync(new SessionJoined(sessionKey), CancellationToken.None);
@@ -277,7 +277,7 @@ public class ResilientSessionIntegrationTests
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task WaitForAuthenticatedSessionsAsync(PersistentInboundSession server, int expectedCount, TimeSpan timeout)
+    private static async Task WaitForAuthenticatedSessionsAsync(InboundConnectionManager server, int expectedCount, TimeSpan timeout)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedCount);
 
@@ -358,13 +358,13 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     public TestPersistentClientHost(string host, int port, ResilientSessionOptions options)
     {
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
-        Client = new ResilientSessionClient(Guid.NewGuid(), host, port, options);
+        Client = new ResilientSessionConnection(Guid.NewGuid(), host, port, options);
         SetOutboxPath(Client, _outboxPath);
         Client.ConnectionEstablished += OnConnectionEstablishedAsync;
         Client.FrameReceived += OnFrameReceivedAsync;
     }
 
-    public ResilientSessionClient Client { get; }
+    public ResilientSessionConnection Client { get; }
 
     public IReadOnlyCollection<string> ReceivedPayloads => _payloads.ToArray();
 
@@ -501,14 +501,14 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private ValueTask OnConnectionEstablishedAsync(ResilientSessionClient session, CancellationToken cancellationToken)
+    private ValueTask OnConnectionEstablishedAsync(ResilientSessionConnection session, CancellationToken cancellationToken)
     {
         var connections = Interlocked.Increment(ref _connectionCount);
         NotifyWaiters(_connectionWaiters, connections);
         return ValueTask.CompletedTask;
     }
 
-    private async ValueTask OnFrameReceivedAsync(ResilientSessionClient session, SessionFrame frame, CancellationToken cancellationToken)
+    private async ValueTask OnFrameReceivedAsync(ResilientSessionConnection session, SessionFrame frame, CancellationToken cancellationToken)
     {
         switch (frame.Kind)
         {
@@ -522,7 +522,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
                     break;
                 }
 
-                session.EnqueueControlMessage(SessionFrame.CreateAck(frame.Id));
+                session.EnqueueFrame(SessionFrame.CreateAck(frame.Id));
                 break;
             case SessionFrameKind.Ack when frame.Id != Guid.Empty:
                 if (Interlocked.Exchange(ref _dropAckFlag, 0) == 1)
@@ -543,7 +543,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     private IReadOnlyCollection<Guid> GetOutboxEntries()
     {
-        var entriesField = typeof(ResilientSessionClient).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var entriesField = typeof(ResilientSessionConnection).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var entries = (System.Collections.IDictionary) entriesField.GetValue(Client)!;
         var keys = new List<Guid>();
         foreach (var key in entries.Keys)
@@ -557,9 +557,9 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         return keys;
     }
 
-    private static void SetOutboxPath(ResilientSessionClient client, string path)
+    private static void SetOutboxPath(ResilientSessionConnection client, string path)
     {
-        var field = typeof(ResilientSessionClient).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var field = typeof(ResilientSessionConnection).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
         field.SetValue(client, path);
     }
 

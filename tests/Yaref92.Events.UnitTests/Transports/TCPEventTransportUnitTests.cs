@@ -64,15 +64,15 @@ public class TCPEventTransportUnitTests
     {
         // Arrange
         await using var transport = new TCPEventTransport(0);
-        ConcurrentDictionary<string, ResilientSessionClient> sessions = GetPersistentSessionsDictionary(transport);
+        ConcurrentDictionary<string, ResilientSessionConnection> sessions = GetPersistentSessionsDictionary(transport);
 
         var tempDirectory = CreateTempDirectory();
         try
         {
             var sessionA = CreateSession(tempDirectory);
             var sessionB = CreateSession(tempDirectory);
-            sessions.TryAdd(sessionA.SessionKey, sessionA);
-            sessions.TryAdd(sessionB.SessionKey, sessionB);
+            sessions.TryAdd(sessionA.Key, sessionA);
+            sessions.TryAdd(sessionB.Key, sessionB);
 
             // Act
             await transport.PublishAsync(new DummyEvent()).ConfigureAwait(false);
@@ -122,13 +122,13 @@ public class TCPEventTransportUnitTests
     public async Task PublishAsync_WhenPersistentSessionThrows_PropagatesException()
     {
         await using var transport = new TCPEventTransport(0);
-        ConcurrentDictionary<string, ResilientSessionClient> sessions = GetPersistentSessionsDictionary(transport);
+        ConcurrentDictionary<string, ResilientSessionConnection> sessions = GetPersistentSessionsDictionary(transport);
 
         var tempDirectory = CreateTempDirectory();
         try
         {
             var session = CreateSession(tempDirectory);
-            var sessionKey = session.SessionKey;
+            var sessionKey = session.Key;
             sessions.TryAdd(sessionKey, session);
             await session.DisposeAsync().ConfigureAwait(false);
             transport.ConnectToPeerAsync("localhost", 12345).Wait();
@@ -150,7 +150,7 @@ public class TCPEventTransportUnitTests
         // Arrange
         var aggregator = new FakeEventAggregator();
         await using var transport = new TCPEventTransport(0, eventAggregator: aggregator);
-        var session = new ResilientSessionClient(
+        var session = new ResilientSessionConnection(
             Guid.NewGuid(),
             "localhost",
             12345,
@@ -195,7 +195,7 @@ public class TCPEventTransportUnitTests
     private static TestPeerSession CreateSession(string tempDirectory, SessionKey? sessionKey = null)
     {
         var key = sessionKey ?? new SessionKey(Guid.NewGuid(), "localhost", 12345);
-        var client = new ResilientSessionClient(key, new ResilientSessionOptions());
+        var client = new ResilientSessionConnection(key, new ResilientSessionOptions());
         var path = Path.Combine(tempDirectory, $"outbox-{Guid.NewGuid():N}.json");
         ResilientSessionClientTestHelper.OverrideOutboxPath(client, path);
         return new TestPeerSession(key, client);
@@ -243,19 +243,19 @@ public class TCPEventTransportUnitTests
 
     private sealed class TestPeerSession : IResilientPeerSession
     {
-        private readonly ResilientSessionClient _client;
+        private readonly ResilientSessionConnection _client;
 
-        public TestPeerSession(SessionKey sessionKey, ResilientSessionClient client)
+        public TestPeerSession(SessionKey sessionKey, ResilientSessionConnection client)
         {
-            SessionKey = sessionKey;
+            Key = sessionKey;
             _client = client;
         }
 
-        public SessionKey SessionKey { get; }
+        public SessionKey Key { get; }
 
         public string SessionToken => _client.SessionToken;
 
-        public ResilientSessionClient PersistentClient => _client;
+        public ResilientSessionConnection PersistentClient => _client;
 
         public int StartInvocationCount { get; private set; }
 

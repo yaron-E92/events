@@ -1,6 +1,4 @@
-﻿using Yaref92.Events.Transports;
-
-namespace Yaref92.Events.Sessions.Events;
+﻿namespace Yaref92.Events.Sessions.Events;
 
 public class SessionLeft : DomainEventBase
 {

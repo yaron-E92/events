@@ -29,7 +29,7 @@ public class ResilientSessionClientTests
             Guid secondId;
 
             Guid userId = Guid.NewGuid();
-            await using (var writer = new ResilientSessionClient(userId, "localhost", 12345))
+            await using (var writer = new ResilientSessionConnection(userId, "localhost", 12345))
             {
                 ResilientSessionClientTestHelper.OverrideOutboxPath(writer, outboxPath);
                 firstId = await writer.EnqueueEventAsync("first", CancellationToken.None).ConfigureAwait(false);
@@ -37,7 +37,7 @@ public class ResilientSessionClientTests
                 await ResilientSessionClientTestHelper.PersistOutboxAsync(writer, CancellationToken.None).ConfigureAwait(false);
             }
 
-            await using var reader = new ResilientSessionClient(userId, "localhost", 12345);
+            await using var reader = new ResilientSessionConnection(userId, "localhost", 12345);
             ResilientSessionClientTestHelper.OverrideOutboxPath(reader, outboxPath);
             await ResilientSessionClientTestHelper.LoadOutboxAsync(reader, CancellationToken.None).ConfigureAwait(false);
 
@@ -57,7 +57,7 @@ public class ResilientSessionClientTests
     [Test]
     public async Task HeartbeatLoop_Throws_When_Remote_Is_Inactive()
     {
-        await using var client = new ResilientSessionClient(
+        await using var client = new ResilientSessionConnection(
             "localhost",
             12345,
             (_, _, _) => ValueTask.CompletedTask,
@@ -76,7 +76,7 @@ public class ResilientSessionClientTests
     [Test]
     public async Task BackoffDelay_GrowsExponentially_And_Respects_Maximum()
     {
-        await using var client = new ResilientSessionClient(
+        await using var client = new ResilientSessionConnection(
             "localhost",
             12345,
             (_, _, _) => ValueTask.CompletedTask,
@@ -98,42 +98,42 @@ public class ResilientSessionClientTests
 
 internal static class ResilientSessionClientTestHelper
 {
-    public static void OverrideOutboxPath(ResilientSessionClient client, string path)
+    public static void OverrideOutboxPath(ResilientSessionConnection client, string path)
     {
         client.SetOutboxPathForTesting(path);
     }
 
-    public static Task PersistOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)
+    public static Task PersistOutboxAsync(ResilientSessionConnection client, CancellationToken cancellationToken)
     {
         return client.PersistOutboxForTestingAsync(cancellationToken);
     }
 
-    public static Task LoadOutboxAsync(ResilientSessionClient client, CancellationToken cancellationToken)
+    public static Task LoadOutboxAsync(ResilientSessionConnection client, CancellationToken cancellationToken)
     {
         return client.LoadOutboxForTestingAsync(cancellationToken);
     }
 
-    public static Dictionary<Guid, string> GetOutboxSnapshot(ResilientSessionClient client)
+    public static Dictionary<Guid, string> GetOutboxSnapshot(ResilientSessionConnection client)
     {
         return new Dictionary<Guid, string>(client.GetOutboxSnapshotForTesting());
     }
 
-    public static void SetLastRemoteActivity(ResilientSessionClient client, DateTime timestamp)
+    public static void SetLastRemoteActivity(ResilientSessionConnection client, DateTime timestamp)
     {
         client.SetLastRemoteActivityForTesting(timestamp);
     }
 
-    public static Task RunHeartbeatLoopAsync(ResilientSessionClient client, CancellationToken cancellationToken)
+    public static Task RunHeartbeatLoopAsync(ResilientSessionConnection client, CancellationToken cancellationToken)
     {
         return client.RunHeartbeatLoopForTestingAsync(cancellationToken);
     }
 
-    public static TimeSpan GetBackoffDelay(ResilientSessionClient client, int attempt)
+    public static TimeSpan GetBackoffDelay(ResilientSessionConnection client, int attempt)
     {
         return client.GetBackoffDelayForTesting(attempt);
     }
 
-    public static void NotifySendFailure(ResilientSessionClient client, Exception exception)
+    public static void NotifySendFailure(ResilientSessionConnection client, Exception exception)
     {
         client.NotifySendFailureForTesting(exception);
     }

@@ -3,15 +3,6 @@ using Yaref92.Events.Transports.Events;
 
 namespace Yaref92.Events.Transports.EventHandlers;
 
-/// <summary>
-/// Default asynchronous handler for <see cref="EventReceived"/> events.
-/// </summary>
-/// <remarks>
-/// Initializes a new instance of the <see cref="PublishFailedHandler"/> class.
-/// </remarks>
-/// <param name="parentTransport">
-/// <see cref="IEventTransport"/> used to propogate received events by doing the listener.
-/// </param>
 public interface IEventReceivedHandler
 {
     /// <summary>
