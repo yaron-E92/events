@@ -91,7 +91,13 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
     // Invokes the transports EventReceived so the aggregator can react
     private async Task OnEventReceived(IDomainEvent domainEvent, SessionKey sessionKey)
     {
-        bool eventReceievedSuccessfully = await EventReceived?.Invoke(domainEvent)!;
+        var handler = EventReceived;
+        if (handler is null)
+        {
+            return;
+        }
+
+        bool eventReceievedSuccessfully = await handler(domainEvent).ConfigureAwait(false);
         if (eventReceievedSuccessfully)
         {
             _publisher.AcknowledgeEventReceipt(domainEvent.EventId, sessionKey);
