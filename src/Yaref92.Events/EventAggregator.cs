@@ -360,7 +360,8 @@ public class EventAggregator : IEventAggregator
     /// </example>
     public virtual void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
     {
-        ValidateEventOrNestedEventRegistration<T>(subscriber);
+        //ValidateEventOrNestedEventRegistration<T>(subscriber);
+        ValidateEventRegistration<T>();
         SubscribeSubscriber<T>(subscriber);
     }
 
@@ -377,21 +378,22 @@ public class EventAggregator : IEventAggregator
     /// </remarks>
     public virtual void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
     {
-        ValidateEventOrNestedEventRegistration<T>(subscriber);
+        //ValidateEventOrNestedEventRegistration<T>(subscriber);
+        ValidateEventRegistration<T>();
         SubscribeSubscriber<T>(subscriber);
     }
 
-    private void ValidateEventOrNestedEventRegistration<T>(IEventHandler subscriber) where T : class, IDomainEvent
-    {
-        if (typeof(T).Name.Contains(nameof(EventReceived)))
-        {
-            ValidateEventRegistration((subscriber as IEventReceivedHandler)!.InnerEventType);
-        }
-        else
-        {
-            ValidateEventRegistration<T>();
-        }
-    }
+    //private void ValidateEventOrNestedEventRegistration<T>(IEventHandler subscriber) where T : class, IDomainEvent
+    //{
+    //    if (typeof(T).Name.Contains(nameof(EventReceived)))
+    //    {
+    //        ValidateEventRegistration((subscriber as IEventReceivedHandler)!.InnerEventType);
+    //    }
+    //    else
+    //    {
+    //        ValidateEventRegistration<T>();
+    //    }
+    //}
 
     /// <summary>
     /// Adds a subscriber (sync or async) to the internal subscriber dictionary for the event type.

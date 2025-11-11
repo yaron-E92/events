@@ -9,20 +9,18 @@ namespace Yaref92.Events.Transports;
 internal class SessionManager : ISessionManager
 {
     private readonly ResilientSessionOptions _options;
-    private readonly IEventSerializer _serializer;
     private readonly IEventAggregator? _localAggregator;
     private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
     private readonly ConcurrentDictionary<DnsEndPoint, Guid> _anonymousSessionIds = new();
     private readonly int _listenerPort;
 
-    public SessionManager(int listenPort, ResilientSessionOptions options, IEventSerializer serializer, IEventAggregator? localAggregator)
+    public SessionManager(int listenPort, ResilientSessionOptions options, IEventAggregator? localAggregator)
     {
         if (options is null || !options.Validate())
         {
             options = new ResilientSessionOptions();
         }
         _options = options;
-        _serializer = serializer;
         _localAggregator = localAggregator;
         _listenerPort = listenPort;
     }
@@ -65,29 +63,12 @@ internal class SessionManager : ISessionManager
     {
         IResilientPeerSession session =
             _sessions.GetOrAdd(sessionKey,
-                key => new ResilientPeerSession(key, _options, _localAggregator, _serializer)
+                key => new ResilientPeerSession(key, _options, _localAggregator)
                 {
                     IsAnonymous = isAnonymous,
                 });
         return session;
     }
-
-    //internal SessionKey CreateFallbackSessionKey(EndPoint? remoteEndpoint)
-    //{
-    //    remoteEndpoint ??= new DnsEndPoint(IPAddress.Any.ToString(), _listenerPort);
-    //    Guid identifier;
-    //    if (remoteEndpoint is DnsEndPoint dnsEndPoint)
-    //    {
-    //        identifier = _anonymousSessionIds.GetOrAdd(dnsEndPoint, static _ => Guid.NewGuid());
-    //        return new SessionKey(identifier, dnsEndPoint.Host, dnsEndPoint.Port);
-    //    }
-
-    //    var fallbackHost = FallbackHost(remoteEndpoint);
-    //    var fallbackPort = FallbackPort(remoteEndpoint);
-
-    //    identifier = _anonymousSessionIds.GetOrAdd(new DnsEndPoint(fallbackHost, fallbackPort), static _ => Guid.NewGuid());
-    //    return new SessionKey(identifier, fallbackHost, fallbackPort);
-    //}
 
     internal void HydrateAnonymousSessionId(SessionKey sessionKey, EndPoint? remoteEndPoint)
     {

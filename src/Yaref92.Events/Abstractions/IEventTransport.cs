@@ -38,7 +38,7 @@ public interface IEventTransport
     /// <typeparam name="T">The event type, must implement <see cref="IDomainEvent"/>.</typeparam>
     /// <returns>A task representing the asynchronous operation.</returns>
     /// <remarks>Should be the Persistent's listener's responsibility</remarks>
-    Task AcceptIncomingEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent;
+    //Task AcceptIncomingEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent;
 
     /// <summary>
     /// Publishes an event asynchronously to the transport.

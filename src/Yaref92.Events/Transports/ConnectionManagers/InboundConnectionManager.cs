@@ -95,11 +95,11 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     }
 
     private async Task<ConnectionInitializationResult> InitializeConnectionAsync(
-        TcpClient transientConnection,
+        TcpClient transientIncomingConnection,
         byte[] lengthBuffer,
         CancellationToken serverToken)
     {
-        NetworkStream stream = transientConnection.GetStream();
+        NetworkStream stream = transientIncomingConnection.GetStream();
         var authFrameResult = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, serverToken).ConfigureAwait(false);
         if (!authFrameResult.IsSuccess)
         {
@@ -110,7 +110,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         IResilientPeerSession session;
         try
         {
-            session = SessionManager.ResolveSession(transientConnection.Client.RemoteEndPoint, authFrame);
+            session = SessionManager.ResolveSession(transientIncomingConnection.Client.RemoteEndPoint, authFrame);
         }
         catch (System.Security.Authentication.AuthenticationException)
         {
@@ -125,7 +125,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         session.FrameReceived += OnFrameReceivedAsync; // When the InboundConnection of the session receives a frame, we need to hook into the frame received event
 
         var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-        await session.InboundConnection.AttachTransientConnection(transientConnection, connectionCts).ConfigureAwait(false);
+        await session.InboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
 
         return ConnectionInitializationResult.Success(session, connectionCts);
     }
@@ -156,7 +156,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
                       .FirstOrDefault(session => session.Key == sessionKey);
         if (sessionWithValidAuthentication == null)
         {
-            // Session is not authenticated or valid anonymous,
+            // TODO UNAUTHMSG Session is not authenticated or valid anonymous,
             // log, ignore the event, and inform the sender if necessary
             return;
         }

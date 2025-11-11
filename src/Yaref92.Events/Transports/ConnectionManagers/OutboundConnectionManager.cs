@@ -11,63 +11,31 @@ namespace Yaref92.Events.Transports.ConnectionManagers;
 
 internal sealed class OutboundConnectionManager(SessionManager sessionManager) : IOutboundConnectionManager
 {
-    private readonly ConcurrentDictionary<TcpClient, Task> _heartbeatTasks = new();
-    private ConcurrentDictionary<TcpClient, Task> _sendTasks = new();
+    //private readonly ConcurrentDictionary<TcpClient, Task> _heartbeatTasks = new();
+    //private readonly ConcurrentDictionary<TcpClient, Task> _sendTasks = new();
 
-    private readonly ConcurrentDictionary<SessionKey, IOutboundResilientConnection> _pendingPersistentClients = new();
     private readonly CancellationTokenSource _cts = new();
 
-    public event Func<SessionKey, CancellationToken, Task>? SessionJoined;
-
-    public event Func<SessionKey, CancellationToken, Task>? SessionLeft;
-
     public SessionManager SessionManager { get; } = sessionManager;
-
-    public IOutboundResilientConnection GetOrCreateResilientConnection(
-        SessionKey key,
-        Func<SessionKey, ResilientSessionConnection> clientFactory)
-    {
-        ArgumentNullException.ThrowIfNull(key);
-        ArgumentNullException.ThrowIfNull(clientFactory);
-
-        IResilientPeerSession session = SessionManager.GetOrGenerate(key);
-
-        if (session.OutboundConnection is { } existingClient)
-        {
-            return existingClient;
-        }
-
-        var connection = session.OutboundConnection ?? _pendingPersistentClients.GetOrAdd(key, static (sessionKey, factory) =>
-        {
-            var created = factory(sessionKey);
-            ArgumentNullException.ThrowIfNull(created);
-            return created;
-        }, clientFactory);
-
-        session.AttachResilientConnection((ResilientSessionConnection) connection);
-
-        return connection;
-    }
 
     public void QueueEventBroadcast(Guid eventId, string eventEnvelopeJson)
     {
         ArgumentNullException.ThrowIfNull(eventEnvelopeJson);
 
-        foreach (IResilientPeerSession session in SessionManager.AuthenticatedSessions)
+        foreach (IOutboundResilientConnection? connection in SessionManager.AuthenticatedSessions
+                                                                           .Concat(SessionManager.ValidAnonymousSessions)
+                                                                           .DistinctBy(session => session.Key)
+                                                                           .Select(session => session.OutboundConnection))
         {
-            session.OutboundConnection.EnqueueFrame(SessionFrame.CreateEventFrame(eventId, eventEnvelopeJson));
+            connection.EnqueueFrame(SessionFrame.CreateEventFrame(eventId, eventEnvelopeJson));
         }
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken = default)
+    public async Task StopAsync()
     {
         await _cts.CancelAsync().ConfigureAwait(false);
 
-        var tasks = _heartbeatTasks.Values.ToArray();
-        await Task.WhenAll(tasks)
-            .WaitAsync(cancellationToken).ConfigureAwait(false);
-
-        foreach (var outboundConnection in SessionManager.AuthenticatedSessions.Select(session => session.OutboundConnection).Cast<ResilientSessionConnection>())
+        foreach (var outboundConnection in SessionManager.AuthenticatedSessions.Select(session => session.OutboundConnection).Cast<ResilientOutboundConnection>())
         {
             await outboundConnection.DisposeAsync().ConfigureAwait(false);
         }
@@ -81,7 +49,7 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
         }
         catch (Exception ex)
         {
-            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} disposal failed: {ex}")
+            await Console.Error.WriteLineAsync($"{nameof(OutboundConnectionManager)} disposal failed: {ex}")
                 .ConfigureAwait(false);
         }
         finally
@@ -90,198 +58,98 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
         }
     }
 
-    internal async Task HandleConnectionAsync(TcpClient outgoingTransientConnection, CancellationToken serverToken)
-    {
-        var stream = outgoingTransientConnection.GetStream();
-        var lengthBuffer = new byte[4];
-        IResilientPeerSession? session = null;
-        CancellationTokenSource? connectionCts = null;
-
-        try
-        {
-            var initialization = await InitializeConnectionAsync(outgoingTransientConnection, stream, lengthBuffer, serverToken).ConfigureAwait(false);
-            if (!initialization.IsSuccess)
-            {
-                return;
-            }
-
-            session = initialization.Session ??
-                throw new InvalidOperationException("Initialization succeeded without a outboundConnection state.");
-            connectionCts = initialization.ConnectionCancellation ??
-                throw new InvalidOperationException("Initialization succeeded without a cancellation source.");
-
-            await OnSessionJoinedAsync(session.Key, serverToken).ConfigureAwait(false);
-
-            _heartbeatTasks[outgoingTransientConnection] = Task.Run(() =>
-                RunHeartbeatLoopAsync(session, stream, lengthBuffer, connectionCts.Token), serverToken);
-
-            _sendTasks[outgoingTransientConnection] = Task.Run(() =>
-                RunSendLoopAsync(session, connectionCts.Token), serverToken);
-            _ = _sendTasks[outgoingTransientConnection].ContinueWith(task => _sendTasks.TryRemove(outgoingTransientConnection, out _), TaskContinuationOptions.ExecuteSynchronously);
-        }
-        catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
-        {
-            // shutting down
-        }
-        catch (Exception ex) when (ex is IOException or SocketException or JsonException)
-        {
-            await Console.Error.WriteLineAsync($"{nameof(HandleConnectionAsync)} error: {ex}").ConfigureAwait(false);
-        }
-        finally
-        {
-            if (session is not null)
-            {
-                await session.CloseConnectionAsync().ConfigureAwait(false);
-                await OnSessionLeftAsync(session.Key, serverToken).ConfigureAwait(false);
-            }
-
-            outgoingTransientConnection.Dispose();
-        }
-    }
-
-    private async Task<ConnectionInitializationResult> InitializeConnectionAsync(
-        TcpClient client,
-        NetworkStream stream,
-        byte[] lengthBuffer,
-        CancellationToken serverToken)
-    {
-        var session = ResolveSession(client);
-        if (session is null)
-        {
-            return ConnectionInitializationResult.Failed();
-        }
-
-        if (_pendingPersistentClients.TryRemove(session.Key, out var persistent))
-        {
-            session.AttachPersistentClient(persistent);
-        }
-
-        var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-        await session.AttachAsync(client, stream, connectionCts, RunSendLoopAsync).ConfigureAwait(false);
-
-        return ConnectionInitializationResult.Success(session, connectionCts, null);
-    }
-
-    private IResilientPeerSession ResolveSession(TcpClient client)
-    {
-        throw new NotImplementedException();
-    }
-
-    //private (IResilientPeerSession Session, SessionFrame? PendingFrame) ResolveSession(TcpClient client, SessionFrame firstFrame)
+    //internal async Task HandleConnectionAsync(TcpClient outgoingTransientConnection, CancellationToken serverToken)
     //{
-    //    if (SessionFrameContract.TryValidateAuthentication(firstFrame, _options, out var sessionKey))
+    //    var stream = outgoingTransientConnection.GetStream();
+    //    var lengthBuffer = new byte[4];
+    //    IResilientPeerSession? session = null;
+    //    CancellationTokenSource? connectionCts = null;
+
+    //    try
     //    {
-    //        var token = firstFrame.Token;
-    //        if (string.IsNullOrWhiteSpace(token))
+    //        var initialization = await InitializeConnectionAsync(outgoingTransientConnection, stream, lengthBuffer, serverToken).ConfigureAwait(false);
+    //        if (!initialization.IsSuccess)
     //        {
-    //            return default;
+    //            return;
     //        }
 
-    //        if (!TryExtractSessionKey(token, out var parsedSessionKey))
+    //        session = initialization.Session ??
+    //            throw new InvalidOperationException("Initialization succeeded without a outboundConnection state.");
+    //        connectionCts = initialization.ConnectionCancellation ??
+    //            throw new InvalidOperationException("Initialization succeeded without a cancellation source.");
+
+    //        //await OnSessionJoinedAsync(session.Key, serverToken).ConfigureAwait(false);
+
+    //        //_heartbeatTasks[outgoingTransientConnection] = Task.Run(() =>
+    //        //    RunHeartbeatLoopAsync(session, connectionCts.Token), serverToken);
+
+    //        _sendTasks[outgoingTransientConnection] = Task.Run(() =>
+    //            RunSendLoopAsync(session, connectionCts.Token), serverToken);
+    //        _ = _sendTasks[outgoingTransientConnection].ContinueWith(task => _sendTasks.TryRemove(outgoingTransientConnection, out _), TaskContinuationOptions.ExecuteSynchronously);
+    //    }
+    //    catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
+    //    {
+    //        // shutting down
+    //    }
+    //    catch (Exception ex) when (ex is IOException or SocketException or JsonException)
+    //    {
+    //        await Console.Error.WriteLineAsync($"{nameof(HandleConnectionAsync)} error: {ex}").ConfigureAwait(false);
+    //    }
+    //    finally
+    //    {
+    //        outgoingTransientConnection.Dispose();
+    //    }
+    //}
+
+    //private async Task<ConnectionInitializationResult> InitializeConnectionAsync(
+    //    TcpClient client,
+    //    NetworkStream stream,
+    //    byte[] lengthBuffer,
+    //    CancellationToken serverToken)
+    //{
+    //    var session = ResolveSession(client);
+    //    if (session is null)
+    //    {
+    //        return ConnectionInitializationResult.Failed();
+    //    }
+
+    //    if (_pendingPersistentClients.TryRemove(session.Key, out var persistent))
+    //    {
+    //        session.OutboundConnection.AttachPersistentClient(persistent);
+    //    }
+
+    //    var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
+    //    await session.AttachAsync(client, stream, connectionCts, RunSendLoopAsync).ConfigureAwait(false);
+
+    //    return ConnectionInitializationResult.Success(session, connectionCts, null);
+    //}
+
+    //private static async Task RunSendLoopAsync(IResilientPeerSession session, CancellationToken cancellationToken)//touched
+    //{
+    //    while (!cancellationToken.IsCancellationRequested)
+    //    {
+    //        try
     //        {
-    //            if (_options.RequireAuthentication)
+    //            if (!session.OutboundBuffer.TryDequeue(out SessionFrame? frame))
     //            {
-    //                return default;
+    //                await session.OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
+    //                continue;
     //            }
 
-    //            parsedSessionKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
+    //            session.OutboundConnection.EnqueueFrame(frame);
+    //            WaitForAckIfEventFrame(session, frame, cancellationToken);
     //        }
-
-    //        var resolvedKey = parsedSessionKey ?? sessionKey;
-    //        if (resolvedKey is null)
+    //        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     //        {
-    //            return default;
+    //            break;
     //        }
-
-    //        IResilientPeerSession session = SessionManager.GetOrGenerate(resolvedKey);
-    //        session.RegisterAuthentication();
-    //        return (session, null);
+    //        catch (Exception ex) when (ex is IOException or SocketException)
+    //        {
+    //            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} send loop error: {ex}").ConfigureAwait(false);
+    //            break;
+    //        }
     //    }
-
-    //    if (_options.RequireAuthentication)
-    //    {
-    //        return default;
-    //    }
-
-    //    var fallbackKey = CreateFallbackSessionKey(client.Client.RemoteEndPoint);
-    //    var existing = _sessions.GetOrAdd(fallbackKey, sessionKey => new SessionState(sessionKey));
-    //    existing.RegisterAuthentication();
-    //    return (existing, firstFrame);
     //}
-
-    //internal static bool TryExtractSessionKey(string token, out SessionKey sessionKey)
-    //{
-    //    sessionKey = default!;
-    //    var separatorIndex = token.LastIndexOf('-');
-    //    var normalizedToken = separatorIndex > 0 ? token[..separatorIndex] : token;
-
-    //    if (!SessionKey.TryParse(normalizedToken, out var parsed) || parsed is null)
-    //    {
-    //        return false;
-    //    }
-
-    //    sessionKey = parsed;
-    //    return true;
-    //}
-
-    //internal SessionKey CreateFallbackSessionKey(EndPoint? endpoint)
-    //{
-    //    return SessionManager.CreateFallbackSessionKey(endpoint);
-    //}
-
-    private static async Task RunHeartbeatLoopAsync(IResilientPeerSession session, CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            SessionFrame? frame = null;
-            try
-            {
-                session.OutboundConnection.EnqueueFrame(SessionFrame.CreatePing());
-                //await session.InboundConnection.WaitForPong();
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex) when (ex is IOException or SocketException)
-            {
-                if (frame is not null)
-                {
-                    session.OutboundBuffer.Return(frame);
-                }
-
-                await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} send loop error: {ex}").ConfigureAwait(false);
-                break;
-            }
-        }
-    }
-
-    private static async Task RunSendLoopAsync(IResilientPeerSession session, CancellationToken cancellationToken)//touched
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                if (!session.OutboundBuffer.TryDequeue(out SessionFrame? frame))
-                {
-                    await session.OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                session.OutboundConnection.EnqueueFrame(frame);
-                WaitForAckIfEventFrame(session, frame, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex) when (ex is IOException or SocketException)
-            {
-                await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} send loop error: {ex}").ConfigureAwait(false);
-                break;
-            }
-        }
-    }
 
     private static void WaitForAckIfEventFrame(IResilientPeerSession session, SessionFrame frame, CancellationToken cancellationToken)
     {
@@ -311,44 +179,6 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
         else if (acknowledgementState == AcknowledgementState.Acknowledged && frame is {Kind: SessionFrameKind.Event} eventFrame)
         {
             session.OutboundBuffer.TryAcknowledge(eventFrame.Id);
-        }
-    }
-
-    //private async Task OnSessionJoinedAsync(SessionKey key, CancellationToken cancellationToken)
-    //{
-    //    var handler = SessionJoined;
-    //    if (handler is null)
-    //    {
-    //        return;
-    //    }
-
-    //    try
-    //    {
-    //        await handler.Invoke(key, cancellationToken).ConfigureAwait(false);
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} outboundConnection join handler failed: {ex}")
-    //            .ConfigureAwait(false);
-    //    }
-    //}
-
-    private async Task OnSessionLeftAsync(SessionKey key, CancellationToken cancellationToken)
-    {
-        var handler = SessionLeft;
-        if (handler is null)
-        {
-            return;
-        }
-
-        try
-        {
-            await handler.Invoke(key, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} outboundConnection leave handler failed: {ex}")
-                .ConfigureAwait(false);
         }
     }
 
