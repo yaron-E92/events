@@ -77,6 +77,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     public async Task<ConnectionInitializationResult> HandleIncomingTransientConnectionAsync(TcpClient incomingTransientConnection, CancellationToken serverToken)
     {
         var lengthBuffer = new byte[4];
+        var initializationSucceeded = false;
 
         try
         {
@@ -88,6 +89,8 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
                 throw new InvalidOperationException("Initialization succeeded without a cancellation source.");
             }
 
+            initializationSucceeded = initialization.IsSuccess;
+
             return initialization;
         }
         catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
@@ -97,6 +100,13 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         catch (Exception ex) when (ex is IOException or SocketException or JsonException)
         {
             await Console.Error.WriteLineAsync($"{nameof(HandleIncomingTransientConnectionAsync)} error: {ex}").ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!initializationSucceeded)
+            {
+                incomingTransientConnection.Dispose();
+            }
         }
 
         return ConnectionInitializationResult.Failed();
