@@ -97,6 +97,80 @@ public class ResilientInboundConnectionTests
         }
     }
 
+    [Test]
+    public async Task HandleInboundFrameAsync_NoSubscribers_DoesNotStopReceiveLoop()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var listenerEndPoint = (IPEndPoint)listener.LocalEndpoint;
+
+        var options = new ResilientSessionOptions();
+        var sessionKey = new SessionKey(Guid.NewGuid(), listenerEndPoint.Address.ToString(), listenerEndPoint.Port);
+
+        await using var outboundConnection = new ResilientOutboundConnection(options, sessionKey);
+        var inboundConnection = new ResilientInboundConnection(options, sessionKey, outboundConnection);
+        IInboundResilientConnection inbound = inboundConnection;
+
+        await inbound.InitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        TcpClient? serverConnection = null;
+        CancellationTokenSource? attachmentCts = null;
+        var handlerAttached = false;
+
+        using var client = new TcpClient();
+
+        var frameReceived = new TaskCompletionSource<SessionFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Task TrackingFrameHandler(SessionFrame frame, SessionKey key, CancellationToken cancellationToken)
+        {
+            frameReceived.TrySetResult(frame);
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            await client.ConnectAsync(listenerEndPoint.Address, listenerEndPoint.Port).ConfigureAwait(false);
+            serverConnection = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+            attachmentCts = new CancellationTokenSource();
+
+            await inbound.AttachTransientConnection(serverConnection, attachmentCts).ConfigureAwait(false);
+
+            var payloadWithoutSubscriber = JsonSerializer.Serialize(new { message = "no-subscriber" });
+            var frameWithoutSubscriber = SessionFrame.CreateEventFrame(Guid.NewGuid(), payloadWithoutSubscriber);
+
+            await SendFrameAsync(client.GetStream(), frameWithoutSubscriber, CancellationToken.None).ConfigureAwait(false);
+
+            await Task.Delay(50).ConfigureAwait(false);
+
+            inbound.FrameReceived += TrackingFrameHandler;
+            handlerAttached = true;
+
+            var payloadAfterSubscription = JsonSerializer.Serialize(new { message = "after-subscribe" });
+            var frameAfterSubscription = SessionFrame.CreateEventFrame(Guid.NewGuid(), payloadAfterSubscription);
+
+            await SendFrameAsync(client.GetStream(), frameAfterSubscription, CancellationToken.None).ConfigureAwait(false);
+
+            var receivedFrame = await frameReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
+            Assert.That(receivedFrame.Payload, Is.EqualTo(payloadAfterSubscription));
+        }
+        finally
+        {
+            if (handlerAttached)
+            {
+                inbound.FrameReceived -= TrackingFrameHandler;
+            }
+
+            attachmentCts?.Cancel();
+            attachmentCts?.Dispose();
+            serverConnection?.Dispose();
+
+            await inboundConnection.DisposeAsync().ConfigureAwait(false);
+            await outboundConnection.DisposeAsync().ConfigureAwait(false);
+            listener.Stop();
+        }
+    }
+
     private static async Task SendFrameAsync(NetworkStream stream, SessionFrame frame, CancellationToken cancellationToken)
     {
         var serialized = JsonSerializer.Serialize(frame, SessionFrameSerializer.Options);

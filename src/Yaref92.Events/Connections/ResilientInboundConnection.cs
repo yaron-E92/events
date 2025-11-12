@@ -134,7 +134,13 @@ public class ResilientInboundConnection : IInboundResilientConnection
             RecordRemoteActivity();
         }
 
-        await FrameReceived?.Invoke(frame, SessionKey, cancellationToken)!;
+        var frameReceived = FrameReceived;
+        if (frameReceived is null)
+        {
+            return;
+        }
+
+        await frameReceived(frame, SessionKey, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RunInboundAsync(CancellationToken cancellationToken)
