@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.Threading;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
@@ -10,6 +11,7 @@ namespace Yaref92.Events.Transports.ConnectionManagers;
 internal sealed partial class InboundConnectionManager : IInboundConnectionManager
 {
     private readonly ConcurrentDictionary<TcpClient, Task<bool>> _receiveFramesTasks = new();
+    private readonly ConcurrentDictionary<SessionKey, Lazy<Task>> _inboundInitialization = new();
     private readonly CancellationTokenSource _cts = new();
 
     public SessionManager SessionManager { get; }
@@ -123,10 +125,29 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         }
         session.FrameReceived += OnFrameReceivedAsync; // When the InboundConnection of the session receives a frame, we need to hook into the frame received event
 
+        await EnsureInboundConnectionInitializedAsync(session, serverToken).ConfigureAwait(false);
+
         var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
         await session.InboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
 
         return ConnectionInitializationResult.Success(session, connectionCts);
+    }
+
+    private async Task EnsureInboundConnectionInitializedAsync(IResilientPeerSession session, CancellationToken serverToken)
+    {
+        Lazy<Task> initializer = _inboundInitialization.GetOrAdd(
+            session.Key,
+            _ => new Lazy<Task>(() => session.InboundConnection.InitAsync(serverToken), LazyThreadSafetyMode.ExecutionAndPublication));
+
+        try
+        {
+            await initializer.Value.ConfigureAwait(false);
+        }
+        catch
+        {
+            _inboundInitialization.TryRemove(session.Key, out _);
+            throw;
+        }
     }
 
     private async Task OnFrameReceivedAsync(SessionFrame frame, SessionKey sessionKey, CancellationToken cancellationToken)
