@@ -12,6 +12,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 {
     private readonly ConcurrentDictionary<TcpClient, Task<bool>> _receiveFramesTasks = new();
     private readonly ConcurrentDictionary<SessionKey, Lazy<Task>> _inboundInitialization = new();
+    private readonly ConcurrentDictionary<SessionKey, Lazy<IInboundResilientConnection.SessionFrameReceivedHandler>> _sessionFrameHandlers = new();
     private readonly CancellationTokenSource _cts = new();
 
     public SessionManager SessionManager { get; }
@@ -124,7 +125,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             return ConnectionInitializationResult.Failed();
         }
         session.Touch();
-        session.FrameReceived += OnFrameReceivedAsync; // When the InboundConnection of the session receives a frame, we need to hook into the frame received event
+        EnsureFrameHandlerSubscribed(session);
 
         await EnsureInboundConnectionInitializedAsync(session, serverToken).ConfigureAwait(false);
 
@@ -132,6 +133,41 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         await session.InboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
 
         return ConnectionInitializationResult.Success(session, connectionCts);
+    }
+
+    private void EnsureFrameHandlerSubscribed(IResilientPeerSession session)
+    {
+        Lazy<IInboundResilientConnection.SessionFrameReceivedHandler> subscription = _sessionFrameHandlers.GetOrAdd(
+            session.Key,
+            _ => new Lazy<IInboundResilientConnection.SessionFrameReceivedHandler>(
+                () => AttachFrameHandler(session),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+
+        _ = subscription.Value;
+    }
+
+    private IInboundResilientConnection.SessionFrameReceivedHandler AttachFrameHandler(IResilientPeerSession session)
+    {
+        var handler = OnFrameReceivedAsync;
+        session.FrameReceived += handler;
+
+        if (session is ResilientPeerSession resilientSession)
+        {
+            resilientSession.Disposed += OnSessionDisposed;
+        }
+
+        return handler;
+    }
+
+    private void OnSessionDisposed(ResilientPeerSession session)
+    {
+        if (_sessionFrameHandlers.TryRemove(session.Key, out Lazy<IInboundResilientConnection.SessionFrameReceivedHandler>? subscription)
+            && subscription.IsValueCreated)
+        {
+            session.FrameReceived -= subscription.Value;
+        }
+
+        session.Disposed -= OnSessionDisposed;
     }
 
     private async Task EnsureInboundConnectionInitializedAsync(IResilientPeerSession session, CancellationToken serverToken)
