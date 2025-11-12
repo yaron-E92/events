@@ -80,6 +80,61 @@ public class InboundConnectionManagerTests
     }
 
     [Test]
+    public async Task HandleIncomingTransientConnectionAsync_FailedAuthenticationDisposesTransientClient()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = true,
+            AuthenticationToken = "expected-secret",
+            HeartbeatInterval = TimeSpan.FromMilliseconds(50),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(200),
+        };
+
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var serializer = new FakeEventSerializer();
+
+        await using var manager = new InboundConnectionManager(sessionManager, serializer);
+
+        using var client = new TcpClient();
+        Task connectTask = client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+
+        var serverClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+        await connectTask.ConfigureAwait(false);
+
+        try
+        {
+            var remotePort = ((IPEndPoint)client.Client.LocalEndPoint!).Port;
+            var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remotePort);
+            var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
+            var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: "invalid-secret");
+
+            Task<ConnectionInitializationResult> initializationTask =
+                manager.HandleIncomingTransientConnectionAsync(serverClient, CancellationToken.None);
+
+            await WriteFrameAsync(client, authFrame).ConfigureAwait(false);
+
+            ConnectionInitializationResult initialization = await initializationTask.ConfigureAwait(false);
+            initialization.IsSuccess.Should().BeFalse();
+            initialization.Session.Should().BeNull();
+            initialization.ConnectionCancellation.Should().BeNull();
+
+            serverClient.Invoking(c => c.GetStream())
+                .Should()
+                .Throw<Exception>()
+                .Where(ex => ex is ObjectDisposedException or InvalidOperationException,
+                    "failed initialization should dispose of the transient server-side socket");
+        }
+        finally
+        {
+            serverClient.Dispose();
+            listener.Stop();
+        }
+    }
+
+    [Test]
     public async Task HandleIncomingTransientConnectionAsync_ReconnectedSessionFiresFrameHandlerOncePerFrame()
     {
         var options = new ResilientSessionOptions
