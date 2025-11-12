@@ -80,6 +80,137 @@ public class InboundConnectionManagerTests
     }
 
     [Test]
+    public async Task HandleIncomingTransientConnectionAsync_ReconnectedSessionFiresFrameHandlerOncePerFrame()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = false,
+            HeartbeatInterval = TimeSpan.FromMilliseconds(50),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(200),
+        };
+
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var serializer = new FakeEventSerializer();
+
+        await using var manager = new InboundConnectionManager(sessionManager, serializer);
+        var inboundManager = (IInboundConnectionManager)manager;
+
+        const string firstPayload = FakeEventSerializer.ExpectedPayload;
+        const string secondPayload = "inbound-payload-after-reconnect";
+
+        var firstEventReceived = new TaskCompletionSource<IDomainEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondInvocationCount = 0;
+        var secondEventReceived = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Func<IDomainEvent, SessionKey, Task> handler = (domainEvent, _) =>
+        {
+            if (domainEvent is DummyEvent dummy)
+            {
+                if (dummy.Text == firstPayload)
+                {
+                    firstEventReceived.TrySetResult(domainEvent);
+                }
+                else if (dummy.Text == secondPayload)
+                {
+                    var count = Interlocked.Increment(ref secondInvocationCount);
+                    secondEventReceived.TrySetResult(count);
+                }
+            }
+
+            return Task.CompletedTask;
+        };
+
+        inboundManager.EventReceived += handler;
+
+        TcpClient? firstServerClient = null;
+        TcpClient? secondServerClient = null;
+        CancellationTokenSource? firstConnectionCancellation = null;
+        CancellationTokenSource? secondConnectionCancellation = null;
+
+        try
+        {
+            using var firstClient = new TcpClient();
+            Task firstConnectTask = firstClient.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+            firstServerClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+            await firstConnectTask.ConfigureAwait(false);
+
+            var remotePort = ((IPEndPoint)firstClient.Client.LocalEndPoint!).Port;
+            var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remotePort);
+            var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
+            var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
+
+            Task<ConnectionInitializationResult> firstInitializationTask = manager.HandleIncomingTransientConnectionAsync(firstServerClient, CancellationToken.None);
+
+            await WriteFrameAsync(firstClient, authFrame).ConfigureAwait(false);
+
+            ConnectionInitializationResult firstInitialization = await firstInitializationTask.ConfigureAwait(false);
+            firstInitialization.IsSuccess.Should().BeTrue();
+            firstInitialization.Session.Should().NotBeNull();
+            firstInitialization.ConnectionCancellation.Should().NotBeNull();
+
+            firstConnectionCancellation = firstInitialization.ConnectionCancellation;
+
+            var firstEventFrame = SessionFrame.CreateEventFrame(Guid.NewGuid(), firstPayload);
+            await WriteFrameAsync(firstClient, firstEventFrame).ConfigureAwait(false);
+
+            var firstDomainEvent = await firstEventReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            firstDomainEvent.Should().BeOfType<DummyEvent>();
+            firstDomainEvent.As<DummyEvent>().Text.Should().Be(firstPayload);
+
+            firstClient.Dispose();
+            firstServerClient.Dispose();
+
+            if (firstConnectionCancellation is not null)
+            {
+                await firstConnectionCancellation.CancelAsync().ConfigureAwait(false);
+            }
+
+            using var secondClient = new TcpClient();
+            Task secondConnectTask = secondClient.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+            secondServerClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+            await secondConnectTask.ConfigureAwait(false);
+
+            Task<ConnectionInitializationResult> secondInitializationTask = manager.HandleIncomingTransientConnectionAsync(secondServerClient, CancellationToken.None);
+
+            await WriteFrameAsync(secondClient, authFrame).ConfigureAwait(false);
+
+            ConnectionInitializationResult secondInitialization = await secondInitializationTask.ConfigureAwait(false);
+            secondInitialization.IsSuccess.Should().BeTrue();
+            secondInitialization.Session.Should().NotBeNull();
+            secondInitialization.ConnectionCancellation.Should().NotBeNull();
+
+            secondConnectionCancellation = secondInitialization.ConnectionCancellation;
+
+            var secondEventFrame = SessionFrame.CreateEventFrame(Guid.NewGuid(), secondPayload);
+            await WriteFrameAsync(secondClient, secondEventFrame).ConfigureAwait(false);
+
+            var invocationCount = await secondEventReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            invocationCount.Should().Be(1);
+            Volatile.Read(ref secondInvocationCount).Should().Be(1);
+
+            if (secondConnectionCancellation is not null)
+            {
+                await secondConnectionCancellation.CancelAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            inboundManager.EventReceived -= handler;
+
+            secondConnectionCancellation?.Dispose();
+            firstConnectionCancellation?.Dispose();
+
+            secondServerClient?.Dispose();
+            firstServerClient?.Dispose();
+
+            listener.Stop();
+        }
+    }
+
+    [Test]
     public async Task HandleIncomingTransientConnectionAsync_NewlyAuthenticatedSessionRemainsActiveUntilHeartbeatTimeoutExpires()
     {
         var options = new ResilientSessionOptions
@@ -156,8 +287,8 @@ public class InboundConnectionManagerTests
             throw new NotSupportedException();
 
         public (Type? type, IDomainEvent? domainEvent) Deserialize(string data) =>
-            data == ExpectedPayload
-                ? (typeof(DummyEvent), new DummyEvent(ExpectedPayload))
-                : (null, null);
+            string.IsNullOrEmpty(data)
+                ? (null, null)
+                : (typeof(DummyEvent), new DummyEvent(data));
     }
 }

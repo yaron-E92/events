@@ -1,4 +1,6 @@
-﻿using Yaref92.Events.Abstractions;
+using System;
+using System.Threading;
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Connections;
 
 using static Yaref92.Events.Abstractions.IInboundResilientConnection;
@@ -9,6 +11,7 @@ internal sealed partial class ResilientPeerSession : IResilientPeerSession
 {
     private readonly SessionState _state;
     private readonly ResilientCompositSessionConnection _resilientConnection;
+    private Action<ResilientPeerSession>? _disposed;
 
     public SessionOutboundBuffer OutboundBuffer { get; }
 
@@ -31,6 +34,12 @@ internal sealed partial class ResilientPeerSession : IResilientPeerSession
     {
         add => InboundConnection.FrameReceived += value;
         remove => InboundConnection.FrameReceived -= value;
+    }
+
+    internal event Action<ResilientPeerSession>? Disposed
+    {
+        add => _disposed += value;
+        remove => _disposed -= value;
     }
 
     public ResilientPeerSession(SessionKey sessionKey,
@@ -66,9 +75,17 @@ internal sealed partial class ResilientPeerSession : IResilientPeerSession
 
     public async ValueTask DisposeAsync()
     {
-        await OutboundConnection.DumpBuffer();
-        OutboundBuffer.Dispose();
-        await _resilientConnection.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            await OutboundConnection.DumpBuffer().ConfigureAwait(false);
+            OutboundBuffer.Dispose();
+            await _resilientConnection.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            Action<ResilientPeerSession>? handlers = Interlocked.Exchange(ref _disposed, null);
+            handlers?.Invoke(this);
+        }
     }
 
     public void RegisterAuthentication()
