@@ -123,6 +123,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             // TODO Log failure due to session resolution failure
             return ConnectionInitializationResult.Failed();
         }
+        session.Touch();
         session.FrameReceived += OnFrameReceivedAsync; // When the InboundConnection of the session receives a frame, we need to hook into the frame received event
 
         await EnsureInboundConnectionInitializedAsync(session, serverToken).ConfigureAwait(false);

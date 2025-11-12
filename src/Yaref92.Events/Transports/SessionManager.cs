@@ -54,6 +54,7 @@ internal class SessionManager : ISessionManager
 
         var session = GetOrGenerate(sessionKey, sessionKey.IsAnonymousKey);
         session.RegisterAuthentication();
+        session.Touch();
         return session;
     }
 

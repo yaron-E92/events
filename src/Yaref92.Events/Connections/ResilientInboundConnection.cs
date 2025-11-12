@@ -29,6 +29,7 @@ public class ResilientInboundConnection : IInboundResilientConnection
         OutboundConnection = outboundConnection;
         SessionKey = sessionKey;
         _sessionToken = SessionFrameContract.CreateSessionToken(SessionKey, _options, _options.AuthenticationToken);
+        RecordRemoteActivity();
     }
 
     public bool IsPastTimeout => _lastRemoteActivityTicks < (DateTime.UtcNow - _options.HeartbeatTimeout).Ticks;

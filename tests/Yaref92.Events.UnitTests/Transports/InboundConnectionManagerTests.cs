@@ -79,6 +79,64 @@ public class InboundConnectionManagerTests
         }
     }
 
+    [Test]
+    public async Task HandleIncomingTransientConnectionAsync_NewlyAuthenticatedSessionRemainsActiveUntilHeartbeatTimeoutExpires()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = false,
+            HeartbeatInterval = TimeSpan.FromMilliseconds(50),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(200),
+        };
+
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var serializer = new FakeEventSerializer();
+
+        await using var manager = new InboundConnectionManager(sessionManager, serializer);
+
+        using var client = new TcpClient();
+        Task connectTask = client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+
+        using var serverClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+        await connectTask.ConfigureAwait(false);
+
+        try
+        {
+            var remotePort = ((IPEndPoint)client.Client.LocalEndPoint!).Port;
+            var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remotePort);
+            var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
+            var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
+
+            var initializationTask = manager.HandleIncomingTransientConnectionAsync(serverClient, CancellationToken.None);
+
+            await WriteFrameAsync(client, authFrame).ConfigureAwait(false);
+
+            var initialization = await initializationTask.ConfigureAwait(false);
+            initialization.IsSuccess.Should().BeTrue();
+            initialization.Session.Should().NotBeNull();
+            initialization.ConnectionCancellation.Should().NotBeNull();
+
+            var session = initialization.Session!;
+            session.InboundConnection.IsPastTimeout.Should().BeFalse("authentication should count as remote activity");
+
+            await Task.Delay(options.HeartbeatTimeout / 2).ConfigureAwait(false);
+            session.InboundConnection.IsPastTimeout.Should().BeFalse("connection should remain active before the timeout elapses");
+
+            await Task.Delay(options.HeartbeatTimeout + options.HeartbeatInterval).ConfigureAwait(false);
+            session.InboundConnection.IsPastTimeout.Should().BeTrue("connection should become stale once the timeout elapses");
+
+            await initialization.ConnectionCancellation!.CancelAsync().ConfigureAwait(false);
+            initialization.ConnectionCancellation.Dispose();
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     private static async Task WriteFrameAsync(TcpClient client, SessionFrame frame)
     {
         var stream = client.GetStream();
