@@ -81,6 +81,29 @@ public class ResilientSessionIntegrationTests
     }
 
     [Test]
+    public async Task PersistentClient_Completes_Handshake_Without_ConnectionEstablished_Handlers()
+    {
+        var options = new ResilientSessionOptions
+        {
+            HeartbeatInterval = TimeSpan.FromMilliseconds(25),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(80),
+            BackoffInitialDelay = TimeSpan.FromMilliseconds(20),
+            BackoffMaxDelay = TimeSpan.FromMilliseconds(50),
+        };
+
+        var port = GetFreeTcpPort();
+        await using var server = new InboundConnectionManager(options);
+        await server.StartAsync().ConfigureAwait(false);
+
+        await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options, trackConnections: false);
+
+        Func<Task> act = () => clientHost.StartAsync(CancellationToken.None);
+        await act.Should().NotThrowAsync().ConfigureAwait(false);
+
+        await WaitForAuthenticatedSessionsAsync(server, 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+    }
+
+    [Test]
     public async Task Broadcasts_Are_Redelivered_Until_Acknowledged_By_All_Peers()
     {
         // Arrange
@@ -355,13 +378,18 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     private int _connectionCount;
     private int _dropAckFlag;
     private int _dropMessageFlag;
+    private readonly bool _trackConnections;
 
-    public TestPersistentClientHost(string host, int port, ResilientSessionOptions options)
+    public TestPersistentClientHost(string host, int port, ResilientSessionOptions options, bool trackConnections = true)
     {
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
         Client = new ResilientCompositSessionConnection(Guid.NewGuid(), host, port, options);
         SetOutboxPath(Client, _outboxPath);
-        Client.ConnectionEstablished += OnConnectionEstablishedAsync;
+        _trackConnections = trackConnections;
+        if (_trackConnections)
+        {
+            Client.ConnectionEstablished += OnConnectionEstablishedAsync;
+        }
         Client.FrameReceived += OnFrameReceivedAsync;
     }
 
@@ -485,7 +513,10 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        Client.ConnectionEstablished -= OnConnectionEstablishedAsync;
+        if (_trackConnections)
+        {
+            Client.ConnectionEstablished -= OnConnectionEstablishedAsync;
+        }
         Client.FrameReceived -= OnFrameReceivedAsync;
         await Client.DisposeAsync().ConfigureAwait(false);
 

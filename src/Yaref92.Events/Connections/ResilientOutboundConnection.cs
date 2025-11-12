@@ -295,7 +295,11 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             var authFrame = SessionFrameContract.CreateAuthFrame(_sessionToken, _options, _authenticationSecret);
             await WriteFrameAsync(client.GetStream(), authFrame, connectionToken).ConfigureAwait(false);
 
-            await ConnectionEstablished?.Invoke(this, connectionToken)!;
+            var handler = ConnectionEstablished;
+            if (handler is not null)
+            {
+                await handler(this, connectionToken).ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is IOException or SocketException)
         {
