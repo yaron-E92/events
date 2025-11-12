@@ -80,6 +80,127 @@ public class InboundConnectionManagerTests
     }
 
     [Test]
+    public async Task HandleIncomingTransientConnectionAsync_FramesBeforeHandlers_DoNotThrowAndHandlersFireAfterAttachment()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = false,
+            HeartbeatInterval = TimeSpan.FromMilliseconds(50),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(200),
+        };
+
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var serializer = new FakeEventSerializer();
+
+        await using var manager = new InboundConnectionManager(sessionManager, serializer);
+        var inboundManager = (IInboundConnectionManager)manager;
+
+        using var client = new TcpClient();
+        Task connectTask = client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+
+        using var serverClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+        await connectTask.ConfigureAwait(false);
+
+        try
+        {
+            var remotePort = ((IPEndPoint)client.Client.LocalEndPoint!).Port;
+            var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remotePort);
+            var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
+            var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
+
+            Task<ConnectionInitializationResult> initializationTask =
+                manager.HandleIncomingTransientConnectionAsync(serverClient, CancellationToken.None);
+
+            await WriteFrameAsync(client, authFrame).ConfigureAwait(false);
+
+            ConnectionInitializationResult initialization = await initializationTask.ConfigureAwait(false);
+            initialization.IsSuccess.Should().BeTrue();
+            initialization.Session.Should().NotBeNull();
+
+            Func<Task> sendFramesWithoutHandlers = async () =>
+            {
+                await WriteFrameAsync(client, SessionFrame.CreateAck(Guid.NewGuid())).ConfigureAwait(false);
+                await WriteFrameAsync(client, SessionFrame.CreatePing()).ConfigureAwait(false);
+                await WriteFrameAsync(client, SessionFrame.CreateEventFrame(Guid.NewGuid(), FakeEventSerializer.ExpectedPayload))
+                    .ConfigureAwait(false);
+            };
+
+            await sendFramesWithoutHandlers.Should().NotThrowAsync();
+
+            var ackReceived = new TaskCompletionSource<(Guid eventId, SessionKey key)>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Func<Guid, SessionKey, Task> ackHandler = (eventId, key) =>
+            {
+                ackReceived.TrySetResult((eventId, key));
+                return Task.CompletedTask;
+            };
+            manager.AckReceived += ackHandler;
+
+            var pingReceived = new TaskCompletionSource<SessionKey>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Func<SessionKey, Task> pingHandler = key =>
+            {
+                pingReceived.TrySetResult(key);
+                return Task.CompletedTask;
+            };
+            manager.PingReceived += pingHandler;
+
+            var eventReceived = new TaskCompletionSource<(IDomainEvent domainEvent, SessionKey key)>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var eventInvocationCount = 0;
+            Func<IDomainEvent, SessionKey, Task> eventHandler = (domainEvent, key) =>
+            {
+                Interlocked.Increment(ref eventInvocationCount);
+                eventReceived.TrySetResult((domainEvent, key));
+                return Task.CompletedTask;
+            };
+            inboundManager.EventReceived += eventHandler;
+
+            try
+            {
+                var expectedAckId = Guid.NewGuid();
+                const string expectedEventPayload = "post-handler-event";
+
+                await WriteFrameAsync(client, SessionFrame.CreateAck(expectedAckId)).ConfigureAwait(false);
+                await WriteFrameAsync(client, SessionFrame.CreatePing()).ConfigureAwait(false);
+                await WriteFrameAsync(client, SessionFrame.CreateEventFrame(Guid.NewGuid(), expectedEventPayload))
+                    .ConfigureAwait(false);
+
+                (Guid eventId, SessionKey key) ack = await ackReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                ack.eventId.Should().Be(expectedAckId);
+                ack.key.Should().Be(sessionKey);
+
+                SessionKey pingKey = await pingReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                pingKey.Should().Be(sessionKey);
+
+                (IDomainEvent domainEvent, SessionKey key) eventArgs =
+                    await eventReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                eventArgs.domainEvent.Should().BeOfType<DummyEvent>();
+                eventArgs.domainEvent.As<DummyEvent>().Text.Should().Be(expectedEventPayload);
+                eventArgs.key.Should().Be(sessionKey);
+
+                Volatile.Read(ref eventInvocationCount).Should().Be(1);
+            }
+            finally
+            {
+                inboundManager.EventReceived -= eventHandler;
+                manager.PingReceived -= pingHandler;
+                manager.AckReceived -= ackHandler;
+            }
+
+            if (initialization.ConnectionCancellation is not null)
+            {
+                await initialization.ConnectionCancellation.CancelAsync().ConfigureAwait(false);
+                initialization.ConnectionCancellation.Dispose();
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Test]
     public async Task HandleIncomingTransientConnectionAsync_FailedAuthenticationDisposesTransientClient()
     {
         var options = new ResilientSessionOptions
