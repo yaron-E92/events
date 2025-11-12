@@ -268,6 +268,88 @@ public class InboundConnectionManagerTests
         }
     }
 
+    [Test]
+    public async Task MonitorConnectionsAsync_NoDropHandler_DoesNotRaiseUnobservedExceptions()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = false,
+            HeartbeatInterval = TimeSpan.FromMilliseconds(25),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(75),
+        };
+
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var unobservedRaised = false;
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            unobservedRaised = true;
+            args.SetObserved();
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+
+        try
+        {
+            var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+            var serializer = new FakeEventSerializer();
+
+            await using (var manager = new InboundConnectionManager(sessionManager, serializer))
+            {
+                using var client = new TcpClient();
+                Task connectTask = client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+                using var serverClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+                await connectTask.ConfigureAwait(false);
+
+                var remotePort = ((IPEndPoint)client.Client.LocalEndPoint!).Port;
+                var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remotePort);
+                var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
+                var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
+
+                Task<ConnectionInitializationResult> initializationTask =
+                    manager.HandleIncomingTransientConnectionAsync(serverClient, CancellationToken.None);
+
+                await WriteFrameAsync(client, authFrame).ConfigureAwait(false);
+
+                ConnectionInitializationResult initialization = await initializationTask.ConfigureAwait(false);
+                initialization.IsSuccess.Should().BeTrue();
+                initialization.Session.Should().NotBeNull();
+
+                var session = initialization.Session!;
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+                while (!session.InboundConnection.IsPastTimeout)
+                {
+                    if (DateTime.UtcNow >= deadline)
+                    {
+                        Assert.Fail("Session never became stale.");
+                    }
+
+                    await Task.Delay(options.HeartbeatInterval).ConfigureAwait(false);
+                }
+
+                await Task.Delay(options.HeartbeatInterval * 2).ConfigureAwait(false);
+
+                if (initialization.ConnectionCancellation is not null)
+                {
+                    await initialization.ConnectionCancellation.CancelAsync().ConfigureAwait(false);
+                    initialization.ConnectionCancellation.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+            listener.Stop();
+        }
+
+        unobservedRaised.Should().BeFalse("the monitor loop should ignore stale connections when no drop handler is registered");
+    }
+
     private static async Task WriteFrameAsync(TcpClient client, SessionFrame frame)
     {
         var stream = client.GetStream();

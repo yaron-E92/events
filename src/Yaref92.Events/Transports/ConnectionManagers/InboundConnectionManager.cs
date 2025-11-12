@@ -56,8 +56,14 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
     private async Task ReactToStaleConnection(SessionKey sessionKey, CancellationToken monitorToken)
     {
-        bool? didManageToReconnect = await SessionInboundConnectionDropped?.Invoke(sessionKey, monitorToken)!;
-        if (didManageToReconnect is not true)
+        IEventTransport.SessionInboundConnectionDroppedHandler? handler = SessionInboundConnectionDropped;
+        if (handler is null)
+        {
+            return;
+        }
+
+        bool didManageToReconnect = await handler(sessionKey, monitorToken).ConfigureAwait(false);
+        if (!didManageToReconnect)
         {
             // Connection could not be re-established
             // React to stale connection, e.g., notify session manager or log
