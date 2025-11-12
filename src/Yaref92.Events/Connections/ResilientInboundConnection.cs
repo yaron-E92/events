@@ -1,5 +1,9 @@
-﻿using System.Net;
+using System;
+using System.IO;
+using System.Net;
 using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
@@ -137,10 +141,37 @@ public class ResilientInboundConnection : IInboundResilientConnection
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            await _transientConnectionAttachedSemaphore.WaitAsync(cancellationToken); // wait until there is a valid (meaning also non null) _transientConnection
-            await _transientReceiveLoop;
-            _transientReceiveLoop = Task.Run(() => RunTransientConnectionReceiveLoopAsync(_transientConnection!, _incomingConnectionCts.Token), _incomingConnectionCts.Token);
+            await _transientConnectionAttachedSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false); // wait until there is a valid (meaning also non null) _transientConnection
+            try
+            {
+                await _transientReceiveLoop.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsExpectedDisconnect(ex))
+            {
+                _transientReceiveLoop = Task.CompletedTask;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            var transientConnection = _transientConnection;
+            if (transientConnection is null)
+            {
+                continue;
+            }
+
+            var connectionToken = _incomingConnectionCts.Token;
+            _transientReceiveLoop = Task.Run(
+                () => RunTransientConnectionReceiveLoopAsync(transientConnection, connectionToken),
+                connectionToken);
         }
+    }
+
+    private static bool IsExpectedDisconnect(Exception exception)
+    {
+        return exception is TcpConnectionDisconnectedException or IOException or SocketException or ObjectDisposedException;
     }
 
     private async Task RunTransientConnectionReceiveLoopAsync(TcpClient client, CancellationToken incomingConnectionCancellation) //touched
