@@ -647,6 +647,31 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     private void StartRunOutboundLoop()
     {
+        CancellationToken cancellationToken;
+        try
+        {
+            cancellationToken = _cts.Token;
+        }
+        catch (ObjectDisposedException)
+        {
+            cancellationToken = new CancellationToken(canceled: true);
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            if (!_firstConnectionCompletion.Task.IsCompleted)
+            {
+                _firstConnectionCompletion.TrySetCanceled(cancellationToken);
+            }
+
+            lock (_runLock)
+            {
+                _runOutboundTask ??= Task.FromCanceled(cancellationToken);
+            }
+
+            return;
+        }
+
         lock (_runLock)
         {
             if (_runOutboundTask is { IsCompleted: true })
@@ -654,7 +679,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 _runOutboundTask = null;
             }
 
-            _runOutboundTask ??= Task.Run(() => RunOutboundAsync(_cts.Token));
+            _runOutboundTask ??= Task.Run(() => RunOutboundAsync(cancellationToken));
         }
     }
 
