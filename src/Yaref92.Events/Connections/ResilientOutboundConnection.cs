@@ -332,10 +332,12 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private void FullyReleaseReconnectGate()
     {
         int amountToRelease = _options.MaximalReconnectAttempts - _reconnectGate.CurrentCount;
-        if (amountToRelease > 1)
+        if (amountToRelease <= 0)
         {
-            _reconnectGate.Release(amountToRelease);
+            return;
         }
+
+        _reconnectGate.Release(amountToRelease);
         _reconnectGateChangedCountCompletion.TrySetResult();
     }
 

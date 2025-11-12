@@ -37,6 +37,18 @@ public sealed partial class ResilientOutboundConnection
     internal TimeSpan GetBackoffDelayForTesting(int attempt)
         => GetBackoffDelay(attempt);
 
+    internal Task WaitReconnectGateForTestingAsync(CancellationToken cancellationToken)
+        => _reconnectGate.WaitAsync(cancellationToken);
+
+    internal int GetReconnectGateCurrentCountForTesting()
+        => _reconnectGate.CurrentCount;
+
+    internal void FullyReleaseReconnectGateForTesting()
+        => FullyReleaseReconnectGate();
+
+    internal Task WaitForReconnectGateSignalForTestingAsync(CancellationToken cancellationToken)
+        => WaitForReconnectGateCountChangeOrFullRelease(cancellationToken);
+
     //internal void NotifySendFailureForTesting(Exception exception)
     //    => NotifySendFailure(exception);
 }
