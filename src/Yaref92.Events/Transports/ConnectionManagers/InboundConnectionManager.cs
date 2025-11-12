@@ -212,10 +212,18 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
                 await OnEventFrameReceievedAsync(frame, sessionKey);
                 break;
             case SessionFrameKind.Ack when frame.Id != Guid.Empty:
-                await AckReceived?.Invoke(frame.Id, sessionKey)!;
+                Func<Guid, SessionKey, Task>? ackReceived = AckReceived;
+                if (ackReceived is not null)
+                {
+                    await ackReceived(frame.Id, sessionKey).ConfigureAwait(false);
+                }
                 break;
             case SessionFrameKind.Ping: // RESPOND WITH PONG USING Publisher/Transport
-                await PingReceived?.Invoke(sessionKey)!;
+                Func<SessionKey, Task>? pingReceived = PingReceived;
+                if (pingReceived is not null)
+                {
+                    await pingReceived(sessionKey).ConfigureAwait(false);
+                }
                 break;
             case SessionFrameKind.Pong: // Just touch the session, which already happened
                 break;
@@ -238,7 +246,11 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
         if (domainEvent is not null)
         {
-            await EventReceived?.Invoke(domainEvent, sessionKey)!;
+            Func<IDomainEvent, SessionKey, Task>? eventReceived = EventReceived;
+            if (eventReceived is not null)
+            {
+                await eventReceived(domainEvent, sessionKey).ConfigureAwait(false);
+            }
         }
     }
 
