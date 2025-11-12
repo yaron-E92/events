@@ -74,19 +74,38 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     public async Task<bool> RefreshConnectionAsync(CancellationToken token)
     {
-        await (_runOutboundTask ?? Task.CompletedTask);
-        StartRunOutboundLoop();
-        // TODO Check if this is thread safe
-        do
+        while (true)
         {
-            await _firstConnectionCompletion.Task.ConfigureAwait(false);
-            if (_firstConnectionCompletion.Task.IsCompletedSuccessfully)
+            StartRunOutboundLoop();
+
+            var completionSource = Volatile.Read(ref _firstConnectionCompletion);
+            var connectionAttempt = completionSource.Task;
+
+            try
             {
+                await connectionAttempt.WaitAsync(token).ConfigureAwait(false);
+
+                if (!ReferenceEquals(completionSource, Volatile.Read(ref _firstConnectionCompletion)))
+                {
+                    continue;
+                }
+
                 return true;
             }
-            await WaitForReconnectGateCountChangeOrFullRelease();
-        } while (_reconnectGate.CurrentCount > 0);
-        return false;
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                if (NoMoreReconnectsAllowed)
+                {
+                    return false;
+                }
+
+                await WaitForReconnectGateCountChangeOrFullRelease(token).ConfigureAwait(false);
+            }
+        }
     }
 
     public async Task AbortActiveConnectionAsync()
@@ -504,6 +523,9 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 {
                     break;
                 }
+
+                Interlocked.Exchange(ref _firstConnectionCompletion,
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
                 await _reconnectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
                 _reconnectGateChangedCountCompletion.TrySetResult();
                 var delay = GetBackoffDelay(reconnectAttempt);
@@ -627,6 +649,11 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     {
         lock (_runLock)
         {
+            if (_runOutboundTask is { IsCompleted: true })
+            {
+                _runOutboundTask = null;
+            }
+
             _runOutboundTask ??= Task.Run(() => RunOutboundAsync(_cts.Token));
         }
     }
@@ -669,10 +696,23 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         return false;
     }
 
-    private async Task WaitForReconnectGateCountChangeOrFullRelease()
+    private async Task WaitForReconnectGateCountChangeOrFullRelease(CancellationToken cancellationToken)
     {
-        await _reconnectGateChangedCountCompletion.Task;
-        _reconnectGateChangedCountCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gateSignal = Volatile.Read(ref _reconnectGateChangedCountCompletion);
+        var waitTask = gateSignal.Task;
+
+        if (cancellationToken.CanBeCanceled)
+        {
+            await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await waitTask.ConfigureAwait(false);
+        }
+
+        _ = Interlocked.CompareExchange(ref _reconnectGateChangedCountCompletion,
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            gateSignal);
     }
 
     public async ValueTask DisposeAsync()
