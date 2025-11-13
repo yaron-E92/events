@@ -40,6 +40,29 @@ public sealed class OutboundConnectionManagerTests
         outbound.RefreshAttempts.Should().Be(1);
     }
 
+    [Test]
+    public async Task StopAsync_Disposes_anonymous_outbound_connections()
+    {
+        var options = new ResilientSessionOptions();
+        var sessionManager = new SessionManager(0, options);
+        var manager = new OutboundConnectionManager(sessionManager);
+
+        var anonymousSessionKey = new SessionKey(Guid.Empty, "localhost", 2345)
+        {
+            IsAnonymousKey = true,
+        };
+        sessionManager.HydrateAnonymousSessionId(anonymousSessionKey, new DnsEndPoint("localhost", 2345));
+
+        var outbound = new DisposableStubOutboundConnection(anonymousSessionKey);
+        var anonymousSession = new StubPeerSession(anonymousSessionKey, outbound, isAnonymous: true, remoteEndpointHasAuthenticated: false);
+
+        InjectSession(sessionManager, anonymousSession);
+
+        await manager.StopAsync().ConfigureAwait(false);
+
+        outbound.DisposeAsyncCalls.Should().Be(1);
+    }
+
     private static void InjectSession(SessionManager sessionManager, IResilientPeerSession session)
     {
         var sessionsField = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -47,7 +70,7 @@ public sealed class OutboundConnectionManagerTests
         sessions[session.Key] = session;
     }
 
-    private sealed class StubOutboundConnection : IOutboundResilientConnection
+    private class StubOutboundConnection : IOutboundResilientConnection
     {
         private TaskCompletionSource<bool> _reconnectSource = CreateSource();
 
@@ -96,22 +119,43 @@ public sealed class OutboundConnectionManagerTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
+    private sealed class DisposableStubOutboundConnection : StubOutboundConnection, IAsyncDisposable
+    {
+        internal int DisposeAsyncCalls { get; private set; }
+
+        internal DisposableStubOutboundConnection(SessionKey sessionKey)
+            : base(sessionKey)
+        {
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeAsyncCalls++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class StubPeerSession : IResilientPeerSession
     {
-        internal StubPeerSession(SessionKey key, IOutboundResilientConnection outbound)
+        private readonly bool _isAnonymous;
+        private readonly bool _remoteEndpointHasAuthenticated;
+
+        internal StubPeerSession(SessionKey key, IOutboundResilientConnection outbound, bool isAnonymous = false, bool remoteEndpointHasAuthenticated = true)
         {
             Key = key;
             OutboundConnection = outbound;
             InboundConnection = new StubInboundConnection(key);
             OutboundBuffer = outbound.OutboundBuffer;
+            _isAnonymous = isAnonymous;
+            _remoteEndpointHasAuthenticated = remoteEndpointHasAuthenticated;
         }
 
         public SessionKey Key { get; }
         public string AuthToken => string.Empty;
-        public bool IsAnonymous => false;
+        public bool IsAnonymous => _isAnonymous;
         public IOutboundResilientConnection OutboundConnection { get; }
         public IInboundResilientConnection InboundConnection { get; }
-        public bool RemoteEndpointHasAuthenticated => true;
+        public bool RemoteEndpointHasAuthenticated => _remoteEndpointHasAuthenticated;
         public SessionOutboundBuffer OutboundBuffer { get; }
 
         public event IInboundResilientConnection.SessionFrameReceivedHandler? FrameReceived
