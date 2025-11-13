@@ -171,6 +171,11 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             await _stateLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                if (FrameIsAcknowledgedEvent(frame))
+                {
+                    continue;
+                }
+
                 if (!_outboxEntries.TryGetValue(frame.Id, out var entry)
                     || !string.Equals(entry.Payload, frame.Payload, System.StringComparison.Ordinal))
                 {
