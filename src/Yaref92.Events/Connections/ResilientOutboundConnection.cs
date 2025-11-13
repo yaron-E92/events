@@ -448,6 +448,17 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         _reconnectGateChangedCountCompletion.TrySetResult();
     }
 
+    private bool TryConsumeReconnectBudget()
+    {
+        if (!_reconnectGate.Wait(0))
+        {
+            return false;
+        }
+
+        _reconnectGateChangedCountCompletion.TrySetResult();
+        return _reconnectGate.CurrentCount > 0;
+    }
+
     private TimeSpan GetBackoffDelay(int attempt)
     {
         var initial = _options.BackoffInitialDelay;
@@ -601,7 +612,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private async Task RunOutboundAsync(CancellationToken cancellationToken)//Touched
     {
         var reconnectAttempt = 0;
-        FullyReleaseReconnectGate();
+        var cancelled = false;
         _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -610,6 +621,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 using TcpClient transientOutboundConnection = await ActivateTcpConnectionAsync(cancellationToken).ConfigureAwait(false);
                 var connectionToken = Volatile.Read(ref _activeOutboundConnectionCts)?.Token ?? cancellationToken;
                 await ActivateOutboundConnectionLoops(transientOutboundConnection, connectionToken).ConfigureAwait(false);
+                FullyReleaseReconnectGate();
                 await RunUntilCancellationOrDisconnectAsync(cancellationToken).ConfigureAwait(false);
                 reconnectAttempt = 0;
             }
@@ -619,6 +631,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 {
                     _firstConnectionCompletion.TrySetCanceled(cancellationToken);
                 }
+                cancelled = true;
                 break;
             }
             catch (Exception ex)
@@ -629,15 +642,14 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 }
 
                 reconnectAttempt++;
-                if (NoMoreReconnectsAllowed) // TODO Ensure this is happening: Think about adding a maximal reconnectAttempt count, and then giving up
+                var hasRemainingBudget = TryConsumeReconnectBudget();
+                if (!hasRemainingBudget)
                 {
                     break;
                 }
 
                 Interlocked.Exchange(ref _firstConnectionCompletion,
                     new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                await _reconnectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-                _reconnectGateChangedCountCompletion.TrySetResult();
                 var delay = GetBackoffDelay(reconnectAttempt);
                 try
                 {
@@ -645,13 +657,15 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
+                    cancelled = true;
                     break;
                 }
             }
-            finally
-            {
-                FullyReleaseReconnectGate();
-            }
+        }
+
+        if (cancelled)
+        {
+            FullyReleaseReconnectGate();
         }
     }
 
