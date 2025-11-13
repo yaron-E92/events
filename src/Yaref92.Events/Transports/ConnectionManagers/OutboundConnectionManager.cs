@@ -1,4 +1,6 @@
-﻿using System.Net;
+﻿using System.Collections.Generic;
+using System.Linq;
+using System.Net;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
@@ -15,10 +17,7 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
     {
         ArgumentNullException.ThrowIfNull(eventEnvelopeJson);
 
-        foreach (IOutboundResilientConnection? connection in SessionManager.AuthenticatedSessions
-                                                                           .Concat(SessionManager.ValidAnonymousSessions)
-                                                                           .DistinctBy(session => session.Key)
-                                                                           .Select(session => session.OutboundConnection))
+        foreach (IOutboundResilientConnection connection in EnumerateDistinctOutboundConnections())
         {
             connection.EnqueueFrame(SessionFrame.CreateEventFrame(eventId, eventEnvelopeJson));
         }
@@ -28,11 +27,20 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
     {
         await _cts.CancelAsync().ConfigureAwait(false);
 
-        foreach (var outboundConnection in SessionManager.AuthenticatedSessions.Select(session => session.OutboundConnection).Cast<ResilientOutboundConnection>())
+        foreach (IOutboundResilientConnection connection in EnumerateDistinctOutboundConnections())
         {
-            await outboundConnection.DisposeAsync().ConfigureAwait(false);
+            if (connection is IAsyncDisposable asyncDisposable)
+            {
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
+
+    private IEnumerable<IOutboundResilientConnection> EnumerateDistinctOutboundConnections() =>
+        SessionManager.AuthenticatedSessions
+            .Concat(SessionManager.ValidAnonymousSessions)
+            .DistinctBy(session => session.Key)
+            .Select(session => session.OutboundConnection);
 
     public async ValueTask DisposeAsync()
     {
