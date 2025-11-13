@@ -135,7 +135,30 @@ public sealed class ResilientOutboundConnectionTests
         expectedIds.UnionWith(concurrentFrames.Select(frame => frame.Id));
 
         snapshot.Keys.Should().BeEquivalentTo(expectedIds);
-        connection.AcknowledgedEventIds.Keys.Should().Contain(framesToAck.Select(frame => frame.Id));
+        connection.AcknowledgedEventIds.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task OnAckReceived_DoesNotLeakAcknowledgementStates()
+    {
+        var options = new ResilientSessionOptions();
+        var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 12345);
+
+        await using var connection = new ResilientOutboundConnection(options, sessionKey);
+
+        var frames = Enumerable.Range(0, 256)
+            .Select(index => SessionFrame.CreateEventFrame(Guid.NewGuid(), $"frame-{index}"))
+            .ToList();
+
+        foreach (var frame in frames)
+        {
+            connection.EnqueueFrame(frame);
+            connection.OnAckReceived(frame.Id);
+
+            connection.AcknowledgedEventIds.Count.Should().BeLessOrEqualTo(1);
+        }
+
+        connection.AcknowledgedEventIds.Should().BeEmpty();
     }
 }
 #endif

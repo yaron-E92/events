@@ -25,6 +25,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     private readonly SemaphoreSlim _sendSignal = new(0, int.MaxValue);
     private readonly ConcurrentDictionary<Guid, AcknowledgementState> _acknowledgedEventIds = new();
+    private readonly ConcurrentQueue<Guid> _pendingAcknowledgementRemovals = new();
     private readonly SemaphoreSlim _stateLock = new(1, 1);
     private CancellationTokenSource? _activeOutboundConnectionCts;
     private int _activeOutboundConnectionCancellationRequested;
@@ -38,6 +39,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private Task? _runOutboundTask;
     private Task _sendLoop = Task.CompletedTask;
     private long _lastRemoteActivityTicks;
+    private int _activeDumpOperations;
 
     private readonly string? _authenticationSecret;
     private readonly object _runLock = new();
@@ -152,51 +154,68 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     public async Task DumpBuffer()//touched
     {
-        OutboundBuffer.RequeueInflight();
-        bool bufferHasFrames;
-        var shouldPersist = false;
-        do
+        Interlocked.Increment(ref _activeDumpOperations);
+        try
         {
-            bufferHasFrames = OutboundBuffer.TryDequeue(out SessionFrame? frame);
-            if (frame?.Payload is null)
+            OutboundBuffer.RequeueInflight();
+            bool bufferHasFrames;
+            var shouldPersist = false;
+            do
             {
-                continue;
-            }
-            if (FrameIsAcknowledgedEvent(frame))
-            {
-                // We do not want to save an acknowledged event to outbox
-                continue;
-            }
-
-            await _stateLock.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                if (FrameIsAcknowledgedEvent(frame))
+                bufferHasFrames = OutboundBuffer.TryDequeue(out SessionFrame? frame);
+                if (frame?.Payload is not string payload)
                 {
                     continue;
                 }
 
-                if (!_outboxEntries.TryGetValue(frame.Id, out var entry)
-                    || !string.Equals(entry.Payload, frame.Payload, System.StringComparison.Ordinal))
+                if (frame.Kind != SessionFrameKind.Event || frame.Id == Guid.Empty)
                 {
-                    entry = new OutboxEntry(frame.Id, frame.Payload);
-                    _outboxEntries[frame.Id] = entry;
+                    continue;
                 }
 
-                entry.IsQueued = false;
-                shouldPersist = true;
+                await _stateLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    if (FrameIsAcknowledgedEvent(frame))
+                    {
+                        if (_outboxEntries.Remove(frame.Id))
+                        {
+                            shouldPersist = true;
+                        }
+
+                        ClearAcknowledgementState(frame.Id, AcknowledgementState.Acknowledged);
+                        continue;
+                    }
+
+                    if (!_outboxEntries.TryGetValue(frame.Id, out var entry)
+                        || !string.Equals(entry.Payload, payload, System.StringComparison.Ordinal))
+                    {
+                        entry = new OutboxEntry(frame.Id, payload);
+                        _outboxEntries[frame.Id] = entry;
+                    }
+
+                    entry.IsQueued = false;
+                    shouldPersist = true;
+                }
+                finally
+                {
+                    _stateLock.Release();
+                }
+
             }
-            finally
+            while (bufferHasFrames);
+
+            if (shouldPersist)
             {
-                _stateLock.Release();
+                await SchedulePersist().ConfigureAwait(false);
             }
-
         }
-        while (bufferHasFrames);
-
-        if (shouldPersist)
+        finally
         {
-            await SchedulePersist().ConfigureAwait(false);
+            if (Interlocked.Decrement(ref _activeDumpOperations) == 0)
+            {
+                DrainPendingAcknowledgements();
+            }
         }
     }
 
@@ -205,6 +224,41 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         return frame is SessionFrame { Kind: SessionFrameKind.Event }
                         && AcknowledgedEventIds.TryGetValue(frame.Id, out AcknowledgementState state)
                         && state is AcknowledgementState.Acknowledged;
+    }
+
+    private void ClearAcknowledgementState(Guid eventId, AcknowledgementState state)
+    {
+        if (eventId == Guid.Empty)
+        {
+            return;
+        }
+
+        var entry = new KeyValuePair<Guid, AcknowledgementState>(eventId, state);
+        _acknowledgedEventIds.TryRemove(entry);
+    }
+
+    private void CompleteAcknowledgement(Guid eventId)
+    {
+        if (eventId == Guid.Empty)
+        {
+            return;
+        }
+
+        if (Volatile.Read(ref _activeDumpOperations) == 0)
+        {
+            ClearAcknowledgementState(eventId, AcknowledgementState.Acknowledged);
+            return;
+        }
+
+        _pendingAcknowledgementRemovals.Enqueue(eventId);
+    }
+
+    private void DrainPendingAcknowledgements()
+    {
+        while (_pendingAcknowledgementRemovals.TryDequeue(out var eventId))
+        {
+            ClearAcknowledgementState(eventId, AcknowledgementState.Acknowledged);
+        }
     }
 
     public void EnqueueFrame(SessionFrame frame)
@@ -265,6 +319,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         if (removed)
         {
             SchedulePersist();
+            CompleteAcknowledgement(eventId);
         }
     }
 
@@ -602,6 +657,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                     TryMarkEventQueued(frame.Id);
                     AcknowledgedEventIds[frame.Id] = AcknowledgementState.SendingFailed;
                     OutboundBuffer.Return(frame);
+                    ClearAcknowledgementState(frame.Id, AcknowledgementState.SendingFailed);
                 }
                 await Console.Error.WriteLineAsync($"{nameof(ResilientOutboundConnection)} send loop error: {ex}").ConfigureAwait(false);
                 break;
