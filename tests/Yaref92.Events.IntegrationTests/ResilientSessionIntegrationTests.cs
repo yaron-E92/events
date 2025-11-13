@@ -104,6 +104,51 @@ public class ResilientSessionIntegrationTests
     }
 
     [Test]
+    public async Task PersistentClient_AbortActiveConnection_CancelsLoops_And_Reconnects()
+    {
+        var options = new ResilientSessionOptions
+        {
+            HeartbeatInterval = TimeSpan.FromMilliseconds(25),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(80),
+            BackoffInitialDelay = TimeSpan.FromMilliseconds(20),
+            BackoffMaxDelay = TimeSpan.FromMilliseconds(50),
+        };
+
+        var port = GetFreeTcpPort();
+        await using var server = new InboundConnectionManager(options);
+        await server.StartAsync().ConfigureAwait(false);
+
+        await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
+        await clientHost.StartAsync(CancellationToken.None).ConfigureAwait(false);
+
+        await clientHost.WaitForConnectionCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await WaitForAuthenticatedSessionsAsync(server, 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        var outboundConnection = clientHost.Client.OutboundConnection;
+        var (sendLoopTask, heartbeatLoopTask) = await WaitForActiveOutboundLoopsAsync(outboundConnection, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        await outboundConnection.AbortActiveConnectionAsync().ConfigureAwait(false);
+        await Task.WhenAll(sendLoopTask, heartbeatLoopTask).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        sendLoopTask.IsCompletedSuccessfully.Should().BeTrue();
+        heartbeatLoopTask.IsCompletedSuccessfully.Should().BeTrue();
+
+        await clientHost.WaitForConnectionCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        var payload = $"abort-{Guid.NewGuid():N}";
+        var initialMessageCount = clientHost.ReceivedPayloads.Count;
+        var initialAckCount = clientHost.AcknowledgedMessageIds.Count;
+
+        var messageId = await clientHost.Client.EnqueueEventAsync(payload, CancellationToken.None).ConfigureAwait(false);
+
+        await clientHost.WaitForMessageCountAsync(initialMessageCount + 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await clientHost.WaitForAckCountAsync(initialAckCount + 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        clientHost.ReceivedPayloads.Should().Contain(payload);
+        clientHost.AcknowledgedMessageIds.Should().Contain(messageId);
+    }
+
+    [Test]
     public async Task Broadcasts_Are_Redelivered_Until_Acknowledged_By_All_Peers()
     {
         // Arrange
@@ -328,6 +373,28 @@ public class ResilientSessionIntegrationTests
         }
 
         throw new TimeoutException($"Server did not authenticate {expectedCount} sessions within the timeout window.");
+    }
+
+    private static async Task<(Task sendLoop, Task heartbeatLoop)> WaitForActiveOutboundLoopsAsync(ResilientOutboundConnection outboundConnection, TimeSpan timeout)
+    {
+        var sendLoopField = typeof(ResilientOutboundConnection).GetField("_sendLoop", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var heartbeatLoopField = typeof(ResilientOutboundConnection).GetField("_heartbeatLoop", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            var sendLoop = (Task) sendLoopField.GetValue(outboundConnection)!;
+            var heartbeatLoop = (Task) heartbeatLoopField.GetValue(outboundConnection)!;
+
+            if (!ReferenceEquals(sendLoop, Task.CompletedTask) && !ReferenceEquals(heartbeatLoop, Task.CompletedTask))
+            {
+                return (sendLoop, heartbeatLoop);
+            }
+
+            await Task.Delay(10).ConfigureAwait(false);
+        }
+
+        throw new TimeoutException("Active outbound loops were not observed before the timeout elapsed.");
     }
 
     private static int GetFreeTcpPort()

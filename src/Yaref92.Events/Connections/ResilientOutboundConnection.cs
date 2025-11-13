@@ -27,6 +27,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private readonly ConcurrentDictionary<Guid, AcknowledgementState> _acknowledgedEventIds = new();
     private readonly SemaphoreSlim _stateLock = new(1, 1);
     private CancellationTokenSource? _activeOutboundConnectionCts;
+    private int _activeOutboundConnectionCancellationRequested;
     private readonly CancellationTokenSource _cts = new();
 
     private TaskCompletionSource _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -110,20 +111,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     public async Task AbortActiveConnectionAsync()
     {
-        var connectionCts = Volatile.Read(ref _activeOutboundConnectionCts);
-        if (connectionCts is null)
-        {
-            return;
-        }
-
-        try
-        {
-            await connectionCts.CancelAsync().ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            // connection already torn down
-        }
+        _ = await CancelAndDisposeActiveConnectionCtsAsync().ConfigureAwait(false);
     }
 
     private static void ConfigureClient(TcpClient client)
@@ -282,9 +270,10 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         TcpClient client = new();
         ConfigureClient(client);
 
-        using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var connectionToken = connectionCts.Token;
         Volatile.Write(ref _activeOutboundConnectionCts, connectionCts);
+        Volatile.Write(ref _activeOutboundConnectionCancellationRequested, 0);
         try
         {
             await client.ConnectAsync(SessionKey.Host, SessionKey.Port, connectionToken).ConfigureAwait(false);
@@ -303,8 +292,14 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         }
         catch (Exception ex) when (ex is IOException or SocketException)
         {
+            await CancelAndDisposeActiveConnectionCtsAsync().ConfigureAwait(false);
             client.Close();
             throw new TcpConnectionDisconnectedException();
+        }
+        catch
+        {
+            await CancelAndDisposeActiveConnectionCtsAsync().ConfigureAwait(false);
+            throw;
         }
         return client;
     }
@@ -505,7 +500,8 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             try
             {
                 using TcpClient transientOutboundConnection = await ActivateTcpConnectionAsync(cancellationToken).ConfigureAwait(false);
-                await ActivateOutboundConnectionLoops(transientOutboundConnection, cancellationToken).ConfigureAwait(false);
+                var connectionToken = Volatile.Read(ref _activeOutboundConnectionCts)?.Token ?? cancellationToken;
+                await ActivateOutboundConnectionLoops(transientOutboundConnection, connectionToken).ConfigureAwait(false);
                 await RunUntilCancellationOrDisconnectAsync(cancellationToken).ConfigureAwait(false);
                 reconnectAttempt = 0;
             }
@@ -600,30 +596,23 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     private async Task RunUntilCancellationOrDisconnectAsync(CancellationToken cancellationToken)//touched
     {
+        var completed = await Task.WhenAny(_sendLoop, _heartbeatLoop).ConfigureAwait(false);
+        var cancellationRequested = await CancelAndDisposeActiveConnectionCtsAsync().ConfigureAwait(false);
+
         try
         {
-            var completed = await Task.WhenAny(_sendLoop, _heartbeatLoop).ConfigureAwait(false);
-            _activeOutboundConnectionCts?.CancelAsync().ConfigureAwait(false);
-
-            try
-            {
-                await Task.WhenAll(_sendLoop, _heartbeatLoop).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or SocketException)
-            {
-                if (_activeOutboundConnectionCts?.IsCancellationRequested is not true)
-                {
-                    throw;
-                }
-            }
-
-            ThrowIfConnectionFailed(completed);
-            ThrowIfSessionEndedUnexpectedly(cancellationToken);
+            await Task.WhenAll(_sendLoop, _heartbeatLoop).ConfigureAwait(false);
         }
-        finally
+        catch (Exception ex) when (ex is IOException or SocketException)
         {
-            Volatile.Write(ref _activeOutboundConnectionCts, null);
+            if (!cancellationRequested)
+            {
+                throw;
+            }
         }
+
+        ThrowIfConnectionFailed(completed);
+        ThrowIfSessionEndedUnexpectedly(cancellationToken);
     }
 
     private Task SchedulePersist()
@@ -748,7 +737,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     public async ValueTask DisposeAsync()
     {
-        await ResilientCompositSessionConnection.CancelAndDisposeTokenSource(_activeOutboundConnectionCts).ConfigureAwait(false);
+        await CancelAndDisposeActiveConnectionCtsAsync().ConfigureAwait(false);
         await ResilientCompositSessionConnection.CancelAndDisposeTokenSource(_cts).ConfigureAwait(false);
 
         Task[] runTasks = new Task[3];
@@ -777,5 +766,36 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         await SchedulePersist();
 
         _sendSignal.Dispose();
+    }
+
+    private async Task<bool> CancelAndDisposeActiveConnectionCtsAsync()
+    {
+        var connectionCts = Interlocked.Exchange(ref _activeOutboundConnectionCts, null);
+        if (connectionCts is null)
+        {
+            return Volatile.Read(ref _activeOutboundConnectionCancellationRequested) == 1;
+        }
+
+        var cancellationTriggered = false;
+        try
+        {
+            await connectionCts.CancelAsync().ConfigureAwait(false);
+            cancellationTriggered = true;
+        }
+        catch (ObjectDisposedException)
+        {
+            cancellationTriggered = true;
+        }
+        finally
+        {
+            if (cancellationTriggered)
+            {
+                Volatile.Write(ref _activeOutboundConnectionCancellationRequested, 1);
+            }
+
+            connectionCts.Dispose();
+        }
+
+        return cancellationTriggered;
     }
 }
