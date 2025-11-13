@@ -62,6 +62,8 @@ public class ResilientInboundConnection : IInboundResilientConnection
     async Task IInboundResilientConnection.AttachTransientConnection(TcpClient transientConnection, CancellationTokenSource incomingConnectionCts)
     {
         var previousIncomingConnectionCts = _incomingConnectionCts;
+        var previousTransientConnection = _transientConnection;
+        var previousReceiveLoop = _transientReceiveLoop;
         if (previousIncomingConnectionCts is not null)
         {
             await ResilientCompositSessionConnection.CancelAndDisposeTokenSource(previousIncomingConnectionCts)
@@ -71,6 +73,22 @@ public class ResilientInboundConnection : IInboundResilientConnection
         _incomingConnectionCts = incomingConnectionCts;
         _transientConnection = transientConnection;
         _transientConnectionAttachedSemaphore.Release();
+
+        if (previousTransientConnection is not null)
+        {
+            try
+            {
+                await previousReceiveLoop.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsExpectedDisconnect(ex))
+            {
+                // Swallow expected disconnection exceptions when awaiting the previous receive loop.
+            }
+            finally
+            {
+                previousTransientConnection.Dispose();
+            }
+        }
     }
 
     public static bool ShouldRecordRemoteActivity(SessionFrameKind kind) //touched
@@ -188,37 +206,44 @@ public class ResilientInboundConnection : IInboundResilientConnection
 
     private async Task RunTransientConnectionReceiveLoopAsync(TcpClient client, CancellationToken incomingConnectionCancellation) //touched
     {
-        var stream = client.GetStream();
-        var lengthBuffer = new byte[4];
-
-        while (!incomingConnectionCancellation.IsCancellationRequested)
+        try
         {
+            var stream = client.GetStream();
+            var lengthBuffer = new byte[4];
+
+            while (!incomingConnectionCancellation.IsCancellationRequested)
+            {
+                if (!client.Connected)
+                {
+                    break;
+                }
+                SessionFrameIO.FrameReadResult result;
+                try
+                {
+                    result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, incomingConnectionCancellation).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (incomingConnectionCancellation.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                if (!result.IsSuccess || result.Frame is null)
+                {
+                    _ = Console.Error.WriteLineAsync("Frame read failed or resulted in null frame");
+                    continue;
+                }
+
+                await HandleInboundFrameAsync(result.Frame, incomingConnectionCancellation).ConfigureAwait(false);
+            }
+
             if (!client.Connected)
             {
-                break;
+                throw new TcpConnectionDisconnectedException();
             }
-            SessionFrameIO.FrameReadResult result;
-            try
-            {
-                result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, incomingConnectionCancellation).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (incomingConnectionCancellation.IsCancellationRequested)
-            {
-                break;
-            }
-
-            if (!result.IsSuccess || result.Frame is null)
-            {
-                _ = Console.Error.WriteLineAsync("Frame read failed or resulted in null frame");
-                continue;
-            }
-
-            await HandleInboundFrameAsync(result.Frame, incomingConnectionCancellation).ConfigureAwait(false);
         }
-
-        if (!client.Connected)
+        finally
         {
-            throw new TcpConnectionDisconnectedException();
+            client.Dispose();
         }
     }
 

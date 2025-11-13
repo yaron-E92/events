@@ -43,6 +43,39 @@ public class ResilientInboundConnectionTests
     }
 
     [Test]
+    public async Task AttachTransientConnection_DisposesPreviousTcpClient()
+    {
+        var options = new ResilientSessionOptions();
+        var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 1234);
+
+        await using var outboundConnection = new ResilientOutboundConnection(options, sessionKey);
+        var inboundConnection = new ResilientInboundConnection(options, sessionKey, outboundConnection);
+        IInboundResilientConnection inbound = inboundConnection;
+
+        var firstClient = new TrackingTcpClient();
+        var secondClient = new TrackingTcpClient();
+        using var firstAttachmentCts = new CancellationTokenSource();
+        using var secondAttachmentCts = new CancellationTokenSource();
+
+        try
+        {
+            await inbound.AttachTransientConnection(firstClient, firstAttachmentCts).ConfigureAwait(false);
+            await DrainTransientConnectionSemaphoreAsync(inboundConnection).ConfigureAwait(false);
+
+            await inbound.AttachTransientConnection(secondClient, secondAttachmentCts).ConfigureAwait(false);
+
+            Assert.That(firstClient.IsDisposed, Is.True);
+        }
+        finally
+        {
+            secondClient.Dispose();
+            firstClient.Dispose();
+
+            await inboundConnection.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    [Test]
     public async Task RunInboundAsync_AllowsSubsequentAttachmentsAfterDisconnect()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -277,5 +310,20 @@ public class ResilientInboundConnectionTests
         }
 
         client.Dispose();
+    }
+
+    private sealed class TrackingTcpClient : TcpClient
+    {
+        public bool IsDisposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                IsDisposed = true;
+            }
+
+            base.Dispose(disposing);
+        }
     }
 }
