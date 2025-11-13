@@ -87,7 +87,10 @@ public sealed class ResilientOutboundConnectionTests
     [Test]
     public async Task DumpBuffer_RemainsConsistent_WhenConcurrentEnqueueAndAckOccur()
     {
-        var options = new ResilientSessionOptions();
+        var options = new ResilientSessionOptions
+        {
+            HeartbeatInterval = TimeSpan.FromMilliseconds(10),
+        };
         var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 12345);
 
         await using var connection = new ResilientOutboundConnection(options, sessionKey);
@@ -128,6 +131,8 @@ public sealed class ResilientOutboundConnectionTests
 
         await Task.WhenAll(dumpTask, enqueueTask, ackTask).ConfigureAwait(false);
 
+        await WaitForAcknowledgementsToClearAsync(connection, options.HeartbeatInterval).ConfigureAwait(false);
+
         var snapshot = connection.GetOutboxSnapshotForTesting();
 
         var expectedIds = new HashSet<Guid>(framesToDump.Select(frame => frame.Id));
@@ -135,7 +140,50 @@ public sealed class ResilientOutboundConnectionTests
         expectedIds.UnionWith(concurrentFrames.Select(frame => frame.Id));
 
         snapshot.Keys.Should().BeEquivalentTo(expectedIds);
-        connection.AcknowledgedEventIds.Keys.Should().Contain(framesToAck.Select(frame => frame.Id));
+        connection.AcknowledgedEventIds.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task OnAckReceived_DoesNotLeakAcknowledgementStates()
+    {
+        var options = new ResilientSessionOptions
+        {
+            HeartbeatInterval = TimeSpan.FromMilliseconds(10),
+        };
+        var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 12345);
+
+        await using var connection = new ResilientOutboundConnection(options, sessionKey);
+
+        var frames = Enumerable.Range(0, 256)
+            .Select(index => SessionFrame.CreateEventFrame(Guid.NewGuid(), $"frame-{index}"))
+            .ToList();
+
+        foreach (var frame in frames)
+        {
+            connection.EnqueueFrame(frame);
+            connection.OnAckReceived(frame.Id);
+        }
+
+        await WaitForAcknowledgementsToClearAsync(connection, options.HeartbeatInterval).ConfigureAwait(false);
+        connection.AcknowledgedEventIds.Should().BeEmpty();
+    }
+
+    private static async Task WaitForAcknowledgementsToClearAsync(
+        ResilientOutboundConnection connection,
+        TimeSpan heartbeatInterval)
+    {
+        var timeout = DateTime.UtcNow + TimeSpan.FromSeconds(1);
+        while (DateTime.UtcNow < timeout)
+        {
+            if (connection.AcknowledgedEventIds.IsEmpty)
+            {
+                return;
+            }
+
+            await Task.Delay(heartbeatInterval).ConfigureAwait(false);
+        }
+
+        connection.AcknowledgedEventIds.Should().BeEmpty();
     }
 }
 #endif
