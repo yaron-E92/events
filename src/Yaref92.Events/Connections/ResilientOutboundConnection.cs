@@ -154,6 +154,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     {
         OutboundBuffer.RequeueInflight();
         bool bufferHasFrames;
+        var shouldPersist = false;
         do
         {
             bufferHasFrames = OutboundBuffer.TryDequeue(out SessionFrame? frame);
@@ -166,18 +167,32 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 // We do not want to save an acknowledged event to outbox
                 continue;
             }
-            await OutboxFileLock.WaitAsync();
+
+            await _stateLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                _outboxEntries.TryAdd(frame.Id, new(frame.Id, frame.Payload));
+                if (!_outboxEntries.TryGetValue(frame.Id, out var entry)
+                    || !string.Equals(entry.Payload, frame.Payload, System.StringComparison.Ordinal))
+                {
+                    entry = new OutboxEntry(frame.Id, frame.Payload);
+                    _outboxEntries[frame.Id] = entry;
+                }
+
+                entry.IsQueued = false;
+                shouldPersist = true;
             }
             finally
             {
-                OutboxFileLock.Release();
+                _stateLock.Release();
             }
 
         }
         while (bufferHasFrames);
+
+        if (shouldPersist)
+        {
+            await SchedulePersist().ConfigureAwait(false);
+        }
     }
 
     private bool FrameIsAcknowledgedEvent(SessionFrame frame)

@@ -1,5 +1,7 @@
 #if DEBUG
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -80,6 +82,60 @@ public sealed class ResilientOutboundConnectionTests
 
         connection.FullyReleaseReconnectGateForTesting();
         await nextSignal.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task DumpBuffer_RemainsConsistent_WhenConcurrentEnqueueAndAckOccur()
+    {
+        var options = new ResilientSessionOptions();
+        var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 12345);
+
+        await using var connection = new ResilientOutboundConnection(options, sessionKey);
+
+        var framesToDump = Enumerable.Range(0, 64)
+            .Select(index => SessionFrame.CreateEventFrame(Guid.NewGuid(), $"initial-{index}"))
+            .ToList();
+
+        foreach (var frame in framesToDump)
+        {
+            connection.EnqueueFrame(frame);
+        }
+
+        var framesToAck = framesToDump.Take(framesToDump.Count / 2).ToList();
+
+        var concurrentFrames = Enumerable.Range(0, 64)
+            .Select(index => SessionFrame.CreateEventFrame(Guid.NewGuid(), $"concurrent-{index}"))
+            .ToList();
+
+        var dumpTask = connection.DumpBuffer();
+        var enqueueTask = Task.Run(() =>
+        {
+            foreach (var frame in concurrentFrames)
+            {
+                connection.EnqueueFrame(frame);
+                Thread.Yield();
+            }
+        });
+
+        var ackTask = Task.Run(() =>
+        {
+            foreach (var frame in framesToAck)
+            {
+                connection.OnAckReceived(frame.Id);
+                Thread.Yield();
+            }
+        });
+
+        await Task.WhenAll(dumpTask, enqueueTask, ackTask).ConfigureAwait(false);
+
+        var snapshot = connection.GetOutboxSnapshotForTesting();
+
+        var expectedIds = new HashSet<Guid>(framesToDump.Select(frame => frame.Id));
+        expectedIds.ExceptWith(framesToAck.Select(frame => frame.Id));
+        expectedIds.UnionWith(concurrentFrames.Select(frame => frame.Id));
+
+        snapshot.Keys.Should().BeEquivalentTo(expectedIds);
+        connection.AcknowledgedEventIds.Keys.Should().Contain(framesToAck.Select(frame => frame.Id));
     }
 }
 #endif
