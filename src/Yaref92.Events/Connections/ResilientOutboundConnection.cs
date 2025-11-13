@@ -500,7 +500,8 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             try
             {
                 using TcpClient transientOutboundConnection = await ActivateTcpConnectionAsync(cancellationToken).ConfigureAwait(false);
-                await ActivateOutboundConnectionLoops(transientOutboundConnection, cancellationToken).ConfigureAwait(false);
+                var connectionToken = Volatile.Read(ref _activeOutboundConnectionCts)?.Token ?? cancellationToken;
+                await ActivateOutboundConnectionLoops(transientOutboundConnection, connectionToken).ConfigureAwait(false);
                 await RunUntilCancellationOrDisconnectAsync(cancellationToken).ConfigureAwait(false);
                 reconnectAttempt = 0;
             }
