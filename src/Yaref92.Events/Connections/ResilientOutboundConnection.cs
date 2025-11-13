@@ -40,6 +40,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private Task _sendLoop = Task.CompletedTask;
     private long _lastRemoteActivityTicks;
     private int _activeDumpOperations;
+    private readonly TimeSpan _acknowledgementRetentionDelay;
 
     private readonly string? _authenticationSecret;
     private readonly object _runLock = new();
@@ -66,6 +67,8 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         _sessionToken = SessionFrameContract.CreateSessionToken(SessionKey, _options, _authenticationSecret);
         _reconnectGate = new SemaphoreSlim(_options.MaximalReconnectAttempts, _options.MaximalReconnectAttempts);
         OutboundBuffer = new SessionOutboundBuffer();
+        var heartbeatInterval = SessionFrameContract.GetHeartbeatInterval(_options);
+        _acknowledgementRetentionDelay = TimeSpan.FromTicks(heartbeatInterval.Ticks * 2);
     }
 
     async Task IOutboundResilientConnection.InitAsync(CancellationToken cancellationToken)
@@ -246,7 +249,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
         if (Volatile.Read(ref _activeDumpOperations) == 0)
         {
-            ClearAcknowledgementState(eventId, AcknowledgementState.Acknowledged);
+            ScheduleAcknowledgementRemoval(eventId);
             return;
         }
 
@@ -257,8 +260,38 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     {
         while (_pendingAcknowledgementRemovals.TryDequeue(out var eventId))
         {
-            ClearAcknowledgementState(eventId, AcknowledgementState.Acknowledged);
+            ScheduleAcknowledgementRemoval(eventId);
         }
+    }
+
+    private void ScheduleAcknowledgementRemoval(Guid eventId)
+    {
+        if (eventId == Guid.Empty)
+        {
+            return;
+        }
+
+        var retentionDelay = _acknowledgementRetentionDelay;
+        if (retentionDelay <= TimeSpan.Zero)
+        {
+            ClearAcknowledgementState(eventId, AcknowledgementState.Acknowledged);
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(retentionDelay, _cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+            {
+            }
+            finally
+            {
+                ClearAcknowledgementState(eventId, AcknowledgementState.Acknowledged);
+            }
+        });
     }
 
     public void EnqueueFrame(SessionFrame frame)

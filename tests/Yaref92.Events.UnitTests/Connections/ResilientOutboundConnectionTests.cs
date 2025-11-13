@@ -87,7 +87,10 @@ public sealed class ResilientOutboundConnectionTests
     [Test]
     public async Task DumpBuffer_RemainsConsistent_WhenConcurrentEnqueueAndAckOccur()
     {
-        var options = new ResilientSessionOptions();
+        var options = new ResilientSessionOptions
+        {
+            HeartbeatInterval = TimeSpan.FromMilliseconds(10),
+        };
         var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 12345);
 
         await using var connection = new ResilientOutboundConnection(options, sessionKey);
@@ -128,6 +131,8 @@ public sealed class ResilientOutboundConnectionTests
 
         await Task.WhenAll(dumpTask, enqueueTask, ackTask).ConfigureAwait(false);
 
+        await WaitForAcknowledgementsToClearAsync(connection, options.HeartbeatInterval).ConfigureAwait(false);
+
         var snapshot = connection.GetOutboxSnapshotForTesting();
 
         var expectedIds = new HashSet<Guid>(framesToDump.Select(frame => frame.Id));
@@ -141,7 +146,10 @@ public sealed class ResilientOutboundConnectionTests
     [Test]
     public async Task OnAckReceived_DoesNotLeakAcknowledgementStates()
     {
-        var options = new ResilientSessionOptions();
+        var options = new ResilientSessionOptions
+        {
+            HeartbeatInterval = TimeSpan.FromMilliseconds(10),
+        };
         var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 12345);
 
         await using var connection = new ResilientOutboundConnection(options, sessionKey);
@@ -154,8 +162,25 @@ public sealed class ResilientOutboundConnectionTests
         {
             connection.EnqueueFrame(frame);
             connection.OnAckReceived(frame.Id);
+        }
 
-            connection.AcknowledgedEventIds.Count.Should().BeLessOrEqualTo(1);
+        await WaitForAcknowledgementsToClearAsync(connection, options.HeartbeatInterval).ConfigureAwait(false);
+        connection.AcknowledgedEventIds.Should().BeEmpty();
+    }
+
+    private static async Task WaitForAcknowledgementsToClearAsync(
+        ResilientOutboundConnection connection,
+        TimeSpan heartbeatInterval)
+    {
+        var timeout = DateTime.UtcNow + TimeSpan.FromSeconds(1);
+        while (DateTime.UtcNow < timeout)
+        {
+            if (connection.AcknowledgedEventIds.IsEmpty)
+            {
+                return;
+            }
+
+            await Task.Delay(heartbeatInterval).ConfigureAwait(false);
         }
 
         connection.AcknowledgedEventIds.Should().BeEmpty();
