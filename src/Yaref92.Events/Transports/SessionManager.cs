@@ -10,7 +10,7 @@ internal class SessionManager : ISessionManager
 {
     private readonly ResilientSessionOptions _options;
     private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
-    private readonly ConcurrentDictionary<DnsEndPoint, Guid> _anonymousSessionIds = new();
+    private readonly ConcurrentDictionary<string, Guid> _anonymousSessionIds = new();
     private readonly int _listenerPort;
 
     public SessionManager(int listenPort, ResilientSessionOptions options)
@@ -25,7 +25,10 @@ internal class SessionManager : ISessionManager
 
     public IEnumerable<IResilientPeerSession> AuthenticatedSessions => _sessions.Values.Where(static session => session.RemoteEndpointHasAuthenticated);
 
-    public IEnumerable<IResilientPeerSession> ValidAnonymousSessions => _sessions.Values.Where(session => _anonymousSessionIds.ContainsKey(session.Key.AsEndPoint()) && (session.RemoteEndpointHasAuthenticated || !_options.DoAnonymousSessionsRequireAuthentication));
+    public IEnumerable<IResilientPeerSession> ValidAnonymousSessions =>
+        _sessions.Values.Where(session =>
+            _anonymousSessionIds.ContainsKey(ResolveAnonymousIdentityKey(session.Key))
+            && (session.RemoteEndpointHasAuthenticated || !_options.DoAnonymousSessionsRequireAuthentication));
 
     public ResilientSessionOptions Options => _options;
 
@@ -72,27 +75,9 @@ internal class SessionManager : ISessionManager
     internal void HydrateAnonymousSessionId(SessionKey sessionKey, EndPoint? remoteEndPoint)
     {
         remoteEndPoint ??= new DnsEndPoint(IPAddress.Any.ToString(), _listenerPort);
-        Guid identifier;
-        if (remoteEndPoint is DnsEndPoint dnsEndPoint)
-        {
-            identifier = _anonymousSessionIds.GetOrAdd(dnsEndPoint, static _ => Guid.NewGuid());
-        }
-        else
-        {
-            string fallbackHost = FallbackHost(remoteEndPoint);
-            int fallbackPort = FallbackPort(remoteEndPoint);
-            identifier = _anonymousSessionIds.GetOrAdd(new DnsEndPoint(fallbackHost, fallbackPort), static _ => Guid.NewGuid());
-        }
+        string identityKey = ResolveAnonymousIdentityKey(remoteEndPoint);
+        Guid identifier = _anonymousSessionIds.GetOrAdd(identityKey, static _ => Guid.NewGuid());
         sessionKey.HydrateAnonymouseId(identifier);
-    }
-
-    private int FallbackPort(EndPoint remoteEndPoint)
-    {
-        return remoteEndPoint switch
-        {
-            IPEndPoint ip when ip.Port > 0 => ip.Port,
-            _ => _listenerPort,
-        };
     }
 
     private static string FallbackHost(EndPoint remoteEndPoint)
@@ -102,6 +87,32 @@ internal class SessionManager : ISessionManager
             IPEndPoint ip => ip.Address.ToString(),
             _ => IPAddress.Any.ToString(),
         };
+    }
+
+    private static string ResolveAnonymousIdentityKey(EndPoint remoteEndPoint)
+    {
+        if (remoteEndPoint is DnsEndPoint dnsEndPoint)
+        {
+            return NormalizeHostKey(dnsEndPoint.Host);
+        }
+
+        string fallbackHost = FallbackHost(remoteEndPoint);
+        return NormalizeHostKey(fallbackHost);
+    }
+
+    private static string ResolveAnonymousIdentityKey(SessionKey sessionKey)
+    {
+        return NormalizeHostKey(sessionKey.Host);
+    }
+
+    private static string NormalizeHostKey(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return IPAddress.Any.ToString();
+        }
+
+        return host.ToLowerInvariant();
     }
 
     internal void TouchSession(SessionKey sessionKey)
