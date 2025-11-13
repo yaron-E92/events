@@ -85,6 +85,27 @@ public sealed class ResilientOutboundConnectionTests
     }
 
     [Test]
+    public async Task RefreshConnectionAsync_StopsAfterConfiguredNumberOfFailures()
+    {
+        var options = new ResilientSessionOptions
+        {
+            MaximalReconnectAttempts = 2,
+            BackoffInitialDelay = TimeSpan.FromMilliseconds(1),
+            BackoffMaxDelay = TimeSpan.FromMilliseconds(1),
+        };
+
+        var sessionKey = new SessionKey(Guid.NewGuid(), "127.0.0.1", 65000);
+
+        await using var connection = new ResilientOutboundConnection(options, sessionKey);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var refreshResult = await connection.RefreshConnectionAsync(cts.Token).ConfigureAwait(false);
+
+        refreshResult.Should().BeFalse();
+        connection.GetReconnectGateCurrentCountForTesting().Should().Be(0);
+    }
+
+    [Test]
     public async Task DumpBuffer_RemainsConsistent_WhenConcurrentEnqueueAndAckOccur()
     {
         var options = new ResilientSessionOptions
