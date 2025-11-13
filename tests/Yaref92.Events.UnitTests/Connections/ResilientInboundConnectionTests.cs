@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -16,6 +17,31 @@ namespace Yaref92.Events.UnitTests.Connections;
 [TestFixture]
 public class ResilientInboundConnectionTests
 {
+    [Test]
+    public async Task AttachTransientConnection_ReleasesPreviousTokenSourceHandles()
+    {
+        var options = new ResilientSessionOptions();
+        var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 1234);
+
+        await using var outboundConnection = new ResilientOutboundConnection(options, sessionKey);
+        var inboundConnection = new ResilientInboundConnection(options, sessionKey, outboundConnection);
+        IInboundResilientConnection inbound = inboundConnection;
+
+        using var firstClient = new TcpClient();
+        using var secondClient = new TcpClient();
+        using var firstAttachmentCts = new CancellationTokenSource();
+        using var secondAttachmentCts = new CancellationTokenSource();
+
+        var firstWaitHandle = firstAttachmentCts.Token.WaitHandle;
+
+        await inbound.AttachTransientConnection(firstClient, firstAttachmentCts).ConfigureAwait(false);
+        await DrainTransientConnectionSemaphoreAsync(inboundConnection).ConfigureAwait(false);
+
+        await inbound.AttachTransientConnection(secondClient, secondAttachmentCts).ConfigureAwait(false);
+
+        Assert.That(firstWaitHandle.SafeWaitHandle.IsClosed, Is.True);
+    }
+
     [Test]
     public async Task RunInboundAsync_AllowsSubsequentAttachmentsAfterDisconnect()
     {
@@ -195,6 +221,22 @@ public class ResilientInboundConnectionTests
             }
 
             await Task.Delay(10).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task DrainTransientConnectionSemaphoreAsync(ResilientInboundConnection inboundConnection)
+    {
+        var semaphoreField = typeof(ResilientInboundConnection).GetField(
+                "_transientConnectionAttachedSemaphore",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not locate the transient connection semaphore.");
+
+        var semaphore = (SemaphoreSlim?)semaphoreField.GetValue(inboundConnection)
+            ?? throw new InvalidOperationException("The transient connection semaphore is not initialized.");
+
+        while (semaphore.CurrentCount > 0)
+        {
+            await semaphore.WaitAsync().ConfigureAwait(false);
         }
     }
 

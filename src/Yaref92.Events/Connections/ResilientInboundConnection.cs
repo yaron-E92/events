@@ -61,7 +61,13 @@ public class ResilientInboundConnection : IInboundResilientConnection
 
     async Task IInboundResilientConnection.AttachTransientConnection(TcpClient transientConnection, CancellationTokenSource incomingConnectionCts)
     {
-        await _incomingConnectionCts?.CancelAsync()!;
+        var previousIncomingConnectionCts = _incomingConnectionCts;
+        if (previousIncomingConnectionCts is not null)
+        {
+            await ResilientCompositSessionConnection.CancelAndDisposeTokenSource(previousIncomingConnectionCts)
+                .ConfigureAwait(false);
+        }
+
         _incomingConnectionCts = incomingConnectionCts;
         _transientConnection = transientConnection;
         _transientConnectionAttachedSemaphore.Release();
