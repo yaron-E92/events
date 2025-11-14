@@ -176,17 +176,18 @@ public class ResilientSessionIntegrationTests
         ConcurrentDictionary<SessionKey, SessionState> sessions = server.Sessions;
         sessions.Should().HaveCount(2);
 
-        sessions.Should().ContainKey(authenticated.SessionKey);
-        sessions.Should().ContainKey(anonymous.SessionKey);
-
-        var anonymousSession = sessions[anonymous.SessionKey];
-        var authenticatedSession = sessions[authenticated.SessionKey];
+        var anonymousSession = sessions.Single(pair => pair.Value.Key.IsAnonymousKey).Value;
+        var authenticatedSession = sessions.Single(pair => !pair.Value.Key.IsAnonymousKey).Value;
 
         anonymousSession.HasAuthenticated.Should().BeTrue();
         authenticatedSession.HasAuthenticated.Should().BeTrue();
 
         anonymous.SessionKey.UserId.Should().Be(Guid.Empty);
         authenticated.SessionKey.UserId.Should().NotBe(Guid.Empty);
+
+        anonymousSession.Key.UserId.Should().NotBe(Guid.Empty);
+        authenticatedSession.Key.UserId.Should().Be(authenticated.SessionKey.UserId);
+        anonymousSession.Key.UserId.Should().NotBe(authenticatedSession.Key.UserId);
     }
 
     [Test]
