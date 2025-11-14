@@ -164,15 +164,14 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
     private IInboundResilientConnection.SessionFrameReceivedHandler AttachFrameHandler(IResilientPeerSession session)
     {
-        var handler = OnFrameReceivedAsync;
-        session.FrameReceived += handler;
+        session.FrameReceived += OnFrameReceivedAsync;
 
         if (session is ResilientPeerSession resilientSession)
         {
             resilientSession.Disposed += OnSessionDisposed;
         }
 
-        return handler;
+        return OnFrameReceivedAsync;
     }
 
     private void OnSessionDisposed(ResilientPeerSession session)
@@ -180,7 +179,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         if (_sessionFrameHandlers.TryRemove(session.Key, out Lazy<IInboundResilientConnection.SessionFrameReceivedHandler>? subscription)
             && subscription.IsValueCreated)
         {
-            session.FrameReceived -= subscription.Value;
+            (session as IResilientPeerSession).FrameReceived -= subscription.Value;
         }
 
         session.Disposed -= OnSessionDisposed;
