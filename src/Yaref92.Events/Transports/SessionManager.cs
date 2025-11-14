@@ -50,6 +50,8 @@ internal class SessionManager : ISessionManager
         {
             throw new System.Security.Authentication.AuthenticationException("Failed to validate session authentication frame.");
         }
+        sessionKey = NormalizeSessionKeyWithRemoteEndpoint(sessionKey, remoteEndPoint);
+
         if (sessionKey.IsAnonymousKey)
         {
             HydrateAnonymousSessionId(sessionKey, remoteEndPoint);
@@ -119,5 +121,31 @@ internal class SessionManager : ISessionManager
     {
         IResilientPeerSession session = GetOrGenerate(sessionKey, sessionKey.IsAnonymousKey);
         session.Touch();
+    }
+
+    private SessionKey NormalizeSessionKeyWithRemoteEndpoint(SessionKey sessionKey, EndPoint? remoteEndPoint)
+    {
+        if (remoteEndPoint is null)
+        {
+            return sessionKey;
+        }
+
+        (string host, int port) = remoteEndPoint switch
+        {
+            DnsEndPoint dnsEndPoint => (dnsEndPoint.Host, dnsEndPoint.Port),
+            IPEndPoint ipEndPoint => (ipEndPoint.Address.ToString(), ipEndPoint.Port),
+            _ => (sessionKey.Host, sessionKey.Port),
+        };
+
+        if (string.Equals(sessionKey.Host, host, StringComparison.OrdinalIgnoreCase)
+            && sessionKey.Port == port)
+        {
+            return sessionKey;
+        }
+
+        return new SessionKey(sessionKey.UserId, host, port)
+        {
+            IsAnonymousKey = sessionKey.IsAnonymousKey,
+        };
     }
 }

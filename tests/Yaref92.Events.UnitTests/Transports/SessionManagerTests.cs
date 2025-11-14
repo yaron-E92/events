@@ -10,6 +10,27 @@ namespace Yaref92.Events.UnitTests.Transports;
 public class SessionManagerTests
 {
     [Test]
+    public void ResolveSession_ReplacesSessionKeyEndpointWithRemoteEndpoint()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = false,
+            DoAnonymousSessionsRequireAuthentication = false,
+        };
+
+        var sessionManager = new SessionManager(listenPort: 5050, options);
+        var originalKey = new SessionKey(Guid.NewGuid(), "listener-host", 5050);
+        var sessionToken = SessionFrameContract.CreateSessionToken(originalKey, options, authenticationSecret: null);
+        var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
+        var remoteEndPoint = new IPEndPoint(IPAddress.Parse("203.0.113.25"), 62001);
+
+        var session = sessionManager.ResolveSession(remoteEndPoint, authFrame);
+
+        session.Key.Host.Should().Be(remoteEndPoint.Address.ToString());
+        session.Key.Port.Should().Be(remoteEndPoint.Port);
+    }
+
+    [Test]
     public void HydrateAnonymousSessionId_ReusesSessionForSameHostWithDifferentRemotePort()
     {
         var options = new ResilientSessionOptions
