@@ -590,6 +590,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 {
     private readonly string _outboxPath;
     private readonly ConcurrentQueue<string> _payloads = new();
+    private readonly IEventSerializer _serializer = new JsonEventSerializer();
     private readonly List<Guid> _acknowledged = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _messageWaiters = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _ackWaiters = new();
@@ -784,7 +785,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         switch (frame.Kind)
         {
             case SessionFrameKind.Event when frame.Payload is not null && frame.Id != Guid.Empty:
-                _payloads.Enqueue(frame.Payload);
+                EnqueueDomainPayload(frame.Payload);
                 NotifyWaiters(_messageWaiters, _payloads.Count);
 
                 if (Interlocked.Exchange(ref _dropMessageFlag, 0) == 1)
@@ -810,6 +811,25 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
                 NotifyWaiters(_ackWaiters, _acknowledged.Count);
                 break;
         }
+    }
+
+    private void EnqueueDomainPayload(string payload)
+    {
+        try
+        {
+            var (_, domainEvent) = _serializer.Deserialize(payload);
+            if (domainEvent is TestPayloadEvent testEvent)
+            {
+                _payloads.Enqueue(testEvent.Payload);
+                return;
+            }
+        }
+        catch (JsonException)
+        {
+            // Payload was not an envelope we could deserialize; fall back to raw text below.
+        }
+
+        _payloads.Enqueue(payload);
     }
 
     private IReadOnlyCollection<Guid> GetOutboxEntries()
