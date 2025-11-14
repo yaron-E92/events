@@ -147,6 +147,12 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         throw new IOException("Persistent session terminated unexpectedly.");
     }
 
+    private void NotifySendFailure(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        _ = Console.Error.WriteLineAsync($"Send failure for session {SessionKey}: {exception}");
+    }
+
     private static async Task WriteFrameAsync(NetworkStream stream, SessionFrame frame, CancellationToken cancellationToken)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(frame, SessionFrameSerializer.Options);

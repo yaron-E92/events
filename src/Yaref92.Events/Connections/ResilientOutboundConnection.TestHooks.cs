@@ -49,7 +49,7 @@ public sealed partial class ResilientOutboundConnection
     internal Task WaitForReconnectGateSignalForTestingAsync(CancellationToken cancellationToken)
         => WaitForReconnectGateCountChangeOrFullRelease(cancellationToken);
 
-    //internal void NotifySendFailureForTesting(Exception exception)
-    //    => NotifySendFailure(exception);
+    internal void NotifySendFailureForTesting(Exception exception)
+        => NotifySendFailure(exception);
 }
 #endif

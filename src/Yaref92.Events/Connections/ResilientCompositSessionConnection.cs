@@ -1,4 +1,6 @@
-﻿using Yaref92.Events.Sessions;
+﻿using System.Net;
+
+using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Connections;
 
@@ -6,6 +8,8 @@ internal sealed partial class ResilientCompositSessionConnection : IAsyncDisposa
 {
     public ResilientInboundConnection InboundConnection { get; }
     public ResilientOutboundConnection OutboundConnection { get; }
+    public string SessionToken => InboundConnection.SessionToken;
+    public DnsEndPoint RemoteEndPoint => OutboundConnection.RemoteEndPoint;
 
     public ResilientCompositSessionConnection(
         Guid userId,

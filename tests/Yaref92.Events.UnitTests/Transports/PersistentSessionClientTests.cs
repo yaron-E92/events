@@ -57,10 +57,10 @@ public class ResilientSessionClientTests
     [Test]
     public async Task HeartbeatLoop_Throws_When_Remote_Is_Inactive()
     {
-        await using var client = new ResilientSessionConnection(
+        await using var client = new ResilientCompositSessionConnection(
+            Guid.NewGuid(),
             "localhost",
             12345,
-            (_, _, _) => ValueTask.CompletedTask,
             new ResilientSessionOptions
             {
                 HeartbeatInterval = TimeSpan.Zero,
@@ -76,10 +76,10 @@ public class ResilientSessionClientTests
     [Test]
     public async Task BackoffDelay_GrowsExponentially_And_Respects_Maximum()
     {
-        await using var client = new ResilientSessionConnection(
+        await using var client = new ResilientCompositSessionConnection(
+            Guid.NewGuid(),
             "localhost",
             12345,
-            (_, _, _) => ValueTask.CompletedTask,
             new ResilientSessionOptions
             {
                 BackoffInitialDelay = TimeSpan.FromMilliseconds(5),
