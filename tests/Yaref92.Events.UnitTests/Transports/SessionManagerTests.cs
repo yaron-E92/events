@@ -12,10 +12,12 @@ public class SessionManagerTests
     [Test]
     public void ResolveSession_ReplacesSessionKeyEndpointWithRemoteEndpoint()
     {
+        const int advertisedCallbackPort = 62000;
         var options = new ResilientSessionOptions
         {
             RequireAuthentication = false,
             DoAnonymousSessionsRequireAuthentication = false,
+            CallbackPort = advertisedCallbackPort,
         };
 
         var sessionManager = new SessionManager(listenPort: 5050, options);
@@ -27,7 +29,7 @@ public class SessionManagerTests
         var session = sessionManager.ResolveSession(remoteEndPoint, authFrame);
 
         session.Key.Host.Should().Be(remoteEndPoint.Address.ToString());
-        session.Key.Port.Should().Be(remoteEndPoint.Port);
+        session.Key.Port.Should().Be(advertisedCallbackPort);
     }
 
     [Test]

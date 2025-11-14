@@ -1,7 +1,15 @@
-﻿namespace Yaref92.Events.Sessions;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Yaref92.Events.Sessions;
 
 internal static class SessionFrameContract
 {
+    private static readonly JsonSerializerOptions AuthPayloadSerializerOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     public const string TokenSecretDelimiter = "||";
 
     public static string CreateSessionToken(SessionKey sessionKey, ResilientSessionOptions options, string? authenticationSecret)
@@ -28,11 +36,13 @@ internal static class SessionFrameContract
             throw new ArgumentException("Session sessionToken must be provided.", nameof(sessionToken));
         }
 
-        var payload = options.RequireAuthentication
-            ? ResolveSecret(authenticationSecret, options)
-            : null;
+        var payload = new SessionAuthenticationPayload(
+            options.RequireAuthentication ? ResolveSecret(authenticationSecret, options) : null,
+            options.CallbackHost,
+            options.CallbackPort > 0 ? options.CallbackPort : null);
 
-        return SessionFrame.CreateAuth(sessionToken, payload);
+        var payloadJson = JsonSerializer.Serialize(payload, AuthPayloadSerializerOptions);
+        return SessionFrame.CreateAuth(sessionToken, payloadJson);
     }
 
     /// <summary>
@@ -47,12 +57,17 @@ internal static class SessionFrameContract
     /// In the case that authentication is not required, or if it is generally but not for an anonymouse session and this is one,
     /// then the sessionToken does not need to contain a secret.
     /// </remarks>
-    public static bool TryValidateAuthentication(SessionFrame frame, ResilientSessionOptions options, out SessionKey sessionKey)
+    public static bool TryValidateAuthentication(
+        SessionFrame frame,
+        ResilientSessionOptions options,
+        out SessionKey sessionKey,
+        out SessionAuthenticationPayload? authenticationPayload)
     {
         ArgumentNullException.ThrowIfNull(frame);
         ArgumentNullException.ThrowIfNull(options);
 
         sessionKey = null!;
+        authenticationPayload = null;
         if (frame.Kind != SessionFrameKind.Auth)
         {
             // TODO: Log invalid frame kind for authentication
@@ -80,7 +95,8 @@ internal static class SessionFrameContract
             return true;
         }
 
-        var providedSecret = frame.Payload;
+        authenticationPayload = ParseAuthenticationPayload(frame.Payload);
+        var providedSecret = authenticationPayload?.Secret;
         if (string.IsNullOrEmpty(providedSecret))
         {
             providedSecret = embeddedSecret;
@@ -200,4 +216,23 @@ internal static class SessionFrameContract
         }
         return Guid.TryParse(userIdPart, out userId);
     }
+
+    private static SessionAuthenticationPayload? ParseAuthenticationPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<SessionAuthenticationPayload>(payload, AuthPayloadSerializerOptions);
+        }
+        catch (JsonException)
+        {
+            return new SessionAuthenticationPayload(payload, null, null);
+        }
+    }
 }
+
+internal sealed record SessionAuthenticationPayload(string? Secret, string? CallbackHost, int? CallbackPort);
