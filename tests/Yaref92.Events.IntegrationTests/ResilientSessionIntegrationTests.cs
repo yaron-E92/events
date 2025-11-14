@@ -72,7 +72,7 @@ public class ResilientSessionIntegrationTests
         var payload = $"payload-{Guid.NewGuid():N}";
         var domainEvent = new TestPayloadEvent(payload);
         var serializedEvent = serverHost.Serializer.Serialize(domainEvent);
-        var messageId = await clientHost.Client.EnqueueEventAsync(serializedEvent, CancellationToken.None).ConfigureAwait(false);
+        var messageId = await clientHost.EnqueueEventAsync(domainEvent.EventId, serializedEvent, CancellationToken.None).ConfigureAwait(false);
         messageId.Should().Be(domainEvent.EventId);
 
         await firstDeliveryTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
@@ -148,7 +148,7 @@ public class ResilientSessionIntegrationTests
 
         var domainEvent = new TestPayloadEvent(payload);
         var serializedEvent = serverHost.Serializer.Serialize(domainEvent);
-        var messageId = await clientHost.Client.EnqueueEventAsync(serializedEvent, CancellationToken.None).ConfigureAwait(false);
+        var messageId = await clientHost.EnqueueEventAsync(domainEvent.EventId, serializedEvent, CancellationToken.None).ConfigureAwait(false);
         messageId.Should().Be(domainEvent.EventId);
 
         await clientHost.WaitForMessageCountAsync(initialMessageCount + 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
@@ -321,7 +321,7 @@ public class ResilientSessionIntegrationTests
         var payload = $"dispatch-{Guid.NewGuid():N}";
         var domainEvent = new TestPayloadEvent(payload);
         var serializedEvent = serverHost.Serializer.Serialize(domainEvent);
-        var messageId = await clientHost.Client.EnqueueEventAsync(serializedEvent, CancellationToken.None).ConfigureAwait(false);
+        var messageId = await clientHost.EnqueueEventAsync(domainEvent.EventId, serializedEvent, CancellationToken.None).ConfigureAwait(false);
         messageId.Should().Be(domainEvent.EventId);
 
         var receivedEvent = await eventTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
@@ -613,13 +613,13 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     {
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
         Client = new ResilientCompositSessionConnection(sessionUserId ?? Guid.NewGuid(), host, port, options);
-        SetOutboxPath(Client, _outboxPath);
+        Client.SetOutboxPathForTesting(_outboxPath);
         _trackConnections = trackConnections;
         if (_trackConnections)
         {
-            Client.ConnectionEstablished += OnConnectionEstablishedAsync;
+            Client.OutboundConnection.ConnectionEstablished += OnConnectionEstablishedAsync;
         }
-        Client.FrameReceived += OnFrameReceivedAsync;
+        Client.InboundConnection.FrameReceived += OnFrameReceivedAsync;
         if (dropFirstAck)
         {
             DropNextAck();
@@ -651,7 +651,23 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     public int ConnectionCount => Volatile.Read(ref _connectionCount);
 
     public Task StartAsync(CancellationToken cancellationToken)
-        => Client.StartAsync(cancellationToken);
+    {
+        var outbound = (IOutboundResilientConnection)Client.OutboundConnection;
+        var inbound = (IInboundResilientConnection)Client.InboundConnection;
+
+        return Task.WhenAll(
+            outbound.InitAsync(cancellationToken),
+            inbound.InitAsync(cancellationToken));
+    }
+
+    public Task<Guid> EnqueueEventAsync(string payload, CancellationToken cancellationToken)
+        => EnqueueEventAsync(Guid.NewGuid(), payload, cancellationToken);
+
+    public Task<Guid> EnqueueEventAsync(Guid eventId, string payload, CancellationToken cancellationToken)
+    {
+        Client.OutboundConnection.EnqueueFrame(SessionFrame.CreateEventFrame(eventId, payload));
+        return Task.FromResult(eventId);
+    }
 
     public void DropNextAck() => Interlocked.Exchange(ref _dropAckFlag, 1);
 
@@ -755,9 +771,9 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     {
         if (_trackConnections)
         {
-            Client.ConnectionEstablished -= OnConnectionEstablishedAsync;
+            Client.OutboundConnection.ConnectionEstablished -= OnConnectionEstablishedAsync;
         }
-        Client.FrameReceived -= OnFrameReceivedAsync;
+        Client.InboundConnection.FrameReceived -= OnFrameReceivedAsync;
         await Client.DisposeAsync().ConfigureAwait(false);
 
         if (File.Exists(_outboxPath))
@@ -773,14 +789,14 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
     }
 
-    private ValueTask OnConnectionEstablishedAsync(ResilientCompositSessionConnection session, CancellationToken cancellationToken)
+    private Task OnConnectionEstablishedAsync(IResilientConnection _, CancellationToken cancellationToken)
     {
         var connections = Interlocked.Increment(ref _connectionCount);
         NotifyWaiters(_connectionWaiters, connections);
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 
-    private async ValueTask OnFrameReceivedAsync(ResilientCompositSessionConnection session, SessionFrame frame, CancellationToken cancellationToken)
+    private async Task OnFrameReceivedAsync(SessionFrame frame, SessionKey _, CancellationToken cancellationToken)
     {
         switch (frame.Kind)
         {
@@ -790,16 +806,16 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
                 if (Interlocked.Exchange(ref _dropMessageFlag, 0) == 1)
                 {
-                    await session.AbortActiveConnectionAsync().ConfigureAwait(false);
+                    await Client.OutboundConnection.AbortActiveConnectionAsync().ConfigureAwait(false);
                     break;
                 }
 
-                session.EnqueueFrame(SessionFrame.CreateAck(frame.Id));
+                Client.OutboundConnection.EnqueueFrame(SessionFrame.CreateAck(frame.Id));
                 break;
             case SessionFrameKind.Ack when frame.Id != Guid.Empty:
                 if (Interlocked.Exchange(ref _dropAckFlag, 0) == 1)
                 {
-                    await session.AbortActiveConnectionAsync().ConfigureAwait(false);
+                    await Client.OutboundConnection.AbortActiveConnectionAsync().ConfigureAwait(false);
                     break;
                 }
 
@@ -834,24 +850,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     private IReadOnlyCollection<Guid> GetOutboxEntries()
     {
-        var entriesField = typeof(ResilientCompositSessionConnection).GetField("_outboxEntries", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var entries = (System.Collections.IDictionary) entriesField.GetValue(Client)!;
-        var keys = new List<Guid>();
-        foreach (var key in entries.Keys)
-        {
-            if (key is Guid id)
-            {
-                keys.Add(id);
-            }
-        }
-
-        return keys;
-    }
-
-    private static void SetOutboxPath(ResilientCompositSessionConnection client, string path)
-    {
-        var field = typeof(ResilientCompositSessionConnection).GetField("_outboxPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        field.SetValue(client, path);
+        return Client.GetOutboxSnapshotForTesting().Keys.ToArray();
     }
 
     private void NotifyWaiters(List<(int Target, TaskCompletionSource Completion)> waiters, int current)
