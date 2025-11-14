@@ -79,6 +79,8 @@ internal static class SessionFrameContract
             return false;
         }
 
+        authenticationPayload = ParseAuthenticationPayload(frame.Payload);
+
         if (!options.RequireAuthentication)
         {
             return true;
@@ -94,8 +96,6 @@ internal static class SessionFrameContract
         {
             return true;
         }
-
-        authenticationPayload = ParseAuthenticationPayload(frame.Payload);
         var providedSecret = authenticationPayload?.Secret;
         if (string.IsNullOrEmpty(providedSecret))
         {
