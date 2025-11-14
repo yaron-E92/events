@@ -4,7 +4,7 @@ The resilient TCP transport is the recommended way to host `NetworkedEventAggreg
 
 ## Session Frames
 
-Resilient sessions exchange a small set of frame types over the wire. Each frame is encoded as JSON using the [`SessionFrameSerializer`](../../src/Yaref92.Events/Transports/SessionFrame.cs) helpers and carries a canonical `Guid` identifier in the `id` field so that senders and receivers always agree on the inflight frame:
+Resilient sessions exchange a small set of frame types over the wire. Each frame is encoded as JSON using the helpers defined in [`src/Yaref92.Events/Sessions/SessionFrame.cs`](../../src/Yaref92.Events/Sessions/SessionFrame.cs) and carries a canonical `Guid` identifier in the `id` field so that senders and receivers always agree on the inflight frame:
 
 | Frame | Purpose |
 | --- | --- |
@@ -16,21 +16,21 @@ Resilient sessions exchange a small set of frame types over the wire. Each frame
 
 The transport automatically serializes and dispatches these frames; application code only needs to publish and subscribe to domain events.
 
-## Collapsed inbound session
+## Inbound session lifecycle
 
-`PersistentInboundSession` now owns the TCP accept loop, authentication handshake, heartbeat bookkeeping, and inbound dispatch for all connections. The listener no longer maintains a parallel session manager—`PersistentSessionListener` simply wraps this inbound session and exposes the join/leave/frame callbacks used by higher-level components. When a peer reconnects, the session state (including inflight frames) is preserved and any durable `ResilientSessionClient` previously registered with the session is automatically reattached.
+`PersistentPortListener` hosts the TCP listener, handles the initial authentication handshake, and passes authenticated sockets to the correct `ResilientInboundConnection`. Each inbound connection keeps the receive loop, heartbeat timer, and deduplication state for one peer while sharing the process-wide `SessionManager`. When a peer reconnects, the existing `ResilientInboundConnection` is rehydrated so inflight frames continue flowing without forcing a new aggregator registration.
 
-## Client responsibilities
+## Persistent publisher responsibilities
 
-`ResilientSessionClient` is responsible for:
+Outbound delivery is coordinated by `PersistentEventPublisher`, which spins up a `ResilientCompositSessionConnection` per session key. Each composite connection owns both a `ResilientOutboundConnection` and the paired `ResilientInboundConnection`, giving it everything it needs to:
 
-- Creating the session token that carries the `SessionKey` and optional authentication secret.
-- Persisting the outbox to disk and replaying unacknowledged frames after reconnect.
-- Driving exponential backoff and retry loops when sockets drop or authentication fails.
-- Raising callbacks for inbound frames so callers can dispatch events or respond with ACKs.
-- Correlating ACK frames with inflight entries and trimming the durable outbox.
+- Create the session token that carries the `SessionKey` and optional authentication secret.
+- Persist the outbox to disk and replay unacknowledged frames after reconnect.
+- Drive exponential backoff and retry loops when sockets drop or authentication fails.
+- Raise callbacks for inbound frames so the listener’s `IInboundConnectionManager.EventReceived` pipeline can dispatch events or respond with ACKs.
+- Correlate ACK frames with inflight entries and trim the durable outbox.
 
-Callers enqueue event payloads through `EnqueueEventAsync`; the client takes care of persistence, reconnect orchestration, and heartbeat monitoring.
+Callers enqueue event payloads through `TCPEventTransport.PublishEventAsync`; the publisher takes care of persistence, reconnect orchestration, and heartbeat monitoring behind the scenes.
 
 ## Authentication Modes
 
@@ -55,7 +55,7 @@ All values can be overridden per transport instance. Use shorter intervals for a
 
 ## Persistent Outbox Artifacts
 
-Every `ResilientSessionClient` writes its queued events to an on-disk outbox located at:
+Every `ResilientCompositSessionConnection` writes its queued events to an on-disk outbox located at:
 
 ```
 <AppContext.BaseDirectory>/outbox.json
@@ -64,7 +64,7 @@ Every `ResilientSessionClient` writes its queued events to an on-disk outbox loc
 The file contains the durable queue of event envelopes awaiting acknowledgement from remote peers. Entries are marked as `IsQueued` once written and are cleared as soon as the transport receives the matching `ACK` frame. Because ACKs now echo the canonical `Guid` assigned to the original frame, replay after reconnect is deterministic. The file is guarded by a cross-process `SemaphoreSlim` so multiple transports running in the same process cannot corrupt the artifact.
 
 - **Backups** – Include the outbox in host backups if you need to guarantee at-least-once delivery across restarts.
-- **Rotation** – The outbox automatically prunes acknowledged entries. If you need custom retention, hook into `PersistentSessionClient.SchedulePersist()` in a fork.
+- **Rotation** – The outbox automatically prunes acknowledged entries. If you need custom retention, customize the persistence hooks inside `ResilientCompositSessionConnection`.
 
 ## Wiring the Transport
 
@@ -80,7 +80,6 @@ var localAggregator = new EventAggregator();
 var transport = new TCPEventTransport(
     listenPort: 9000,
     serializer: new JsonEventSerializer(),
-    eventAggregator: localAggregator,
     heartbeatInterval: TimeSpan.FromSeconds(15),
     authenticationToken: "shared-secret"
 );
