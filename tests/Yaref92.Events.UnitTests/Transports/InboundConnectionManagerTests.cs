@@ -83,6 +83,85 @@ public class InboundConnectionManagerTests
     }
 
     [Test]
+    public async Task FrameHandlers_FireWithoutSockets_WhenFakeSessionRaisesFrames()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = false,
+        };
+
+        var sessionKey = new SessionKey(Guid.NewGuid(), "loopback", 5000);
+        var sessionManager = new SessionManager(sessionKey.Port, options);
+        var serializer = new DeterministicEventSerializer();
+
+        var inbound = new FakeInboundResilientConnection(sessionKey);
+        var outbound = new FakeOutboundResilientConnection(sessionKey);
+        var session = new FakeResilientPeerSession(sessionKey, inbound, outbound);
+        sessionManager.InjectSession(session);
+
+        await using var manager = new InboundConnectionManager(sessionManager, serializer);
+        var inboundManager = (IInboundConnectionManager)manager;
+
+        var eventReceived = new TaskCompletionSource<(IDomainEvent DomainEvent, SessionKey Key)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Func<IDomainEvent, SessionKey, Task> eventHandler = (domainEvent, key) =>
+        {
+            eventReceived.TrySetResult((domainEvent, key));
+            return Task.CompletedTask;
+        };
+        inboundManager.EventReceived += eventHandler;
+
+        var ackSource = new TaskCompletionSource<(Guid EventId, SessionKey Key)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Func<Guid, SessionKey, Task> ackHandler = (eventId, key) =>
+        {
+            ackSource.TrySetResult((eventId, key));
+            return Task.CompletedTask;
+        };
+        manager.AckReceived += ackHandler;
+
+        var pingSource = new TaskCompletionSource<SessionKey>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Func<SessionKey, Task> pingHandler = key =>
+        {
+            pingSource.TrySetResult(key);
+            return Task.CompletedTask;
+        };
+        manager.PingReceived += pingHandler;
+
+        try
+        {
+            manager.AttachFrameHandler(session);
+
+            var expectedEventId = Guid.NewGuid();
+            await inbound.RaiseFrameAsync(SessionFrame.CreateEventFrame(expectedEventId, DeterministicEventSerializer.ExpectedPayload), CancellationToken.None)
+                .ConfigureAwait(false);
+
+            var expectedAck = Guid.NewGuid();
+            await inbound.RaiseFrameAsync(SessionFrame.CreateAck(expectedAck), CancellationToken.None).ConfigureAwait(false);
+
+            await inbound.RaiseFrameAsync(SessionFrame.CreatePing(), CancellationToken.None).ConfigureAwait(false);
+
+            (IDomainEvent DomainEvent, SessionKey Key) eventArgs = await eventReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            eventArgs.DomainEvent.Should().BeOfType<DummyEvent>();
+            eventArgs.DomainEvent.As<DummyEvent>().Text.Should().Be(DeterministicEventSerializer.ExpectedPayload);
+            eventArgs.Key.Should().Be(sessionKey);
+
+            (Guid EventId, SessionKey Key) ackArgs = await ackSource.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            ackArgs.EventId.Should().Be(expectedAck);
+            ackArgs.Key.Should().Be(sessionKey);
+
+            SessionKey pingKey = await pingSource.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            pingKey.Should().Be(sessionKey);
+
+            session.TouchCount.Should().BeGreaterThanOrEqualTo(3);
+        }
+        finally
+        {
+            inboundManager.EventReceived -= eventHandler;
+            manager.AckReceived -= ackHandler;
+            manager.PingReceived -= pingHandler;
+        }
+    }
+
+    [Test]
     public async Task HandleIncomingTransientConnectionAsync_FramesBeforeHandlers_DoNotThrowAndHandlersFireAfterAttachment()
     {
         var options = new ResilientSessionOptions

@@ -10,7 +10,7 @@ namespace Yaref92.Events.UnitTests.Transports;
 public class SessionManagerTests
 {
     [Test]
-    public void ResolveSession_ReplacesSessionKeyEndpointWithRemoteEndpoint()
+    public void ResolveSession_NormalizesRemoteHostAndCallbackPort()
     {
         const int advertisedCallbackPort = 62000;
         var options = new ResilientSessionOptions
@@ -24,12 +24,43 @@ public class SessionManagerTests
         var originalKey = new SessionKey(Guid.NewGuid(), "listener-host", 5050);
         var sessionToken = SessionFrameContract.CreateSessionToken(originalKey, options, authenticationSecret: null);
         var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
-        var remoteEndPoint = new IPEndPoint(IPAddress.Parse("203.0.113.25"), 62001);
+        var remoteEndPoint = new DnsEndPoint("peer.example.net", 62001);
 
         var session = sessionManager.ResolveSession(remoteEndPoint, authFrame);
 
-        session.Key.Host.Should().Be(remoteEndPoint.Address.ToString());
+        session.Key.Host.Should().Be(remoteEndPoint.Host);
         session.Key.Port.Should().Be(advertisedCallbackPort);
+    }
+
+    [Test]
+    public void ResolveSession_ReusesAnonymousIdentifiersPerHost()
+    {
+        const int callbackPort = 65000;
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = false,
+            DoAnonymousSessionsRequireAuthentication = false,
+            CallbackPort = callbackPort,
+        };
+
+        var sessionManager = new SessionManager(listenPort: 5050, options);
+        var anonymousKey = new SessionKey(Guid.Empty, "ignored-host", callbackPort)
+        {
+            IsAnonymousKey = true,
+        };
+        var sessionToken = SessionFrameContract.CreateSessionToken(anonymousKey, options, authenticationSecret: null);
+        var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
+
+        var firstRemote = new DnsEndPoint("Peer.Example.Net", 62001);
+        var secondRemote = new DnsEndPoint("peer.example.net", 62050);
+
+        var firstSession = sessionManager.ResolveSession(firstRemote, authFrame);
+        var secondSession = sessionManager.ResolveSession(secondRemote, authFrame);
+
+        firstSession.Key.UserId.Should().NotBe(Guid.Empty);
+        secondSession.Key.UserId.Should().Be(firstSession.Key.UserId);
+        firstSession.Key.Port.Should().Be(callbackPort);
+        secondSession.Key.Port.Should().Be(callbackPort);
     }
 
     [Test]
