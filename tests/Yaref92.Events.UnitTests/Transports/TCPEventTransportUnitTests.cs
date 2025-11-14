@@ -1,22 +1,15 @@
-﻿using System;
-using System.Collections.Concurrent;
+using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-
 using FluentAssertions;
 using NUnit.Framework;
-
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Transports;
 using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports.Events;
-using Yaref92.Events.Connections;
+using Yaref92.Events.Transports;
+using Yaref92.Events.Transports.ConnectionManagers;
 
 namespace Yaref92.Events.UnitTests.Transports;
 
@@ -24,436 +17,277 @@ namespace Yaref92.Events.UnitTests.Transports;
 public class TCPEventTransportUnitTests
 {
     [Test]
-    public async Task Subscribe_RegistersHandler_And_PublishesInnerEvent()
+    public async Task PublishEventAsync_SerializesPayload_AndBroadcasts()
     {
-        // Arrange
-        var aggregator = new FakeEventAggregator();
-        await using var transport = new TCPEventTransport(0);
-        transport.Subscribe<DummyEvent>();
+        var inboundManager = new FakeInboundConnectionManager();
+        var outboundManager = new FakeOutboundConnectionManager();
+        var serializer = new FakeEventSerializer("serialized-payload");
+        await using var transport = CreateTransport(inboundManager, outboundManager, serializer: serializer);
 
-        // Act
-        var handler = aggregator.GetAsyncSubscriber<EventReceived<DummyEvent>>();
-        handler.Should().NotBeNull();
+        var domainEvent = new DummyEvent();
+        await transport.PublishEventAsync(domainEvent).ConfigureAwait(false);
 
-        var dummy = new DummyEvent();
-        await handler!.OnNextAsync(new EventReceived<DummyEvent>(DateTime.UtcNow, dummy), CancellationToken.None).ConfigureAwait(false);
+        serializer.SerializedEvents.Should().ContainSingle().Which.Should().Be(domainEvent);
+        outboundManager.Broadcasts.Should().ContainSingle(b => b.EventId == domainEvent.EventId && b.Payload == "serialized-payload");
+    }
 
-        // Assert
-        aggregator.PublishedEvents.OfType<DummyEvent>().Should().ContainSingle().Which.Should().Be(dummy);
+    [Test]
+    public async Task AckReceived_ForwardsToOutboundConnectionManager()
+    {
+        var inboundManager = new FakeInboundConnectionManager();
+        var outboundManager = new FakeOutboundConnectionManager();
+        await using var transport = CreateTransport(inboundManager, outboundManager);
+
+        var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 1234);
+        var eventId = Guid.NewGuid();
+        await inboundManager.RaiseAckReceivedAsync(eventId, sessionKey).ConfigureAwait(false);
+
+        outboundManager.AckNotifications.Should().ContainSingle(call => call.EventId == eventId && call.SessionKey == sessionKey);
+    }
+
+    [Test]
+    public async Task PingReceived_SendsPongThroughPublisher()
+    {
+        var inboundManager = new FakeInboundConnectionManager();
+        var outboundManager = new FakeOutboundConnectionManager();
+        await using var transport = CreateTransport(inboundManager, outboundManager);
+
+        var sessionKey = new SessionKey(Guid.NewGuid(), "remote", 5678);
+        await inboundManager.RaisePingReceivedAsync(sessionKey).ConfigureAwait(false);
+
+        outboundManager.Pongs.Should().ContainSingle(sessionKey);
+    }
+
+    [Test]
+    public async Task EventReceived_WhenHandlerCompletes_AcknowledgesEvent()
+    {
+        var inboundManager = new FakeInboundConnectionManager();
+        var outboundManager = new FakeOutboundConnectionManager();
+        var publisher = new FakePersistentFramePublisher(outboundManager);
+        await using var transport = CreateTransport(inboundManager, outboundManager, publisher);
+
+        var sessionKey = new SessionKey(Guid.NewGuid(), "peer", 9000);
+        var domainEvent = new DummyEvent();
+        ((IEventTransport)transport).EventReceived += _ => Task.FromResult(true);
+
+        await inboundManager.RaiseEventReceivedAsync(domainEvent, sessionKey).ConfigureAwait(false);
+
+        publisher.Acknowledgements.Should().ContainSingle(a => a.EventId == domainEvent.EventId && a.SessionKey == sessionKey);
+    }
+
+    [Test]
+    public async Task SessionInboundConnectionDropped_AttemptsReconnect()
+    {
+        var inboundManager = new FakeInboundConnectionManager();
+        var outboundManager = new FakeOutboundConnectionManager();
+        await using var transport = CreateTransport(inboundManager, outboundManager);
+
+        var sessionKey = new SessionKey(Guid.NewGuid(), "peer", 5555);
+        await inboundManager.RaiseSessionDroppedAsync(sessionKey).ConfigureAwait(false);
+
+        outboundManager.ReconnectAttempts.Should().ContainSingle(attempt => attempt.SessionKey == sessionKey);
     }
 
     [Test]
     public void Serialization_Envelope_RoundTrip_Works()
     {
-        // Arrange
         DummyEvent dummy = new();
         string? typeName = typeof(DummyEvent).AssemblyQualifiedName;
         string json = JsonSerializer.Serialize(dummy, dummy.GetType());
         var envelope = new { EventId = Guid.NewGuid(), TypeName = typeName, EventJson = json };
         string payload = JsonSerializer.Serialize(envelope);
 
-        // Act
         TcpEventEnvelope? deserialized = JsonSerializer.Deserialize<TcpEventEnvelope>(payload);
         Type? returnType = Type.GetType(deserialized!.TypeName!);
         object? evt = JsonSerializer.Deserialize(deserialized!.EventJson!, returnType!);
 
-        // Assert
         evt.Should().BeOfType<DummyEvent>();
     }
 
-    [Test]
-    public async Task PublishAsync_WithPersistentSessions_EnqueuesPayload_ForEachSession()
+    private static TCPEventTransport CreateTransport(
+        FakeInboundConnectionManager? inbound = null,
+        FakeOutboundConnectionManager? outbound = null,
+        FakePersistentFramePublisher? publisher = null,
+        FakeEventSerializer? serializer = null)
     {
-        // Arrange
-        await using var transport = new TCPEventTransport(0);
-        ConcurrentDictionary<string, ResilientCompositSessionConnection> sessions = GetPersistentSessionsDictionary(transport);
-
-        var tempDirectory = CreateTempDirectory();
-        try
-        {
-            var sessionA = CreateSession(tempDirectory);
-            var sessionB = CreateSession(tempDirectory);
-            sessions.TryAdd(sessionA.Key, sessionA);
-            sessions.TryAdd(sessionB.Key, sessionB);
-
-            // Act
-            await transport.PublishEventAsync(new DummyEvent()).ConfigureAwait(false);
-
-            // Assert
-            var snapshotA = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionA.PersistentClient);
-            var snapshotB = ResilientSessionClientTestHelper.GetOutboxSnapshot(sessionB.PersistentClient);
-
-            snapshotA.Should().HaveCount(1);
-            snapshotB.Should().HaveCount(1);
-            snapshotA.Values.Single().Should().Be(snapshotB.Values.Single());
-        }
-        finally
-        {
-            await DisposeSessionsAsync(sessions.Values).ConfigureAwait(false);
-            DeleteTempDirectory(tempDirectory);
-        }
+        inbound ??= new FakeInboundConnectionManager();
+        outbound ??= new FakeOutboundConnectionManager();
+        serializer ??= new FakeEventSerializer("payload");
+        var listener = new FakePortListener(inbound);
+        var publisherInstance = publisher ?? new FakePersistentFramePublisher(outbound);
+        return new TCPEventTransport(listener, publisherInstance, serializer);
     }
 
-    [Test]
-    public async Task ConnectAsync_WithProvidedUserId_ReusesExistingSession()
+    private sealed class FakeEventSerializer : IEventSerializer
     {
-        var aggregator = new FakeEventAggregator();
-        await using var transport = new TCPEventTransport(0);
-        var sessions = GetPersistentSessionsDictionary(transport);
+        private readonly string _payload;
 
-        var tempDirectory = CreateTempDirectory();
-        try
+        internal FakeEventSerializer(string payload)
         {
-            var userId = Guid.NewGuid();
-            var sessionKey = new SessionKey(userId, "localhost", 23456);
-            var session = CreateSession(tempDirectory, sessionKey);
-            sessions.TryAdd(sessionKey, session);
-
-            await transport.PublisherForTesting.ConnectAsync(userId, sessionKey.Host, sessionKey.Port, CancellationToken.None).ConfigureAwait(false);
-
-            session.StartInvocationCount.Should().Be(1);
+            _payload = payload;
         }
-        finally
+
+        public List<IDomainEvent> SerializedEvents { get; } = new();
+
+        public string Serialize<T>(T evt) where T : class, IDomainEvent
         {
-            await DisposeSessionsAsync(sessions.Values).ConfigureAwait(false);
-            DeleteTempDirectory(tempDirectory);
+            SerializedEvents.Add(evt);
+            return _payload;
         }
+
+        public (Type? type, IDomainEvent? domainEvent) Deserialize(string data) => (null, null);
     }
 
-    [Test]
-    public async Task PublishAsync_WhenPersistentSessionThrows_PropagatesException()
+    private sealed class FakePersistentFramePublisher : IPersistentFramePublisher
     {
-        await using var transport = new TCPEventTransport(0);
-        ConcurrentDictionary<string, ResilientCompositSessionConnection> sessions = GetPersistentSessionsDictionary(transport);
-
-        var tempDirectory = CreateTempDirectory();
-        try
+        public FakePersistentFramePublisher(FakeOutboundConnectionManager outbound)
         {
-            var session = CreateSession(tempDirectory);
-            var sessionKey = session.Key;
-            sessions.TryAdd(sessionKey, session);
-            await session.DisposeAsync().ConfigureAwait(false);
-            transport.ConnectToPeerAsync("localhost", 12345).Wait();
-            Func<Task> act = () => transport.PublishEventAsync(new DummyEvent());
-            await act.Should().ThrowAsync<ObjectDisposedException>().ConfigureAwait(false);
-
-            sessions.Should().ContainKey(sessionKey);
+            ConnectionManager = outbound;
         }
-        finally
+
+        public List<(Guid EventId, SessionKey SessionKey)> Acknowledgements { get; } = new();
+
+        public FakeOutboundConnectionManager ConnectionManager { get; }
+
+        IOutboundConnectionManager IPersistentFramePublisher.ConnectionManager => ConnectionManager;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public void AcknowledgeEventReceipt(Guid eventId, SessionKey sessionKey)
         {
-            await DisposeSessionsAsync(sessions.Values).ConfigureAwait(false);
-            DeleteTempDirectory(tempDirectory);
+            Acknowledgements.Add((eventId, sessionKey));
+            ConnectionManager.SendAck(eventId, sessionKey);
+        }
+
+        public Task PublishToAllAsync(Guid eventId, string eventEnvelopePayload, CancellationToken cancellationToken)
+        {
+            ConnectionManager.QueueEventBroadcast(eventId, eventEnvelopePayload);
+            return Task.CompletedTask;
         }
     }
 
-    [Test]
-    public async Task OnEventReceived_WithNoSubscribers_DoesNotThrow()
+    private sealed class FakePortListener : IPersistentPortListener
     {
-        await using var transport = new TCPEventTransport(0);
-        var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 12345);
-        var dummyEvent = new DummyEvent();
-
-        var method = typeof(TCPEventTransport).GetMethod("OnEventReceived", BindingFlags.NonPublic | BindingFlags.Instance);
-        method.Should().NotBeNull();
-
-        Func<Task> act = async () =>
+        public FakePortListener(FakeInboundConnectionManager inboundConnectionManager)
         {
-            var invocation = (Task?)method!.Invoke(transport, new object[] { dummyEvent, sessionKey });
-            if (invocation is not null)
-            {
-                await invocation.ConfigureAwait(false);
-            }
-        };
-
-        await act.Should().NotThrowAsync().ConfigureAwait(false);
-    }
-
-    [Test]
-    public async Task NotifySendFailure_PublishesEventToRegisteredSubscriber()
-    {
-        // Arrange
-        var aggregator = new FakeEventAggregator();
-        await using var transport = new TCPEventTransport(0);
-        var session = new ResilientCompositSessionConnection(
-            Guid.NewGuid(),
-            "localhost",
-            12345);
-        var exception = new IOException("boom");
-
-        // Act
-        ResilientSessionClientTestHelper.NotifySendFailure(session, exception);
-
-        // Assert
-        aggregator.PublishFailedHandlerExecuted.Should().BeTrue();
-        aggregator.PublishedFailures.Should().ContainSingle();
-        var failure = aggregator.PublishedFailures.Single();
-        failure.Endpoint.Should().BeEquivalentTo(session.RemoteEndPoint);
-        failure.Exception.Should().Be(exception);
-    }
-
-    [Test]
-    public async Task Subscribe_MessageReceived_PublishesInnerEvent()
-    {
-        // Arrange
-        var aggregator = new FakeEventAggregator();
-        await using var transport = new TCPEventTransport(0);
-        transport.Subscribe<MessageReceived>();
-
-        // Act
-        var handler = aggregator.GetAsyncSubscriber<EventReceived<MessageReceived>>();
-        handler.Should().NotBeNull();
-
-        var message = new MessageReceived("session", "payload");
-        await handler!.OnNextAsync(new EventReceived<MessageReceived>(DateTime.UtcNow, message), CancellationToken.None).ConfigureAwait(false);
-
-        // Assert
-        aggregator.PublishedMessages.Should().ContainSingle().Which.Should().BeSameAs(message);
-    }
-
-    private static ConcurrentDictionary<SessionKey, IResilientPeerSession> GetPersistentSessionsDictionary(TCPEventTransport transport)
-    {
-        return transport.PublisherForTesting.SessionsForTesting;
-    }
-
-    private static TestPeerSession CreateSession(string tempDirectory, SessionKey? sessionKey = null)
-    {
-        var key = sessionKey ?? new SessionKey(Guid.NewGuid(), "localhost", 12345);
-        var client = new ResilientCompositSessionConnection(key, new ResilientSessionOptions());
-        var path = Path.Combine(tempDirectory, $"outbox-{Guid.NewGuid():N}.json");
-        ResilientSessionClientTestHelper.OverrideOutboxPath(client, path);
-        return new TestPeerSession(key, client);
-    }
-
-    private static string CreateTempDirectory()
-    {
-        var path = Path.Combine(Path.GetTempPath(), $"tcp-tests-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(path);
-        return path;
-    }
-
-    private static void DeleteTempDirectory(string? path)
-    {
-        if (string.IsNullOrEmpty(path))
-        {
-            return;
+            ConnectionManager = inboundConnectionManager;
         }
 
-        try
+        public IInboundConnectionManager ConnectionManager { get; }
+
+        public int Port => 0;
+
+        public event Func<SessionKey, CancellationToken, Task>? SessionConnectionAccepted;
+
+        event IEventTransport.SessionInboundConnectionDroppedHandler? IPersistentPortListener.SessionInboundConnectionDropped
         {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
+            add => ConnectionManager.SessionInboundConnectionDropped += value;
+            remove => ConnectionManager.SessionInboundConnectionDropped -= value;
         }
-        catch (IOException)
+
+        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task RaiseSessionAcceptedAsync(SessionKey sessionKey, CancellationToken token)
         {
-            // ignore cleanup failures in tests
+            return SessionConnectionAccepted?.Invoke(sessionKey, token) ?? Task.CompletedTask;
         }
     }
 
-    private static async Task DisposeSessionsAsync(IEnumerable<IResilientPeerSession> sessions)
+    private sealed class FakeInboundConnectionManager : IInboundConnectionManager
     {
-        foreach (var session in sessions.ToArray())
-        {
-            if (session is null)
-            {
-                continue;
-            }
+        public SessionManager SessionManager { get; } = new(0, new ResilientSessionOptions());
 
-            await session.DisposeAsync().ConfigureAwait(false);
+        public event Func<IDomainEvent, SessionKey, Task>? EventReceived;
+        public event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
+        public event Func<Guid, SessionKey, Task>? AckReceived;
+        public event Func<SessionKey, Task>? PingReceived;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task<ConnectionInitializationResult> HandleIncomingTransientConnectionAsync(TcpClient incomingTransientConnection, CancellationToken serverToken)
+        {
+            return Task.FromResult(ConnectionInitializationResult.Failed());
+        }
+
+        public Task RaiseEventReceivedAsync(IDomainEvent domainEvent, SessionKey sessionKey)
+        {
+            return EventReceived?.Invoke(domainEvent, sessionKey) ?? Task.CompletedTask;
+        }
+
+        public Task RaiseAckReceivedAsync(Guid eventId, SessionKey sessionKey)
+        {
+            return AckReceived?.Invoke(eventId, sessionKey) ?? Task.CompletedTask;
+        }
+
+        public Task RaisePingReceivedAsync(SessionKey sessionKey)
+        {
+            return PingReceived?.Invoke(sessionKey) ?? Task.CompletedTask;
+        }
+
+        public Task<bool> RaiseSessionDroppedAsync(SessionKey sessionKey, CancellationToken cancellationToken = default)
+        {
+            return SessionInboundConnectionDropped?.Invoke(sessionKey, cancellationToken) ?? Task.FromResult(false);
         }
     }
 
-    private sealed class TestPeerSession : IResilientPeerSession
+    private sealed class FakeOutboundConnectionManager : IOutboundConnectionManager
     {
-        private readonly ResilientCompositSessionConnection _client;
+        public SessionManager SessionManager { get; } = new(0, new ResilientSessionOptions());
 
-        public TestPeerSession(SessionKey sessionKey, ResilientCompositSessionConnection client)
+        public List<(Guid EventId, string Payload)> Broadcasts { get; } = new();
+        public List<(Guid EventId, SessionKey SessionKey)> SentAcks { get; } = new();
+        public List<(Guid EventId, SessionKey SessionKey)> AckNotifications { get; } = new();
+        public List<SessionKey> Pongs { get; } = new();
+        public List<(SessionKey SessionKey, CancellationToken Token)> ReconnectAttempts { get; } = new();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task ConnectAsync(Guid userId, string host, int port, CancellationToken cancellationToken)
         {
-            Key = sessionKey;
-            _client = client;
-        }
-
-        public SessionKey Key { get; }
-
-        public string AuthToken => _client.SessionToken;
-
-        public ResilientCompositSessionConnection PersistentClient => _client;
-
-        public int StartInvocationCount { get; private set; }
-
-        public Task InitConnectionsAsync(CancellationToken cancellationToken)
-        {
-            StartInvocationCount++;
             return Task.CompletedTask;
         }
 
-        public Task PublishAsync(string payload, CancellationToken cancellationToken)
+        public Task ConnectAsync(SessionKey sessionKey, CancellationToken cancellationToken)
         {
-            return _client.EnqueueEventAsync(payload, cancellationToken);
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            return _client.DisposeAsync();
-        }
-    }
-
-    private sealed class FakeEventAggregator : IEventAggregator
-    {
-        private readonly List<IEventHandler> _subscribers = new();
-        private readonly List<IAsyncEventHandler<PublishFailed>> _publishFailedSubscribers = new();
-        private readonly List<IAsyncEventHandler<MessageReceived>> _messageReceivedSubscribers = new();
-        private readonly Dictionary<Type, List<IEventHandler>> _asyncSubscribers = new();
-
-        public bool PublishFailedHandlerExecuted { get; private set; }
-
-        public List<PublishFailed> PublishedFailures { get; } = new();
-        public List<MessageReceived> PublishedMessages { get; } = new();
-        public List<IDomainEvent> PublishedEvents { get; } = new();
-
-        public ISet<Type> EventTypes { get; } = new HashSet<Type>();
-
-        public IReadOnlyCollection<IEventHandler> Subscribers => _subscribers;
-
-        public bool RegisterEventType<T>() where T : class, IDomainEvent
-        {
-            return EventTypes.Add(typeof(T));
-        }
-
-        public void PublishEvent<T>(T domainEvent) where T : class, IDomainEvent
-        {
-            PublishedEvents.Add(domainEvent);
-        }
-
-        public void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
-        {
-            if (subscriber is null)
-            {
-                throw new ArgumentNullException(nameof(subscriber));
-            }
-
-            _subscribers.Add(subscriber);
-        }
-
-        public void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
-        {
-            if (subscriber is null)
-            {
-                throw new ArgumentNullException(nameof(subscriber));
-            }
-
-            if (!_asyncSubscribers.TryGetValue(typeof(T), out var subscribers))
-            {
-                subscribers = new List<IEventHandler>();
-                _asyncSubscribers[typeof(T)] = subscribers;
-            }
-
-            subscribers.Add(subscriber);
-
-            if (subscriber is IEventHandler eventSubscriber)
-            {
-                _subscribers.Add(eventSubscriber);
-            }
-
-            if (subscriber is IAsyncEventHandler<PublishFailed> publishFailedSubscriber)
-            {
-                _publishFailedSubscribers.Add(publishFailedSubscriber);
-            }
-
-            if (subscriber is IAsyncEventHandler<MessageReceived> messageReceivedSubscriber)
-            {
-                _messageReceivedSubscribers.Add(messageReceivedSubscriber);
-            }
-        }
-
-        public void UnsubscribeFromEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
-        {
-            if (subscriber is null)
-            {
-                throw new ArgumentNullException(nameof(subscriber));
-            }
-
-            _subscribers.Remove(subscriber);
-        }
-
-        public void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
-        {
-            if (subscriber is null)
-            {
-                throw new ArgumentNullException(nameof(subscriber));
-            }
-
-            if (_asyncSubscribers.TryGetValue(typeof(T), out var subscribers))
-            {
-                subscribers.Remove(subscriber);
-                if (subscribers.Count == 0)
-                {
-                    _asyncSubscribers.Remove(typeof(T));
-                }
-            }
-
-            if (subscriber is IEventHandler eventSubscriber)
-            {
-                _subscribers.Remove(eventSubscriber);
-            }
-
-            if (subscriber is IAsyncEventHandler<PublishFailed> publishFailedSubscriber)
-            {
-                _publishFailedSubscribers.Remove(publishFailedSubscriber);
-            }
-
-            if (subscriber is IAsyncEventHandler<MessageReceived> messageReceivedSubscriber)
-            {
-                _messageReceivedSubscribers.Remove(messageReceivedSubscriber);
-            }
-        }
-
-        public Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
-        {
-            if (domainEvent is PublishFailed publishFailed)
-            {
-                PublishedFailures.Add(publishFailed);
-
-                var tasks = _publishFailedSubscribers.Select(async subscriber =>
-                {
-                    await subscriber.OnNextAsync(publishFailed, cancellationToken).ConfigureAwait(false);
-                    PublishFailedHandlerExecuted = true;
-                });
-
-                return Task.WhenAll(tasks);
-            }
-
-            if (domainEvent is MessageReceived messageReceived)
-            {
-                PublishedMessages.Add(messageReceived);
-
-                var tasks = _messageReceivedSubscribers
-                    .Select(subscriber => subscriber.OnNextAsync(messageReceived, cancellationToken));
-
-                return Task.WhenAll(tasks);
-            }
-
-            PublishedEvents.Add(domainEvent);
             return Task.CompletedTask;
         }
 
-        public IAsyncEventHandler<T>? GetAsyncSubscriber<T>() where T : class, IDomainEvent
+        public void QueueEventBroadcast(Guid eventId, string eventEnvelopeJson)
         {
-            if (_asyncSubscribers.TryGetValue(typeof(T), out var subscribers))
-            {
-                return subscribers.OfType<IAsyncEventHandler<T>>().FirstOrDefault();
-            }
+            Broadcasts.Add((eventId, eventEnvelopeJson));
+        }
 
-            return null;
+        public Task<bool> TryReconnectAsync(SessionKey sessionKey, CancellationToken token)
+        {
+            ReconnectAttempts.Add((sessionKey, token));
+            return Task.FromResult(true);
+        }
+
+        public void SendAck(Guid eventId, SessionKey sessionKey)
+        {
+            SentAcks.Add((eventId, sessionKey));
+        }
+
+        public Task OnAckReceived(Guid eventId, SessionKey sessionKey)
+        {
+            AckNotifications.Add((eventId, sessionKey));
+            return Task.CompletedTask;
+        }
+
+        public void SendPong(SessionKey sessionKey)
+        {
+            Pongs.Add(sessionKey);
         }
     }
 
-    private class TcpEventEnvelope
+    private sealed class TcpEventEnvelope
     {
         public Guid EventId { get; set; }
         public string? TypeName { get; set; }
         public string? EventJson { get; set; }
     }
-
 }

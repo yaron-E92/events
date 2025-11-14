@@ -9,13 +9,13 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 {
     private readonly IEventSerializer _serializer;
     private readonly IPersistentPortListener _listener;
-    private readonly PersistentEventPublisher _publisher;
+    private readonly IPersistentFramePublisher _publisher;
     private Task? _disposeTask;
     private int _disposeState;
 
 #if DEBUG
     internal IEventSerializer SerializerForTesting => _serializer;
-    internal PersistentEventPublisher PublisherForTesting => _publisher; 
+    internal IPersistentFramePublisher PublisherForTesting => _publisher;
 #endif
 
     IPersistentPortListener IEventTransport.PersistentPortListener => _listener;
@@ -41,23 +41,19 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         IEventSerializer? serializer = null,
         TimeSpan? heartbeatInterval = null,
         string? authenticationToken = null)
+        : this(CreateListener(listenPort, serializer, heartbeatInterval, authenticationToken, out var publisher, out var serializerToUse), publisher, serializerToUse)
     {
-        _serializer = serializer ?? new JsonEventSerializer();
+    }
 
-        var interval = heartbeatInterval ?? TimeSpan.FromSeconds(30);
-        ResilientSessionOptions sessionOptions = new()
-        {
-            RequireAuthentication = authenticationToken is not null,
-            AuthenticationToken = authenticationToken,
-            HeartbeatInterval = interval,
-            HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
-        };
+    internal TCPEventTransport(
+        IPersistentPortListener listener,
+        IPersistentFramePublisher publisher,
+        IEventSerializer serializer)
+    {
+        _listener = listener ?? throw new ArgumentNullException(nameof(listener));
+        _publisher = publisher ?? throw new ArgumentNullException(nameof(publisher));
+        _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
 
-        var sessionManager = new SessionManager(listenPort, sessionOptions);
-
-        _listener = new PersistentPortListener(listenPort, _serializer, sessionManager);
-
-        _publisher = new PersistentEventPublisher(sessionManager);
         _listener.SessionConnectionAccepted += OnSessionConnectionAcceptedByListener;
         SessionInboundConnectionDropped += OnSessionInboundConnectionDropped;
         _listener.ConnectionManager.EventReceived += OnEventReceived;
@@ -148,5 +144,29 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         Task listenerDispose = _listener.DisposeAsync().AsTask();
 
         await Task.WhenAll(publisherDispose, listenerDispose).ConfigureAwait(false);
+    }
+
+    private static IPersistentPortListener CreateListener(
+        int listenPort,
+        IEventSerializer? serializer,
+        TimeSpan? heartbeatInterval,
+        string? authenticationToken,
+        out IPersistentFramePublisher publisher,
+        out IEventSerializer serializerToUse)
+    {
+        serializerToUse = serializer ?? new JsonEventSerializer();
+
+        var interval = heartbeatInterval ?? TimeSpan.FromSeconds(30);
+        ResilientSessionOptions sessionOptions = new()
+        {
+            RequireAuthentication = authenticationToken is not null,
+            AuthenticationToken = authenticationToken,
+            HeartbeatInterval = interval,
+            HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
+        };
+
+        var sessionManager = new SessionManager(listenPort, sessionOptions);
+        publisher = new PersistentEventPublisher(sessionManager);
+        return new PersistentPortListener(listenPort, serializerToUse, sessionManager);
     }
 }
