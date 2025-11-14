@@ -21,6 +21,16 @@ internal class SessionManager : ISessionManager
         }
         _options = options;
         _listenerPort = listenPort;
+
+        if (_options.CallbackPort <= 0)
+        {
+            _options.CallbackPort = listenPort;
+        }
+
+        if (string.IsNullOrWhiteSpace(_options.CallbackHost))
+        {
+            _options.CallbackHost = Dns.GetHostName();
+        }
     }
 
     public IEnumerable<IResilientPeerSession> AuthenticatedSessions => _sessions.Values.Where(static session => session.RemoteEndpointHasAuthenticated);
@@ -46,11 +56,15 @@ internal class SessionManager : ISessionManager
     /// <remarks>The Session will be generated if necessary</remarks>
     internal IResilientPeerSession ResolveSession(EndPoint? remoteEndPoint, SessionFrame authFrame)
     {
-        if (!SessionFrameContract.TryValidateAuthentication(authFrame, _options, out SessionKey? sessionKey))
+        if (!SessionFrameContract.TryValidateAuthentication(
+                authFrame,
+                _options,
+                out SessionKey? sessionKey,
+                out SessionAuthenticationPayload? authenticationPayload))
         {
             throw new System.Security.Authentication.AuthenticationException("Failed to validate session authentication frame.");
         }
-        sessionKey = NormalizeSessionKeyWithRemoteEndpoint(sessionKey, remoteEndPoint);
+        sessionKey = NormalizeSessionKeyWithRemoteEndpoint(sessionKey, remoteEndPoint, authenticationPayload?.CallbackPort);
 
         if (sessionKey.IsAnonymousKey)
         {
@@ -123,11 +137,11 @@ internal class SessionManager : ISessionManager
         session.Touch();
     }
 
-    private SessionKey NormalizeSessionKeyWithRemoteEndpoint(SessionKey sessionKey, EndPoint? remoteEndPoint)
+    private SessionKey NormalizeSessionKeyWithRemoteEndpoint(SessionKey sessionKey, EndPoint? remoteEndPoint, int? advertisedCallbackPort)
     {
         if (remoteEndPoint is null)
         {
-            return sessionKey;
+            return ApplyAdvertisedPort(sessionKey, advertisedCallbackPort);
         }
 
         (string host, int port) = remoteEndPoint switch
@@ -140,10 +154,24 @@ internal class SessionManager : ISessionManager
         if (string.Equals(sessionKey.Host, host, StringComparison.OrdinalIgnoreCase)
             && sessionKey.Port == port)
         {
+            return ApplyAdvertisedPort(sessionKey, advertisedCallbackPort);
+        }
+
+        var normalizedKey = new SessionKey(sessionKey.UserId, host, port)
+        {
+            IsAnonymousKey = sessionKey.IsAnonymousKey,
+        };
+        return ApplyAdvertisedPort(normalizedKey, advertisedCallbackPort);
+    }
+
+    private static SessionKey ApplyAdvertisedPort(SessionKey sessionKey, int? advertisedCallbackPort)
+    {
+        if (advertisedCallbackPort is not int callbackPort || callbackPort <= 0 || sessionKey.Port == callbackPort)
+        {
             return sessionKey;
         }
 
-        return new SessionKey(sessionKey.UserId, host, port)
+        return new SessionKey(sessionKey.UserId, sessionKey.Host, callbackPort)
         {
             IsAnonymousKey = sessionKey.IsAnonymousKey,
         };

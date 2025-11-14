@@ -27,6 +27,16 @@ public sealed class ResilientSessionOptions
     public int MaximalReconnectAttempts { get; init; } = DefaultMaximalReconnectAttempts;
 
     /// <summary>
+    /// Host name advertised to peers when establishing a session. Used by remote endpoints to dial back the sender.
+    /// </summary>
+    public string? CallbackHost { get; set; }
+
+    /// <summary>
+    /// Listener port advertised to peers when establishing a session. Used by remote endpoints to dial back the sender.
+    /// </summary>
+    public int CallbackPort { get; set; }
+
+    /// <summary>
     /// Checks that all options are valid, returning false if not.
     /// </summary>
     internal bool Validate()
@@ -51,7 +61,7 @@ public sealed class ResilientSessionOptions
         {
             return false;
         }
-        if (MaximalReconnectAttempts < 0) 
+        if (MaximalReconnectAttempts < 0)
         {
             return false;
         }
