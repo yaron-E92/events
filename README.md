@@ -168,27 +168,22 @@ The built-in TCP transport ships with a resilient session layer that manages aut
 var transport = new TCPEventTransport(
     listenPort: 9000,
     serializer: new JsonEventSerializer(),
-    eventAggregator: localAggregator,
     heartbeatInterval: TimeSpan.FromSeconds(15),
     authenticationToken: "shared-secret");
 ```
 
 - **Authentication:** Set `authenticationToken` to require peers to present the matching `AUTH` frame.
-- **Heartbeats:** Omit `heartbeatInterval` to use the 30s default. The timeout automatically scales to 90s.
+- **Heartbeats:** Omit `heartbeatInterval` to use the 30s default. The timeout automatically scales to twice the provided interval.
 - **Outbox:** Events are durably staged in `<AppContext.BaseDirectory>/outbox.json` until acknowledged by a peer.
 - **Reconnection:** Exponential backoff starts at 1s and caps at 30s. Adjust `heartbeatInterval` to tune detection speed.
 
-#### Collapsed inbound session
+#### Persistent building blocks
 
-`PersistentInboundSession` now owns the accept loop, authentication flow, and inbound dispatch for every resilient connection. `PersistentSessionListener` wires this single inbound session into the transport so that server-side responsibilities are consolidated and duplicate listener/server logic has been removed.
+`PersistentPortListener` hosts the TCP listener, handles inbound authentication, and multiplexes `SessionFrame` traffic into `ResilientInboundConnection` instances. On the publishing side, `PersistentEventPublisher` uses the shared `SessionManager` to persist outbound envelopes and replay them through `ResilientCompositSessionConnection` objects whenever a peer reconnects.
 
 #### Canonical frame identifiers
 
 All frames use the same identifier contract: `SessionFrame.Id` is always a `Guid` supplied by the sender. The receiver echoes the identifier when issuing an `ACK`, which allows both sides to correlate inflight deliveries across reconnect attempts.
-
-#### Resilient client responsibilities
-
-`ResilientSessionClient` establishes the session token, persists the outbox, performs exponential backoff when sockets fail, forwards inbound frames to registered callbacks, and clears the outbox when ACKs arrive. Publishing code simply enqueues payloads—the client handles retries, replay, and heartbeat bookkeeping.
 
 See [docs/networking/resilient-tcp.md](docs/networking/resilient-tcp.md) for a deeper dive into the frame format, configuration options, and integration guidance. For an end-to-end walkthrough on wiring the transport into your application, check the [Implementation Guide](docs/implementation-guide.md).
 

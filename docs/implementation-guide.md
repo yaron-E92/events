@@ -2,91 +2,99 @@
 
 This guide walks through the steps required to integrate **Yaref92.Events** and its resilient TCP transport into another application. It assumes you are building on .NET 8 or newer.
 
-## 1. Install the Package
+## 1. Install the Packages
 
-1. Add the NuGet package reference:
+1. Add the core package reference:
    ```bash
    dotnet add package Yaref92.Events
    ```
-2. (Optional) Add the transport package if you plan to publish or receive events over TCP:
+2. (Optional) Add the TCP transport package when you need to publish or receive events over the network:
    ```bash
    dotnet add package Yaref92.Events.Transport.Tcp
    ```
 
-## 2. Configure Services
+## 2. Compose the Aggregator and Transport
 
-Register the event aggregator and transport in your dependency injection container. The resilient transport relies on a single `ResilientSessionClient` instance that manages the TCP connection, reconnection/backoff, and ACK correlation.
+The resilient transport is exposed through `TCPEventTransport(int listenPort, IEventSerializer?, TimeSpan?, string?)`. It wires a shared `SessionManager` into both the inbound listener (`PersistentPortListener`) and outbound publisher (`PersistentEventPublisher`) so events stay durable across reconnect attempts.
 
 ```csharp
-services.AddSingleton<IEventAggregator, NetworkedEventAggregator>();
-services.AddSingleton(provider =>
-{
-    var logger = provider.GetRequiredService<ILogger<ResilientSessionClient>>();
-    return ResilientSessionClient.Create(
-        host: "events.example.com",
-        port: 5050,
-        options: new ResilientSessionOptions
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Yaref92.Events;
+using Yaref92.Events.Serialization;
+using Yaref92.Events.Transports;
+
+var builder = Host.CreateDefaultBuilder(args)
+    .ConfigureServices(services =>
+    {
+        services.AddSingleton<EventAggregator>();
+        services.AddSingleton<TCPEventTransport>(sp => new TCPEventTransport(
+            listenPort: 5050,
+            serializer: new JsonEventSerializer(),
+            heartbeatInterval: TimeSpan.FromSeconds(15),
+            authenticationToken: "shared-secret"));
+
+        services.AddSingleton<NetworkedEventAggregator>(sp =>
         {
-            HeartbeatInterval = TimeSpan.FromSeconds(15),
-            ReconnectBackoff = TimeSpan.FromSeconds(5),
-            AuthenticationToken = "shared-secret"
-        },
-        logger);
-});
-services.AddSingleton<IEventTransport>(provider =>
-{
-    var client = provider.GetRequiredService<ResilientSessionClient>();
-    var logger = provider.GetRequiredService<ILogger<TCPEventTransport>>();
-    return new TCPEventTransport(client, logger);
-});
+            var local = sp.GetRequiredService<EventAggregator>();
+            var transport = sp.GetRequiredService<TCPEventTransport>();
+            return new NetworkedEventAggregator(local, transport);
+        });
+    });
 ```
 
-## 3. Wire Inbound Dispatch
+The `NetworkedEventAggregator` subscribes to `IEventTransport.EventReceived`, so any domain events raised by the transport are immediately re-published to in-process subscribers without extra plumbing.
 
-`ResilientSessionClient` exposes an inbound frame callback that you can hook into your aggregator. When the client receives frames, it will dispatch them to the registered callback, ensuring canonical frame IDs and ACK correlation are handled automatically.
+## 3. Observe the Session Pipeline
+
+`TCPEventTransport` exposes its building blocks via `IEventTransport.PersistentPortListener` and `IEventTransport.PersistentFramePublisher`. Both hold references to the same `SessionManager`, which coordinates:
+
+- Session creation and deduplication based on `SessionKey`.
+- Long-running `ResilientInboundConnection` instances owned by `PersistentPortListener`.
+- `ResilientCompositSessionConnection` objects that persist outbound envelopes and maintain the durable outbox.
+
+If you need visibility into inbound frames—for example, to add metrics or filtering—attach diagnostics inside the transport by observing `IInboundConnectionManager.EventReceived`. `PersistentPortListener` raises this event whenever a `ResilientInboundConnection` produces a domain event; `TCPEventTransport` subscribes to it and forwards the callback through `IEventTransport.EventReceived`, which is what `NetworkedEventAggregator` consumes. Because the same delegate chain controls acknowledgements, completing the handler successfully indicates that the event was processed and allows `PersistentEventPublisher.AcknowledgeEventReceipt` to trim the outbox for that session.
+
+## 4. Start Listening and Join Peers
+
+Call `StartListeningAsync` during application startup so that inbound peers can authenticate and exchange frames:
 
 ```csharp
-var aggregator = provider.GetRequiredService<NetworkedEventAggregator>();
-var client = provider.GetRequiredService<ResilientSessionClient>();
-
-client.OnFrameReceived += async frame =>
-{
-    var envelope = EventEnvelope.Deserialize(frame.Payload);
-    await aggregator.PublishAsync(envelope);
-};
+await transport.StartListeningAsync(cancellationToken);
 ```
 
-## 4. Publish Events
-
-Publishing is unchanged for local subscribers. When the resilient transport is registered, outbound events are serialized and sent over the TCP session, with ACKs routed back through the client.
+To proactively connect to remote peers, use the same transport instance:
 
 ```csharp
-await aggregator.PublishAsync(new UserRegistered(domainUserId));
+await transport.ConnectToPeerAsync("peer-host", 5050, cancellationToken);
 ```
 
-## 5. Handle Application Lifetime
+Because the listener and publisher share the same `SessionManager`, reconnect attempts reuse the existing session state, resend unacknowledged envelopes, and keep the inbound heartbeat timers aligned.
 
-- Start the client when your application boots:
-  ```csharp
-  await client.ConnectAsync(cancellationToken);
-  ```
-- Stop the client gracefully during shutdown to flush ACKs and close the session:
-  ```csharp
-  await client.DisposeAsync();
-  ```
+## 5. Publish and Subscribe
 
-## 6. Deployment Considerations
+Register event types and subscribers on the `NetworkedEventAggregator` just like the in-memory aggregator:
 
-- **Heartbeats:** Ensure your infrastructure allows the configured heartbeat interval to keep the session alive.
-- **Authentication:** Rotate shared secrets or certificates periodically to match your security policies.
-- **Observability:** Enable structured logging and metrics around reconnect attempts, ACK latency, and handler throughput.
-- **Scaling:** Each application instance should maintain its own resilient session client. Use load balancing to distribute inbound connections if hosting the TCP server.
+```csharp
+var aggregator = host.Services.GetRequiredService<NetworkedEventAggregator>();
+aggregator.RegisterEventType<UserRegistered>();
 
-## 7. Testing
+aggregator.SubscribeToEventType(new UserRegisteredHandler());
+await aggregator.PublishEventAsync(new UserRegistered(Guid.NewGuid()));
+```
 
-- Use the integration tests under `tests/Yaref92.Events.IntegrationTests` as reference implementations for reconnection, inbound dispatch, and ACK validation scenarios.
-- Run `dotnet test` locally to validate your wiring before deploying.
+Outbound events are serialized via the transport’s `IEventSerializer` and published over every authenticated session. Inbound events arrive through `IInboundConnectionManager.EventReceived`, bubble up to `IEventTransport.EventReceived`, and finally land in your local handlers.
 
-## Next Steps
+## 6. Handle Application Lifetime
 
-For detailed protocol semantics, see [`docs/networking/resilient-tcp.md`](./networking/resilient-tcp.md) and the README sections on resilient transport configuration.
+- **Startup:** Resolve `TCPEventTransport` from the host and invoke `StartListeningAsync` before accepting traffic.
+- **Shutdown:** Dispose the host (or call `await transport.DisposeAsync()`) to flush ACKs, cancel heartbeat loops, and close the listener gracefully.
+
+## 7. Deployment Considerations
+
+- **Heartbeats:** Tune the optional `heartbeatInterval` constructor argument to balance failure detection and background traffic.
+- **Authentication:** Supply `authenticationToken` when your peers must present shared credentials. Leave it `null` for anonymous meshes on trusted networks.
+- **Observability:** Subscribe to `IInboundConnectionManager.EventReceived` and `IEventTransport.SessionInboundConnectionDropped` to emit metrics about reconnect attempts, ACK latency, and handler throughput.
+- **Testing:** Use `dotnet test` locally and review the integration tests under `tests/Yaref92.Events.IntegrationTests` for concrete examples of reconnection flows.
+
+For detailed protocol semantics, see [`docs/networking/resilient-tcp.md`](./networking/resilient-tcp.md) and the README section on resilient transport configuration.
