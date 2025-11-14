@@ -25,6 +25,9 @@ public class InboundConnectionManagerTests
             HeartbeatTimeout = TimeSpan.FromMilliseconds(200),
         };
 
+        const int clientListenerPort = 62000;
+        options.CallbackPort = clientListenerPort;
+
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
@@ -89,6 +92,9 @@ public class InboundConnectionManagerTests
             HeartbeatTimeout = TimeSpan.FromMilliseconds(200),
         };
 
+        const int clientListenerPort = 62000;
+        options.CallbackPort = clientListenerPort;
+
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
@@ -106,8 +112,8 @@ public class InboundConnectionManagerTests
 
         try
         {
-            var remotePort = ((IPEndPoint)client.Client.LocalEndPoint!).Port;
-            var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remotePort);
+            var remoteEndpoint = (IPEndPoint)client.Client.LocalEndPoint!;
+            var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remoteEndpoint.Port);
             var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
             var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
 
@@ -168,16 +174,20 @@ public class InboundConnectionManagerTests
 
                 (Guid eventId, SessionKey key) ack = await ackReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 ack.eventId.Should().Be(expectedAckId);
-                ack.key.Should().Be(sessionKey);
+                var expectedKey = new SessionKey(sessionKey.UserId, remoteEndpoint.Address.ToString(), clientListenerPort)
+                {
+                    IsAnonymousKey = sessionKey.IsAnonymousKey,
+                };
+                ack.key.Should().Be(expectedKey);
 
                 SessionKey pingKey = await pingReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                pingKey.Should().Be(sessionKey);
+                pingKey.Should().Be(expectedKey);
 
                 (IDomainEvent domainEvent, SessionKey key) eventArgs =
                     await eventReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 eventArgs.domainEvent.Should().BeOfType<DummyEvent>();
                 eventArgs.domainEvent.As<DummyEvent>().Text.Should().Be(expectedEventPayload);
-                eventArgs.key.Should().Be(sessionKey);
+                eventArgs.key.Should().Be(expectedKey);
 
                 Volatile.Read(ref eventInvocationCount).Should().Be(1);
             }
