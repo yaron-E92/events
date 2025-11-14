@@ -149,6 +149,47 @@ public class ResilientSessionIntegrationTests
     }
 
     [Test]
+    [Explicit("Integration tests require local TCP sockets and timing-sensitive coordination.")]
+    public async Task Anonymous_And_Authenticated_Sessions_Are_Differentiated()
+    {
+        var options = new ResilientSessionOptions
+        {
+            RequireAuthentication = true,
+            DoAnonymousSessionsRequireAuthentication = false,
+            AuthenticationToken = Guid.NewGuid().ToString("N"),
+            HeartbeatInterval = TimeSpan.FromMilliseconds(25),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(80),
+        };
+
+        var port = GetFreeTcpPort();
+        await using var server = new InboundConnectionManager(options);
+        await server.StartAsync().ConfigureAwait(false);
+
+        await using var authenticated = new TestPersistentClientHost("127.0.0.1", port, options);
+        await using var anonymous = new TestPersistentClientHost("127.0.0.1", port, options, sessionUserId: Guid.Empty);
+
+        await authenticated.StartAsync(CancellationToken.None).ConfigureAwait(false);
+        await anonymous.StartAsync(CancellationToken.None).ConfigureAwait(false);
+
+        await WaitForAuthenticatedSessionsAsync(server, 2, TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+
+        ConcurrentDictionary<SessionKey, SessionState> sessions = server.Sessions;
+        sessions.Should().HaveCount(2);
+
+        sessions.Should().ContainKey(authenticated.SessionKey);
+        sessions.Should().ContainKey(anonymous.SessionKey);
+
+        var anonymousSession = sessions[anonymous.SessionKey];
+        var authenticatedSession = sessions[authenticated.SessionKey];
+
+        anonymousSession.HasAuthenticated.Should().BeTrue();
+        authenticatedSession.HasAuthenticated.Should().BeTrue();
+
+        anonymous.SessionKey.UserId.Should().Be(Guid.Empty);
+        authenticated.SessionKey.UserId.Should().NotBe(Guid.Empty);
+    }
+
+    [Test]
     public async Task Broadcasts_Are_Redelivered_Until_Acknowledged_By_All_Peers()
     {
         // Arrange
@@ -165,8 +206,7 @@ public class ResilientSessionIntegrationTests
         await server.StartAsync().ConfigureAwait(false);
 
         await using var peerA = new TestPersistentClientHost("127.0.0.1", port, options);
-        await using var peerB = new TestPersistentClientHost("127.0.0.1", port, options);
-        peerB.DropNextMessage();
+        await using var peerB = new TestPersistentClientHost("127.0.0.1", port, options, dropFirstAck: true);
 
         await peerA.StartAsync(CancellationToken.None).ConfigureAwait(false);
         await peerB.StartAsync(CancellationToken.None).ConfigureAwait(false);
@@ -185,6 +225,47 @@ public class ResilientSessionIntegrationTests
         peerAPayloads.Should().ContainSingle(p => p == payload);
         peerBPayloads.Should().HaveCount(2).And.OnlyContain(p => p == payload);
         peerB.ConnectionCount.Should().BeGreaterThanOrEqualTo(2);
+        peerB.AcknowledgedMessageIds.Should().HaveCount(1);
+    }
+
+    [Test]
+    [Explicit("Integration tests require local TCP sockets and timing-sensitive coordination.")]
+    public async Task Heartbeat_Drop_Raises_SessionInboundConnectionDropped_And_Reconnects()
+    {
+        var options = new ResilientSessionOptions
+        {
+            HeartbeatInterval = TimeSpan.FromMilliseconds(20),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(60),
+            BackoffInitialDelay = TimeSpan.FromMilliseconds(10),
+            BackoffMaxDelay = TimeSpan.FromMilliseconds(40),
+        };
+
+        var port = GetFreeTcpPort();
+        await using var server = new InboundConnectionManager(options);
+
+        var dropTcs = new TaskCompletionSource<SessionKey>(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.SessionInboundConnectionDropped += (key, token) =>
+        {
+            dropTcs.TrySetResult(key);
+            return Task.FromResult(true);
+        };
+
+        await server.StartAsync().ConfigureAwait(false);
+
+        await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
+        await clientHost.StartAsync(CancellationToken.None).ConfigureAwait(false);
+
+        await WaitForAuthenticatedSessionsAsync(server, 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        var session = server.SessionManager.AuthenticatedSessions
+            .Concat(server.SessionManager.ValidAnonymousSessions)
+            .OfType<ResilientPeerSession>()
+            .First();
+
+        ForceInboundConnectionTimeout(session, options.HeartbeatTimeout + options.HeartbeatInterval);
+
+        await dropTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await clientHost.WaitForConnectionCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
     }
 
     [Test]
@@ -397,6 +478,14 @@ public class ResilientSessionIntegrationTests
         throw new TimeoutException("Active outbound loops were not observed before the timeout elapsed.");
     }
 
+    private static void ForceInboundConnectionTimeout(ResilientPeerSession session, TimeSpan delta)
+    {
+        var inbound = (ResilientInboundConnection) session.InboundConnection;
+        var field = typeof(ResilientInboundConnection).GetField("_lastRemoteActivityTicks", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var staleTicks = DateTime.UtcNow.Subtract(delta).Ticks;
+        field.SetValue(inbound, staleTicks);
+    }
+
     private static int GetFreeTcpPort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -447,10 +536,17 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     private int _dropMessageFlag;
     private readonly bool _trackConnections;
 
-    public TestPersistentClientHost(string host, int port, ResilientSessionOptions options, bool trackConnections = true)
+    public TestPersistentClientHost(
+        string host,
+        int port,
+        ResilientSessionOptions options,
+        bool trackConnections = true,
+        Guid? sessionUserId = null,
+        bool dropFirstAck = false,
+        bool dropFirstMessage = false)
     {
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
-        Client = new ResilientCompositSessionConnection(Guid.NewGuid(), host, port, options);
+        Client = new ResilientCompositSessionConnection(sessionUserId ?? Guid.NewGuid(), host, port, options);
         SetOutboxPath(Client, _outboxPath);
         _trackConnections = trackConnections;
         if (_trackConnections)
@@ -458,9 +554,20 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
             Client.ConnectionEstablished += OnConnectionEstablishedAsync;
         }
         Client.FrameReceived += OnFrameReceivedAsync;
+        if (dropFirstAck)
+        {
+            DropNextAck();
+        }
+
+        if (dropFirstMessage)
+        {
+            DropNextMessage();
+        }
     }
 
     public ResilientCompositSessionConnection Client { get; }
+
+    public SessionKey SessionKey => Client.OutboundConnection.SessionKey;
 
     public IReadOnlyCollection<string> ReceivedPayloads => _payloads.ToArray();
 
