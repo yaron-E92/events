@@ -651,9 +651,14 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     public int ConnectionCount => Volatile.Read(ref _connectionCount);
 
     public Task StartAsync(CancellationToken cancellationToken)
-        => Task.WhenAll(
-            Client.OutboundConnection.InitAsync(cancellationToken),
-            Client.InboundConnection.InitAsync(cancellationToken));
+    {
+        var outbound = (IOutboundResilientConnection)Client.OutboundConnection;
+        var inbound = (IInboundResilientConnection)Client.InboundConnection;
+
+        return Task.WhenAll(
+            outbound.InitAsync(cancellationToken),
+            inbound.InitAsync(cancellationToken));
+    }
 
     public Task<Guid> EnqueueEventAsync(string payload, CancellationToken cancellationToken)
         => EnqueueEventAsync(Guid.NewGuid(), payload, cancellationToken);
