@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
+using System.Linq;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using FluentAssertions;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Connections;
+using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Sessions.Events;
 using Yaref92.Events.Transports;
@@ -34,40 +36,44 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new InboundConnectionManager(options);
+        await using var serverHost = await StartServerAsync(port, options).ConfigureAwait(false);
+        var server = serverHost.Server;
         var deliveries = new List<string>();
         var firstDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayDeliveryTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        server.FrameReceived += (key, frame, cancellationToken) =>
+        RegisterServerEventHandler(serverHost, (domainEvent, _) =>
         {
-            if (frame.Kind == SessionFrameKind.Event && frame.Payload is not null)
+            if (domainEvent is not TestPayloadEvent testEvent)
             {
-                lock (deliveries)
+                return Task.CompletedTask;
+            }
+
+            lock (deliveries)
+            {
+                deliveries.Add(testEvent.Payload);
+                if (deliveries.Count == 1)
                 {
-                    deliveries.Add(frame.Payload);
-                    if (deliveries.Count == 1)
-                    {
-                        firstDeliveryTcs.TrySetResult();
-                    }
-                    else if (deliveries.Count == 2)
-                    {
-                        replayDeliveryTcs.TrySetResult();
-                    }
+                    firstDeliveryTcs.TrySetResult();
+                }
+                else if (deliveries.Count == 2)
+                {
+                    replayDeliveryTcs.TrySetResult();
                 }
             }
 
             return Task.CompletedTask;
-        };
-
-        await server.StartAsync().ConfigureAwait(false);
+        });
 
         await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
         clientHost.DropNextAck();
         await clientHost.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
         var payload = $"payload-{Guid.NewGuid():N}";
-        var messageId = await clientHost.Client.EnqueueEventAsync(payload, CancellationToken.None).ConfigureAwait(false);
+        var domainEvent = new TestPayloadEvent(payload);
+        var serializedEvent = serverHost.Serializer.Serialize(domainEvent);
+        var messageId = await clientHost.Client.EnqueueEventAsync(serializedEvent, CancellationToken.None).ConfigureAwait(false);
+        messageId.Should().Be(domainEvent.EventId);
 
         await firstDeliveryTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         await clientHost.WaitForConnectionCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
@@ -92,15 +98,15 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new InboundConnectionManager(options);
-        await server.StartAsync().ConfigureAwait(false);
+        await using var serverHost = await StartServerAsync(port, options).ConfigureAwait(false);
+        RegisterServerEventHandler(serverHost);
 
         await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options, trackConnections: false);
 
         Func<Task> act = () => clientHost.StartAsync(CancellationToken.None);
         await act.Should().NotThrowAsync().ConfigureAwait(false);
 
-        await WaitForAuthenticatedSessionsAsync(server, 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await WaitForAuthenticatedSessionsAsync(serverHost.Server, 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
     }
 
     [Test]
@@ -115,8 +121,9 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new InboundConnectionManager(options);
-        await server.StartAsync().ConfigureAwait(false);
+        await using var serverHost = await StartServerAsync(port, options).ConfigureAwait(false);
+        RegisterServerEventHandler(serverHost);
+        var server = serverHost.Server;
 
         await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
         await clientHost.StartAsync(CancellationToken.None).ConfigureAwait(false);
@@ -139,7 +146,10 @@ public class ResilientSessionIntegrationTests
         var initialMessageCount = clientHost.ReceivedPayloads.Count;
         var initialAckCount = clientHost.AcknowledgedMessageIds.Count;
 
-        var messageId = await clientHost.Client.EnqueueEventAsync(payload, CancellationToken.None).ConfigureAwait(false);
+        var domainEvent = new TestPayloadEvent(payload);
+        var serializedEvent = serverHost.Serializer.Serialize(domainEvent);
+        var messageId = await clientHost.Client.EnqueueEventAsync(serializedEvent, CancellationToken.None).ConfigureAwait(false);
+        messageId.Should().Be(domainEvent.EventId);
 
         await clientHost.WaitForMessageCountAsync(initialMessageCount + 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         await clientHost.WaitForAckCountAsync(initialAckCount + 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
@@ -162,8 +172,9 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new InboundConnectionManager(options);
-        await server.StartAsync().ConfigureAwait(false);
+        await using var serverHost = await StartServerAsync(port, options).ConfigureAwait(false);
+        RegisterServerEventHandler(serverHost);
+        var server = serverHost.Server;
 
         await using var authenticated = new TestPersistentClientHost("127.0.0.1", port, options);
         await using var anonymous = new TestPersistentClientHost("127.0.0.1", port, options, sessionUserId: Guid.Empty);
@@ -173,14 +184,17 @@ public class ResilientSessionIntegrationTests
 
         await WaitForAuthenticatedSessionsAsync(server, 2, TimeSpan.FromSeconds(10)).ConfigureAwait(false);
 
-        ConcurrentDictionary<SessionKey, SessionState> sessions = server.Sessions;
+        var sessions = serverHost.SessionManager.AuthenticatedSessions
+            .Concat(serverHost.SessionManager.ValidAnonymousSessions)
+            .DistinctBy(session => session.Key)
+            .ToArray();
         sessions.Should().HaveCount(2);
 
-        var anonymousSession = sessions.Single(pair => pair.Value.Key.IsAnonymousKey).Value;
-        var authenticatedSession = sessions.Single(pair => !pair.Value.Key.IsAnonymousKey).Value;
+        var anonymousSession = sessions.Single(session => session.Key.IsAnonymousKey);
+        var authenticatedSession = sessions.Single(session => !session.Key.IsAnonymousKey);
 
-        anonymousSession.HasAuthenticated.Should().BeTrue();
-        authenticatedSession.HasAuthenticated.Should().BeTrue();
+        anonymousSession.RemoteEndpointHasAuthenticated.Should().BeTrue();
+        authenticatedSession.RemoteEndpointHasAuthenticated.Should().BeTrue();
 
         anonymous.SessionKey.UserId.Should().Be(Guid.Empty);
         authenticated.SessionKey.UserId.Should().NotBe(Guid.Empty);
@@ -203,8 +217,9 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new InboundConnectionManager(options);
-        await server.StartAsync().ConfigureAwait(false);
+        await using var serverHost = await StartServerAsync(port, options).ConfigureAwait(false);
+        RegisterServerEventHandler(serverHost);
+        var server = serverHost.Server;
 
         await using var peerA = new TestPersistentClientHost("127.0.0.1", port, options);
         await using var peerB = new TestPersistentClientHost("127.0.0.1", port, options, dropFirstAck: true);
@@ -215,7 +230,9 @@ public class ResilientSessionIntegrationTests
         await WaitForAuthenticatedSessionsAsync(server, 2, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
 
         var payload = $"broadcast-{Guid.NewGuid():N}";
-        server.QueueBroadcast(payload);
+        var broadcastEvent = new TestPayloadEvent(payload);
+        var serializedEvent = serverHost.Serializer.Serialize(broadcastEvent);
+        await serverHost.Publisher.PublishToAllAsync(broadcastEvent.EventId, serializedEvent, CancellationToken.None).ConfigureAwait(false);
 
         var peerAPayloads = await peerA.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         var peerBPayloads = await peerB.WaitForMessageCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
@@ -242,7 +259,9 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new InboundConnectionManager(options);
+        await using var serverHost = await StartServerAsync(port, options).ConfigureAwait(false);
+        RegisterServerEventHandler(serverHost);
+        var server = serverHost.Server;
 
         var dropTcs = new TaskCompletionSource<SessionKey>(TaskCreationOptions.RunContinuationsAsynchronously);
         server.SessionInboundConnectionDropped += (key, token) =>
@@ -250,8 +269,6 @@ public class ResilientSessionIntegrationTests
             dropTcs.TrySetResult(key);
             return Task.FromResult(true);
         };
-
-        await server.StartAsync().ConfigureAwait(false);
 
         await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
         await clientHost.StartAsync(CancellationToken.None).ConfigureAwait(false);
@@ -281,39 +298,40 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new InboundConnectionManager(options);
+        await using var serverHost = await StartServerAsync(port, options).ConfigureAwait(false);
+        var server = serverHost.Server;
 
         var sessionKeyTcs = new TaskCompletionSource<SessionKey>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var frameTcs = new TaskCompletionSource<SessionFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var eventTcs = new TaskCompletionSource<TestPayloadEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        server.FrameReceived += (key, frame, cancellationToken) =>
+        RegisterServerEventHandler(serverHost, (domainEvent, key) =>
         {
-            if (frame.Kind == SessionFrameKind.Event)
+            if (domainEvent is TestPayloadEvent payloadEvent)
             {
                 sessionKeyTcs.TrySetResult(key);
-                frameTcs.TrySetResult(frame);
+                eventTcs.TrySetResult(payloadEvent);
             }
 
             return Task.CompletedTask;
-        };
-
-        await server.StartAsync().ConfigureAwait(false);
+        });
 
         await using var clientHost = new TestPersistentClientHost("127.0.0.1", port, options);
         await clientHost.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
         var payload = $"dispatch-{Guid.NewGuid():N}";
-        var messageId = await clientHost.Client.EnqueueEventAsync(payload, CancellationToken.None).ConfigureAwait(false);
+        var domainEvent = new TestPayloadEvent(payload);
+        var serializedEvent = serverHost.Serializer.Serialize(domainEvent);
+        var messageId = await clientHost.Client.EnqueueEventAsync(serializedEvent, CancellationToken.None).ConfigureAwait(false);
+        messageId.Should().Be(domainEvent.EventId);
 
-        var frame = await frameTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        var receivedEvent = await eventTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         var sessionKey = await sessionKeyTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
         await clientHost.WaitForAckCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         await clientHost.WaitForOutboxCountAsync(0, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
-        frame.Kind.Should().Be(SessionFrameKind.Event);
-        frame.Id.Should().Be(messageId);
-        frame.Payload.Should().Be(payload);
+        receivedEvent.EventId.Should().Be(messageId);
+        receivedEvent.Payload.Should().Be(payload);
 
         sessionKey.UserId.Should().Be(clientHost.Client.SessionKey.UserId);
         sessionKey.Host.Should().Be(clientHost.Client.SessionKey.Host);
@@ -327,40 +345,10 @@ public class ResilientSessionIntegrationTests
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < timeout)
         {
-            var sessions = server.Sessions.Values;
-            var drained = true;
-            foreach (var sessionState in sessions)
-            {
-                if (sessionState is null)
-                {
-                    continue;
-                }
-
-                var outboundProperty = sessionState.GetType().GetProperty("OutboundBuffer", BindingFlags.Instance | BindingFlags.Public);
-                if (outboundProperty is null)
-                {
-                    continue;
-                }
-
-                var outbound = outboundProperty.GetValue(sessionState);
-                if (outbound is null)
-                {
-                    continue;
-                }
-
-                var inflightProperty = outbound.GetType().GetProperty("InflightEventsCount", BindingFlags.Instance | BindingFlags.Public);
-                if (inflightProperty is null)
-                {
-                    continue;
-                }
-
-                var inflightCount = (int) (inflightProperty.GetValue(outbound) ?? 0);
-                if (inflightCount != 0)
-                {
-                    drained = false;
-                    break;
-                }
-            }
+            var sessions = server.SessionManager.AuthenticatedSessions
+                .Concat(server.SessionManager.ValidAnonymousSessions)
+                .DistinctBy(session => session.Key);
+            var drained = sessions.All(session => session.OutboundBuffer.InflightEventsCount == 0);
 
             if (drained)
             {
@@ -384,40 +372,64 @@ public class ResilientSessionIntegrationTests
         };
 
         var port = GetFreeTcpPort();
-        await using var server = new InboundConnectionManager(options);
-        await server.StartAsync().ConfigureAwait(false);
+        await using var serverHost = await StartServerAsync(port, options).ConfigureAwait(false);
+        RegisterServerEventHandler(serverHost);
+        var server = serverHost.Server;
 
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port).ConfigureAwait(false);
 
         var stream = client.GetStream();
-        var anonymousFrame = SessionFrame.CreateEventFrame(Guid.NewGuid(), "anonymous-payload");
+        var anonymousEvent = new TestPayloadEvent("anonymous-payload");
+        var anonymousFrame = SessionFrame.CreateEventFrame(
+            anonymousEvent.EventId,
+            serverHost.Serializer.Serialize(anonymousEvent));
         await SendFrameAsync(stream, anonymousFrame, CancellationToken.None).ConfigureAwait(false);
 
         await WaitForAuthenticatedSessionsAsync(server, 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
-        ConcurrentDictionary<SessionKey, SessionState> sessions = server.Sessions;
+        var sessions = serverHost.SessionManager.AuthenticatedSessions
+            .Concat(serverHost.SessionManager.ValidAnonymousSessions)
+            .DistinctBy(session => session.Key)
+            .ToArray();
         sessions.Should().HaveCount(1);
-        var sessionEntry = sessions.Single();
-        sessionEntry.Value.Should().NotBeNull();
-        sessionEntry.Value.HasAuthenticated.Should().BeTrue();
+        var session = sessions.Single();
+        session.RemoteEndpointHasAuthenticated.Should().BeTrue();
 
-        SessionKey sessionKey = sessionEntry.Key;
+        SessionKey sessionKey = session.Key;
         sessionKey.UserId.Should().NotBe(Guid.Empty);
         sessionKey.Host.Should().NotBeNullOrWhiteSpace();
         sessionKey.Port.Should().BeGreaterThan(0);
 
         var remoteEndPoint = (IPEndPoint) client.Client.RemoteEndPoint!;
-        SessionKey fallbackKey = server.CreateFallbackSessionKey(new IPEndPoint(remoteEndPoint.Address, remoteEndPoint.Port));
+        SessionKey fallbackKey = new(Guid.Empty, remoteEndPoint.Address.ToString(), remoteEndPoint.Port)
+        {
+            IsAnonymousKey = true,
+        };
+        serverHost.SessionManager.HydrateAnonymousSessionId(fallbackKey, remoteEndPoint);
         fallbackKey.UserId.Should().Be(sessionKey.UserId);
         fallbackKey.Host.Should().Be(sessionKey.Host);
         fallbackKey.Port.Should().Be(sessionKey.Port);
 
-        var listener = new PersistentPortListener(GetFreeTcpPort(), new ResilientSessionOptions(), new NoopEventTransport());
-        await using var publisher = new PersistentEventPublisher(listener, null, new NoopEventSerializer());
+        var fallbackPort = GetFreeTcpPort();
+        var fallbackSerializer = new JsonEventSerializer();
+        var fallbackOptions = new ResilientSessionOptions();
+        var fallbackSessionManager = new SessionManager(fallbackPort, fallbackOptions);
+        await using var fallbackListener = new PersistentPortListener(fallbackPort, fallbackSerializer, fallbackSessionManager);
+        await using var fallbackPublisher = new PersistentEventPublisher(fallbackSessionManager);
+        await fallbackListener.StartAsync().ConfigureAwait(false);
 
-        Func<Task> act = () => publisher.OnNextAsync(new SessionJoined(sessionKey), CancellationToken.None);
+        var sessionJoined = new SessionJoined(sessionKey);
+        var envelope = fallbackSerializer.Serialize(sessionJoined);
+        Func<Task> act = () => fallbackPublisher.PublishToAllAsync(sessionJoined.EventId, envelope, CancellationToken.None);
         await act.Should().NotThrowAsync<ArgumentException>();
+        fallbackPublisher.AcknowledgeEventReceipt(sessionJoined.EventId, sessionKey);
+    }
+
+    private sealed record TestPayloadEvent(string Payload) : IDomainEvent
+    {
+        public Guid EventId { get; init; } = Guid.NewGuid();
+        public DateTime DateTimeOccurredUtc { get; init; } = DateTime.UtcNow;
     }
 
     private static async Task SendFrameAsync(NetworkStream stream, SessionFrame frame, CancellationToken cancellationToken)
@@ -435,16 +447,10 @@ public class ResilientSessionIntegrationTests
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < timeout)
         {
-            var sessions = server.Sessions;
-            var authenticatedCount = 0;
-
-            foreach (var session in sessions.Values)
-            {
-                if (session is { HasAuthenticated: true })
-                {
-                    authenticatedCount++;
-                }
-            }
+            var sessions = server.SessionManager.AuthenticatedSessions
+                .Concat(server.SessionManager.ValidAnonymousSessions)
+                .DistinctBy(session => session.Key);
+            var authenticatedCount = sessions.Count(session => session.RemoteEndpointHasAuthenticated);
 
             if (authenticatedCount >= expectedCount)
             {
@@ -487,6 +493,84 @@ public class ResilientSessionIntegrationTests
         field.SetValue(inbound, staleTicks);
     }
 
+    private static async Task<ServerHost> StartServerAsync(int port, ResilientSessionOptions options)
+    {
+        var serializer = new JsonEventSerializer();
+        var sessionManager = new SessionManager(port, options);
+        var listener = new PersistentPortListener(port, serializer, sessionManager);
+        var publisher = new PersistentEventPublisher(sessionManager);
+        var host = new ServerHost(listener, publisher, serializer, sessionManager);
+        await listener.StartAsync().ConfigureAwait(false);
+        return host;
+    }
+
+    private static void RegisterServerEventHandler(ServerHost host, Func<IDomainEvent, SessionKey, Task>? handler = null)
+    {
+        host.Server.EventReceived += async (domainEvent, sessionKey) =>
+        {
+            if (handler is not null)
+            {
+                await handler(domainEvent, sessionKey).ConfigureAwait(false);
+            }
+
+            host.Publisher.AcknowledgeEventReceipt(domainEvent.EventId, sessionKey);
+        };
+    }
+
+    private sealed class ServerHost : IAsyncDisposable
+    {
+        internal ServerHost(PersistentPortListener listener, PersistentEventPublisher publisher, IEventSerializer serializer, SessionManager sessionManager)
+        {
+            Listener = listener;
+            Publisher = publisher;
+            Serializer = serializer;
+            SessionManager = sessionManager;
+            Server = (InboundConnectionManager)listener.ConnectionManager;
+
+            Listener.SessionConnectionAccepted += OnSessionConnectionAcceptedAsync;
+            Listener.SessionInboundConnectionDropped += OnSessionInboundConnectionDroppedAsync;
+            Server.AckReceived += OnAckReceivedAsync;
+            Server.PingReceived += OnPingReceivedAsync;
+        }
+
+        internal PersistentPortListener Listener { get; }
+        internal PersistentEventPublisher Publisher { get; }
+        internal IEventSerializer Serializer { get; }
+        internal SessionManager SessionManager { get; }
+        internal InboundConnectionManager Server { get; }
+
+        private Task OnSessionConnectionAcceptedAsync(SessionKey sessionKey, CancellationToken token)
+        {
+            return Publisher.ConnectionManager.ConnectAsync(sessionKey, token);
+        }
+
+        private Task<bool> OnSessionInboundConnectionDroppedAsync(SessionKey sessionKey, CancellationToken token)
+        {
+            return Publisher.ConnectionManager.TryReconnectAsync(sessionKey, token);
+        }
+
+        private Task OnAckReceivedAsync(Guid eventId, SessionKey sessionKey)
+        {
+            return Publisher.ConnectionManager.OnAckReceived(eventId, sessionKey);
+        }
+
+        private Task OnPingReceivedAsync(SessionKey sessionKey)
+        {
+            Publisher.ConnectionManager.SendPong(sessionKey);
+            return Task.CompletedTask;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Listener.SessionConnectionAccepted -= OnSessionConnectionAcceptedAsync;
+            Listener.SessionInboundConnectionDropped -= OnSessionInboundConnectionDroppedAsync;
+            Server.AckReceived -= OnAckReceivedAsync;
+            Server.PingReceived -= OnPingReceivedAsync;
+            await Listener.DisposeAsync().ConfigureAwait(false);
+            await Publisher.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
     private static int GetFreeTcpPort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -502,30 +586,11 @@ public class ResilientSessionIntegrationTests
     }
 }
 
-internal sealed class NoopEventTransport : IEventTransport
-{
-    public Task AcceptIncomingEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
-        => Task.CompletedTask;
-
-    public Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
-        => Task.CompletedTask;
-
-    public void Subscribe<TEvent>() where TEvent : class, IDomainEvent
-    {
-    }
-}
-
-internal sealed class NoopEventSerializer : IEventSerializer
-{
-    public string Serialize<T>(T evt) where T : class, IDomainEvent => string.Empty;
-
-    public (Type? type, IDomainEvent? domainEvent) Deserialize(string data) => (null, null);
-}
-
 internal sealed class TestPersistentClientHost : IAsyncDisposable
 {
     private readonly string _outboxPath;
     private readonly ConcurrentQueue<string> _payloads = new();
+    private readonly IEventSerializer _serializer = new JsonEventSerializer();
     private readonly List<Guid> _acknowledged = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _messageWaiters = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _ackWaiters = new();
@@ -720,7 +785,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         switch (frame.Kind)
         {
             case SessionFrameKind.Event when frame.Payload is not null && frame.Id != Guid.Empty:
-                _payloads.Enqueue(frame.Payload);
+                EnqueueDomainPayload(frame.Payload);
                 NotifyWaiters(_messageWaiters, _payloads.Count);
 
                 if (Interlocked.Exchange(ref _dropMessageFlag, 0) == 1)
@@ -746,6 +811,25 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
                 NotifyWaiters(_ackWaiters, _acknowledged.Count);
                 break;
         }
+    }
+
+    private void EnqueueDomainPayload(string payload)
+    {
+        try
+        {
+            var (_, domainEvent) = _serializer.Deserialize(payload);
+            if (domainEvent is TestPayloadEvent testEvent)
+            {
+                _payloads.Enqueue(testEvent.Payload);
+                return;
+            }
+        }
+        catch (JsonException)
+        {
+            // Payload was not an envelope we could deserialize; fall back to raw text below.
+        }
+
+        _payloads.Enqueue(payload);
     }
 
     private IReadOnlyCollection<Guid> GetOutboxEntries()
