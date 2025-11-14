@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -26,7 +25,7 @@ public sealed class OutboundConnectionManagerTests
         var outbound = new StubOutboundConnection(sessionKey);
         outbound.SimulateDrop();
 
-        InjectSession(sessionManager, new StubPeerSession(sessionKey, outbound));
+        sessionManager.InjectSession(new StubPeerSession(sessionKey, outbound));
 
         var manager = new OutboundConnectionManager(sessionManager);
 
@@ -56,18 +55,115 @@ public sealed class OutboundConnectionManagerTests
         var outbound = new DisposableStubOutboundConnection(anonymousSessionKey);
         var anonymousSession = new StubPeerSession(anonymousSessionKey, outbound, isAnonymous: true, remoteEndpointHasAuthenticated: false);
 
-        InjectSession(sessionManager, anonymousSession);
+        sessionManager.InjectSession(anonymousSession);
 
         await manager.StopAsync().ConfigureAwait(false);
 
         outbound.DisposeAsyncCalls.Should().Be(1);
     }
 
-    private static void InjectSession(SessionManager sessionManager, IResilientPeerSession session)
+    [Test]
+    public void QueueEventBroadcast_EnqueuesFramesOnEachDistinctSession()
     {
-        var sessionsField = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance);
-        var sessions = (ConcurrentDictionary<SessionKey, IResilientPeerSession>)sessionsField!.GetValue(sessionManager)!;
-        sessions[session.Key] = session;
+        var options = new ResilientSessionOptions();
+        var sessionManager = new SessionManager(0, options);
+        var firstKey = new SessionKey(Guid.NewGuid(), "host-one", 1111);
+        var secondKey = new SessionKey(Guid.NewGuid(), "host-two", 2222);
+
+        var firstSession = new FakeResilientPeerSession(firstKey, new FakeInboundResilientConnection(firstKey), new FakeOutboundResilientConnection(firstKey));
+        var secondSession = new FakeResilientPeerSession(secondKey, new FakeInboundResilientConnection(secondKey), new FakeOutboundResilientConnection(secondKey));
+        sessionManager.InjectSession(firstSession);
+        sessionManager.InjectSession(secondSession);
+
+        var manager = new OutboundConnectionManager(sessionManager);
+        var eventId = Guid.NewGuid();
+        const string payload = "{\"type\":\"dummy\"}";
+
+        manager.QueueEventBroadcast(eventId, payload);
+
+        var firstOutbound = (FakeOutboundResilientConnection)firstSession.OutboundConnection;
+        var secondOutbound = (FakeOutboundResilientConnection)secondSession.OutboundConnection;
+
+        firstOutbound.EnqueuedFrames.Should().ContainSingle(frame => frame.Kind == SessionFrameKind.Event && frame.Id == eventId && frame.Payload == payload);
+        secondOutbound.EnqueuedFrames.Should().ContainSingle(frame => frame.Kind == SessionFrameKind.Event && frame.Id == eventId && frame.Payload == payload);
+    }
+
+    [Test]
+    public void SendAck_UsesSessionManagerToLocateSession()
+    {
+        var options = new ResilientSessionOptions();
+        var sessionManager = new SessionManager(0, options);
+        var firstKey = new SessionKey(Guid.NewGuid(), "host-one", 1111);
+        var secondKey = new SessionKey(Guid.NewGuid(), "host-two", 2222);
+
+        var firstSession = new FakeResilientPeerSession(firstKey, new FakeInboundResilientConnection(firstKey), new FakeOutboundResilientConnection(firstKey));
+        var secondSession = new FakeResilientPeerSession(secondKey, new FakeInboundResilientConnection(secondKey), new FakeOutboundResilientConnection(secondKey));
+        sessionManager.InjectSession(firstSession);
+        sessionManager.InjectSession(secondSession);
+
+        var manager = new OutboundConnectionManager(sessionManager);
+        var ackId = Guid.NewGuid();
+
+        manager.SendAck(ackId, secondKey);
+
+        var firstOutbound = (FakeOutboundResilientConnection)firstSession.OutboundConnection;
+        var secondOutbound = (FakeOutboundResilientConnection)secondSession.OutboundConnection;
+
+        firstOutbound.EnqueuedFrames.Should().BeEmpty();
+        secondOutbound.EnqueuedFrames.Should().ContainSingle(frame => frame.Kind == SessionFrameKind.Ack && frame.Id == ackId);
+    }
+
+    [Test]
+    public void SendPong_EnqueuesFrameOnTargetedSession()
+    {
+        var options = new ResilientSessionOptions();
+        var sessionManager = new SessionManager(0, options);
+        var firstKey = new SessionKey(Guid.NewGuid(), "host-one", 1111);
+        var secondKey = new SessionKey(Guid.NewGuid(), "host-two", 2222);
+
+        var firstSession = new FakeResilientPeerSession(firstKey, new FakeInboundResilientConnection(firstKey), new FakeOutboundResilientConnection(firstKey));
+        var secondSession = new FakeResilientPeerSession(secondKey, new FakeInboundResilientConnection(secondKey), new FakeOutboundResilientConnection(secondKey));
+        sessionManager.InjectSession(firstSession);
+        sessionManager.InjectSession(secondSession);
+
+        var manager = new OutboundConnectionManager(sessionManager);
+
+        manager.SendPong(firstKey);
+
+        var firstOutbound = (FakeOutboundResilientConnection)firstSession.OutboundConnection;
+        var secondOutbound = (FakeOutboundResilientConnection)secondSession.OutboundConnection;
+
+        firstOutbound.EnqueuedFrames.Should().ContainSingle(frame => frame.Kind == SessionFrameKind.Pong);
+        secondOutbound.EnqueuedFrames.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task TryReconnectAsync_UsesSessionSelectedBySessionManager()
+    {
+        var options = new ResilientSessionOptions();
+        var sessionManager = new SessionManager(0, options);
+        var firstKey = new SessionKey(Guid.NewGuid(), "host-one", 1111);
+        var secondKey = new SessionKey(Guid.NewGuid(), "host-two", 2222);
+
+        var firstOutbound = new FakeOutboundResilientConnection(firstKey)
+        {
+            RefreshResult = false,
+        };
+        var secondOutbound = new FakeOutboundResilientConnection(secondKey)
+        {
+            RefreshResult = true,
+        };
+
+        sessionManager.InjectSession(new FakeResilientPeerSession(firstKey, new FakeInboundResilientConnection(firstKey), firstOutbound));
+        sessionManager.InjectSession(new FakeResilientPeerSession(secondKey, new FakeInboundResilientConnection(secondKey), secondOutbound));
+
+        var manager = new OutboundConnectionManager(sessionManager);
+
+        bool reconnected = await manager.TryReconnectAsync(secondKey, CancellationToken.None).ConfigureAwait(false);
+
+        reconnected.Should().BeTrue();
+        firstOutbound.RefreshRequests.Should().Be(0);
+        secondOutbound.RefreshRequests.Should().Be(1);
     }
 
     private class StubOutboundConnection : IOutboundResilientConnection
