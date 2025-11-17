@@ -27,13 +27,12 @@ public class ResilientSessionClientTests
         {
             Guid firstId;
             Guid secondId;
-
             Guid userId = Guid.NewGuid();
             await using (var writer = new ResilientCompositSessionConnection(userId, "localhost", 12345))
             {
                 ResilientSessionClientTestHelper.OverrideOutboxPath(writer, outboxPath);
-                firstId = await writer.EnqueueEventAsync("first", CancellationToken.None).ConfigureAwait(false);
-                secondId = await writer.EnqueueEventAsync("second", CancellationToken.None).ConfigureAwait(false);
+                firstId = ResilientSessionClientTestHelper.StageOutboxEntry(writer, "first");
+                secondId = ResilientSessionClientTestHelper.StageOutboxEntry(writer, "second");
                 await ResilientSessionClientTestHelper.PersistOutboxAsync(writer, CancellationToken.None).ConfigureAwait(false);
             }
 
@@ -136,5 +135,10 @@ internal static class ResilientSessionClientTestHelper
     public static void NotifySendFailure(ResilientCompositSessionConnection client, Exception exception)
     {
         client.NotifySendFailureForTesting(exception);
+    }
+
+    public static Guid StageOutboxEntry(ResilientCompositSessionConnection client, string payload)
+    {
+        return client.StageOutboxEventForTesting(payload);
     }
 }

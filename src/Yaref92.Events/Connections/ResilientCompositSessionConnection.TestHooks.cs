@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Yaref92.Events.Sessions;
+
 namespace Yaref92.Events.Connections;
 
 internal sealed partial class ResilientCompositSessionConnection
@@ -31,5 +33,15 @@ internal sealed partial class ResilientCompositSessionConnection
 
     internal void NotifySendFailureForTesting(Exception exception)
         => OutboundConnection.NotifySendFailureForTesting(exception);
+
+    internal Guid StageOutboxEventForTesting(string payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        var eventId = Guid.NewGuid();
+        var frame = SessionFrame.CreateEventFrame(eventId, payload);
+        OutboundConnection.EnqueueFrame(frame);
+        return eventId;
+    }
 }
 #endif
