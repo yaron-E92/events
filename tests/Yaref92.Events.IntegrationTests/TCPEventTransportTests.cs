@@ -133,8 +133,8 @@ public class TCPEventTransportTests
         await transportA.PublishEventAsync(outboundFromA);
         await transportB.PublishEventAsync(outboundFromB);
 
-        (await Task.WhenAny(receivedByA.Task, Task.Delay(5000))).Should().Be(receivedByA.Task);
-        (await Task.WhenAny(receivedByB.Task, Task.Delay(5000))).Should().Be(receivedByB.Task);
+        (await Task.WhenAny(receivedByA.Task, Task.Delay(500))).Should().Be(receivedByA.Task);
+        (await Task.WhenAny(receivedByB.Task, Task.Delay(500))).Should().Be(receivedByB.Task);
 
         var ackAtA = await ackObservedAtA.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var ackAtB = await ackObservedAtB.Task.WaitAsync(TimeSpan.FromSeconds(5));

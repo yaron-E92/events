@@ -28,19 +28,20 @@ public class ResilientSessionClientTests
             Guid firstId;
             Guid secondId;
             Guid userId = Guid.NewGuid();
-            await using (var writer = new ResilientCompositSessionConnection(userId, "localhost", 12345))
+            ResilientSessionOptions options = new();
+            await using (var resilientConnectionForWriting = new ResilientCompositSessionConnection(userId, "localhost", 12345, options))
             {
-                ResilientSessionClientTestHelper.OverrideOutboxPath(writer, outboxPath);
-                firstId = ResilientSessionClientTestHelper.StageOutboxEntry(writer, "first");
-                secondId = ResilientSessionClientTestHelper.StageOutboxEntry(writer, "second");
-                await ResilientSessionClientTestHelper.PersistOutboxAsync(writer, CancellationToken.None).ConfigureAwait(false);
+                ResilientSessionClientTestHelper.OverrideOutboxPath(resilientConnectionForWriting, outboxPath);
+                firstId = ResilientSessionClientTestHelper.StageOutboxEntry(resilientConnectionForWriting, "first");
+                secondId = ResilientSessionClientTestHelper.StageOutboxEntry(resilientConnectionForWriting, "second");
+                await ResilientSessionClientTestHelper.PersistOutboxAsync(resilientConnectionForWriting, CancellationToken.None).ConfigureAwait(false);
             }
 
-            await using var reader = new ResilientCompositSessionConnection(userId, "localhost", 12345);
-            ResilientSessionClientTestHelper.OverrideOutboxPath(reader, outboxPath);
-            await ResilientSessionClientTestHelper.LoadOutboxAsync(reader, CancellationToken.None).ConfigureAwait(false);
+            await using var resilientConnectionForReading = new ResilientCompositSessionConnection(userId, "localhost", 12345, options);
+            ResilientSessionClientTestHelper.OverrideOutboxPath(resilientConnectionForReading, outboxPath);
+            await ResilientSessionClientTestHelper.LoadOutboxAsync(resilientConnectionForReading, CancellationToken.None).ConfigureAwait(false);
 
-            var snapshot = ResilientSessionClientTestHelper.GetOutboxSnapshot(reader);
+            var snapshot = ResilientSessionClientTestHelper.GetOutboxSnapshot(resilientConnectionForReading);
             snapshot.Should().ContainKey(firstId).WhoseValue.Should().Be("first");
             snapshot.Should().ContainKey(secondId).WhoseValue.Should().Be("second");
         }

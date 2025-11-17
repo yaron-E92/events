@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
@@ -11,6 +11,8 @@ using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
 using Yaref92.Events.Transports.ConnectionManagers;
 using Yaref92.Events.UnitTests;
+
+using static Yaref92.Events.Abstractions.IInboundResilientConnection;
 
 namespace Yaref92.Events.UnitTests.Transports;
 

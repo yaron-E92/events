@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -32,14 +32,14 @@ public class ResilientInboundConnectionTests
         using var firstAttachmentCts = new CancellationTokenSource();
         using var secondAttachmentCts = new CancellationTokenSource();
 
-        var firstWaitHandle = firstAttachmentCts.Token.WaitHandle;
+        var firstToken = firstAttachmentCts.Token;
 
         await inbound.AttachTransientConnection(firstClient, firstAttachmentCts).ConfigureAwait(false);
         await DrainTransientConnectionSemaphoreAsync(inboundConnection).ConfigureAwait(false);
 
         await inbound.AttachTransientConnection(secondClient, secondAttachmentCts).ConfigureAwait(false);
 
-        Assert.That(firstWaitHandle.SafeWaitHandle.IsClosed, Is.True);
+        Assert.That(firstToken.IsCancellationRequested, Is.True);
     }
 
     [Test]

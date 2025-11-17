@@ -1,5 +1,4 @@
-﻿using System.Threading;
-using Yaref92.Events.Abstractions;
+﻿using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
 

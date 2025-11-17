@@ -3,7 +3,7 @@
 using NSubstitute;
 
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Transports.EventHandlers;
+using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.UnitTests;
 
@@ -20,6 +20,7 @@ internal class NetworkedEventAggregatorTests
     public void SetUp()
     {
         _localAggregator = Substitute.For<IEventAggregator>();
+        Substitute.For<IPersistentPortListener>();
         _transport = Substitute.For<IEventTransport>();
         _networkedAggregator = new NetworkedEventAggregator(_localAggregator, _transport);
         _subscriber = Substitute.For<IEventHandler<DummyEvent>>();
@@ -27,14 +28,10 @@ internal class NetworkedEventAggregatorTests
     }
 
     [Test]
-    public void RegisterEventType_RegistersLocally_AndSubscribesToTransport()
+    public void RegisterEventType_RegistersLocally()
     {
         // Arrange
         _localAggregator.RegisterEventType<DummyEvent>().Returns(true);
-        bool handlerRegistered = false;
-        _transport
-            .When(t => t.Subscribe<DummyEvent>())
-            .Do(_ => handlerRegistered = true);
 
         // Act
         var result = _networkedAggregator.RegisterEventType<DummyEvent>();
@@ -42,7 +39,6 @@ internal class NetworkedEventAggregatorTests
         // Assert
         result.Should().BeTrue();
         _localAggregator.Received(1).RegisterEventType<DummyEvent>();
-        handlerRegistered.Should().BeTrue();
     }
 
     [Test]
@@ -118,10 +114,6 @@ internal class NetworkedEventAggregatorTests
     {
         // Arrange
         _localAggregator.RegisterEventType<DummyEvent>().Returns(true);
-        Func<DummyEvent, CancellationToken, Task> handler = null;
-        _transport
-            .When(t => t.Subscribe<DummyEvent>())
-            .Do(call => _localAggregator?.SubscribeToEventType(new EventReceivedHandler<DummyEvent>(typeof(DummyEvent), localAggregator: _localAggregator)));
         _networkedAggregator.RegisterEventType<DummyEvent>();
         DummyEvent evt = new();
 

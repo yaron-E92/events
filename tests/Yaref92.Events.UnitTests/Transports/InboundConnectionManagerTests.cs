@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading;
@@ -191,7 +191,7 @@ public class InboundConnectionManagerTests
 
         try
         {
-            var remoteEndpoint = (IPEndPoint)client.Client.LocalEndPoint!;
+            IPEndPoint remoteEndpoint = (IPEndPoint) client.Client.LocalEndPoint!;
             var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remoteEndpoint.Port);
             var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
             var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
@@ -205,6 +205,8 @@ public class InboundConnectionManagerTests
             initialization.IsSuccess.Should().BeTrue();
             initialization.Session.Should().NotBeNull();
 
+            var expectedAckId = Guid.NewGuid();
+
             Func<Task> sendFramesWithoutHandlers = async () =>
             {
                 await WriteFrameAsync(client, SessionFrame.CreateAck(Guid.NewGuid())).ConfigureAwait(false);
@@ -215,45 +217,46 @@ public class InboundConnectionManagerTests
 
             await sendFramesWithoutHandlers.Should().NotThrowAsync();
 
+            await Task.Delay(TimeSpan.FromSeconds(5)); // Since I kept intercepting the frames sent above later on, screwing my assertions
+
             var ackReceived = new TaskCompletionSource<(Guid eventId, SessionKey key)>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Func<Guid, SessionKey, Task> ackHandler = (eventId, key) =>
+            Task ackHandler(Guid eventId, SessionKey key)
             {
                 ackReceived.TrySetResult((eventId, key));
                 return Task.CompletedTask;
-            };
+            }
             manager.AckReceived += ackHandler;
 
             var pingReceived = new TaskCompletionSource<SessionKey>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Func<SessionKey, Task> pingHandler = key =>
+            Task pingHandler(SessionKey key)
             {
                 pingReceived.TrySetResult(key);
                 return Task.CompletedTask;
-            };
+            }
             manager.PingReceived += pingHandler;
 
             var eventReceived = new TaskCompletionSource<(IDomainEvent domainEvent, SessionKey key)>(TaskCreationOptions.RunContinuationsAsynchronously);
             var eventInvocationCount = 0;
-            Func<IDomainEvent, SessionKey, Task> eventHandler = (domainEvent, key) =>
+            Task eventHandler(IDomainEvent domainEvent, SessionKey key)
             {
                 Interlocked.Increment(ref eventInvocationCount);
                 eventReceived.TrySetResult((domainEvent, key));
                 return Task.CompletedTask;
-            };
+            }
             inboundManager.EventReceived += eventHandler;
 
             try
             {
-                var expectedAckId = Guid.NewGuid();
-                const string expectedEventPayload = "post-handler-event";
+                const string expectedEventId = "post-handler-event";
 
                 await WriteFrameAsync(client, SessionFrame.CreateAck(expectedAckId)).ConfigureAwait(false);
                 await WriteFrameAsync(client, SessionFrame.CreatePing()).ConfigureAwait(false);
-                await WriteFrameAsync(client, SessionFrame.CreateEventFrame(Guid.NewGuid(), expectedEventPayload))
+                await WriteFrameAsync(client, SessionFrame.CreateEventFrame(FakeEventSerializer.ExpectedEventId, expectedEventId))
                     .ConfigureAwait(false);
 
                 (Guid eventId, SessionKey key) ack = await ackReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 ack.eventId.Should().Be(expectedAckId);
-                var expectedKey = new SessionKey(sessionKey.UserId, remoteEndpoint.Address.ToString(), clientListenerPort)
+                var expectedKey = new SessionKey(sessionKey.UserId, IPAddress.Loopback.ToString(), clientListenerPort)
                 {
                     IsAnonymousKey = sessionKey.IsAnonymousKey,
                 };
@@ -262,11 +265,11 @@ public class InboundConnectionManagerTests
                 SessionKey pingKey = await pingReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 pingKey.Should().Be(expectedKey);
 
-                (IDomainEvent domainEvent, SessionKey key) eventArgs =
+                (IDomainEvent domainEvent, SessionKey key) =
                     await eventReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                eventArgs.domainEvent.Should().BeOfType<DummyEvent>();
-                eventArgs.domainEvent.As<DummyEvent>().Text.Should().Be(expectedEventPayload);
-                eventArgs.key.Should().Be(expectedKey);
+                domainEvent.Should().BeOfType<DummyEvent>();
+                domainEvent.As<DummyEvent>().Text.Should().Be(expectedEventId);
+                key.Should().Be(expectedKey);
 
                 Volatile.Read(ref eventInvocationCount).Should().Be(1);
             }
@@ -334,7 +337,7 @@ public class InboundConnectionManagerTests
             serverClient.Invoking(c => c.GetStream())
                 .Should()
                 .Throw<Exception>()
-                .Where(ex => ex is ObjectDisposedException or InvalidOperationException,
+                .Where(ex => ex.GetType().Equals(typeof(ObjectDisposedException)) || ex.GetType().Equals(typeof(InvalidOperationException)),
                     "failed initialization should dispose of the transient server-side socket");
         }
         finally
@@ -560,46 +563,44 @@ public class InboundConnectionManagerTests
             var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
             var serializer = new FakeEventSerializer();
 
-            await using (var manager = new InboundConnectionManager(sessionManager, serializer))
+            await using var manager = new InboundConnectionManager(sessionManager, serializer);
+            using var client = new TcpClient();
+            Task connectTask = client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint) listener.LocalEndpoint).Port);
+            using var serverClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+            await connectTask.ConfigureAwait(false);
+
+            var remotePort = ((IPEndPoint) client.Client.LocalEndPoint!).Port;
+            var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remotePort);
+            var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
+            var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
+
+            Task<ConnectionInitializationResult> initializationTask =
+                manager.HandleIncomingTransientConnectionAsync(serverClient, CancellationToken.None);
+
+            await WriteFrameAsync(client, authFrame).ConfigureAwait(false);
+
+            ConnectionInitializationResult initialization = await initializationTask.ConfigureAwait(false);
+            initialization.IsSuccess.Should().BeTrue();
+            initialization.Session.Should().NotBeNull();
+
+            var session = initialization.Session!;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (!session.InboundConnection.IsPastTimeout)
             {
-                using var client = new TcpClient();
-                Task connectTask = client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
-                using var serverClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
-                await connectTask.ConfigureAwait(false);
-
-                var remotePort = ((IPEndPoint)client.Client.LocalEndPoint!).Port;
-                var sessionKey = new SessionKey(Guid.NewGuid(), IPAddress.Loopback.ToString(), remotePort);
-                var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, options, authenticationSecret: null);
-                var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
-
-                Task<ConnectionInitializationResult> initializationTask =
-                    manager.HandleIncomingTransientConnectionAsync(serverClient, CancellationToken.None);
-
-                await WriteFrameAsync(client, authFrame).ConfigureAwait(false);
-
-                ConnectionInitializationResult initialization = await initializationTask.ConfigureAwait(false);
-                initialization.IsSuccess.Should().BeTrue();
-                initialization.Session.Should().NotBeNull();
-
-                var session = initialization.Session!;
-                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-                while (!session.InboundConnection.IsPastTimeout)
+                if (DateTime.UtcNow >= deadline)
                 {
-                    if (DateTime.UtcNow >= deadline)
-                    {
-                        Assert.Fail("Session never became stale.");
-                    }
-
-                    await Task.Delay(options.HeartbeatInterval).ConfigureAwait(false);
+                    Assert.Fail("Session never became stale.");
                 }
 
-                await Task.Delay(options.HeartbeatInterval * 2).ConfigureAwait(false);
+                await Task.Delay(options.HeartbeatInterval).ConfigureAwait(false);
+            }
 
-                if (initialization.ConnectionCancellation is not null)
-                {
-                    await initialization.ConnectionCancellation.CancelAsync().ConfigureAwait(false);
-                    initialization.ConnectionCancellation.Dispose();
-                }
+            await Task.Delay(options.HeartbeatInterval * 2).ConfigureAwait(false);
+
+            if (initialization.ConnectionCancellation is not null)
+            {
+                await initialization.ConnectionCancellation.CancelAsync().ConfigureAwait(false);
+                initialization.ConnectionCancellation.Dispose();
             }
         }
         finally
@@ -629,6 +630,7 @@ public class InboundConnectionManagerTests
     private sealed class FakeEventSerializer : IEventSerializer
     {
         internal const string ExpectedPayload = "inbound-payload";
+        internal static readonly Guid ExpectedEventId = Guid.NewGuid();
 
         public string Serialize<T>(T evt) where T : class, IDomainEvent =>
             throw new NotSupportedException();
@@ -636,6 +638,6 @@ public class InboundConnectionManagerTests
         public (Type? type, IDomainEvent? domainEvent) Deserialize(string data) =>
             string.IsNullOrEmpty(data)
                 ? (null, null)
-                : (typeof(DummyEvent), new DummyEvent(data));
+                : (typeof(DummyEvent), new DummyEvent(data, eventId: ExpectedEventId));
     }
 }

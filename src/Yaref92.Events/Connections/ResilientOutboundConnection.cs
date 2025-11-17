@@ -31,7 +31,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private int _activeOutboundConnectionCancellationRequested;
     private readonly CancellationTokenSource _cts = new();
 
-    private TaskCompletionSource _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _firstConnectionCompletion;// = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task _heartbeatLoop = Task.CompletedTask;
     private bool _outboxLoaded;
 
@@ -615,11 +615,10 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         }
     }
 
-    private async Task RunOutboundAsync(CancellationToken cancellationToken)//Touched
+    private async Task RunOutboundAsync(CancellationToken cancellationToken)
     {
         var reconnectAttempt = 0;
         var cancelled = false;
-        _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -803,6 +802,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 _runOutboundTask = null;
             }
 
+            _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
             _runOutboundTask ??= Task.Run(() => RunOutboundAsync(cancellationToken));
         }
     }

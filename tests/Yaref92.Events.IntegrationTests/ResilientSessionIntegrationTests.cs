@@ -15,6 +15,7 @@ using Yaref92.Events.Sessions;
 using Yaref92.Events.Sessions.Events;
 using Yaref92.Events.Transports;
 using Yaref92.Events.Transports.ConnectionManagers;
+using static Yaref92.Events.IntegrationTests.ResilientSessionIntegrationTests;
 
 namespace Yaref92.Events.IntegrationTests;
 
@@ -333,9 +334,11 @@ public class ResilientSessionIntegrationTests
         receivedEvent.EventId.Should().Be(messageId);
         receivedEvent.Payload.Should().Be(payload);
 
-        sessionKey.UserId.Should().Be(clientHost.Client.SessionKey.UserId);
-        sessionKey.Host.Should().Be(clientHost.Client.SessionKey.Host);
-        sessionKey.Port.Should().Be(clientHost.Client.SessionKey.Port);
+        var sessionKeyFromClientHost = clientHost.Client.OutboundConnection.SessionKey;
+
+        sessionKey.UserId.Should().Be(sessionKeyFromClientHost.UserId);
+        sessionKey.Host.Should().Be(sessionKeyFromClientHost.Host);
+        sessionKey.Port.Should().Be(sessionKeyFromClientHost.Port);
 
         clientHost.AcknowledgedMessageIds.Should().ContainSingle(id => id == messageId);
     }
@@ -426,7 +429,7 @@ public class ResilientSessionIntegrationTests
         fallbackPublisher.AcknowledgeEventReceipt(sessionJoined.EventId, sessionKey);
     }
 
-    private sealed record TestPayloadEvent(string Payload) : IDomainEvent
+    internal sealed record TestPayloadEvent(string Payload) : IDomainEvent
     {
         public Guid EventId { get; init; } = Guid.NewGuid();
         public DateTime DateTimeOccurredUtc { get; init; } = DateTime.UtcNow;
@@ -528,7 +531,7 @@ public class ResilientSessionIntegrationTests
             Server = (InboundConnectionManager)listener.ConnectionManager;
 
             Listener.SessionConnectionAccepted += OnSessionConnectionAcceptedAsync;
-            Listener.SessionInboundConnectionDropped += OnSessionInboundConnectionDroppedAsync;
+            (Listener as IPersistentPortListener).SessionInboundConnectionDropped += OnSessionInboundConnectionDroppedAsync;
             Server.AckReceived += OnAckReceivedAsync;
             Server.PingReceived += OnPingReceivedAsync;
         }
@@ -563,7 +566,7 @@ public class ResilientSessionIntegrationTests
         public async ValueTask DisposeAsync()
         {
             Listener.SessionConnectionAccepted -= OnSessionConnectionAcceptedAsync;
-            Listener.SessionInboundConnectionDropped -= OnSessionInboundConnectionDroppedAsync;
+            (Listener as IPersistentPortListener).SessionInboundConnectionDropped -= OnSessionInboundConnectionDroppedAsync;
             Server.AckReceived -= OnAckReceivedAsync;
             Server.PingReceived -= OnPingReceivedAsync;
             await Listener.DisposeAsync().ConfigureAwait(false);

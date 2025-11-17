@@ -21,7 +21,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
     public event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
 
-    private event Func<IDomainEvent, SessionKey, Task>? EventReceived;
+    internal event Func<IDomainEvent, SessionKey, Task>? EventReceived;
 
     event Func<IDomainEvent, SessionKey, Task> IInboundConnectionManager.EventReceived 
     {

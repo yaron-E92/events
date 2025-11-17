@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Text.Json;
 
 using FluentAssertions;
@@ -118,7 +118,7 @@ public class SessionFrameContractTests
             DoAnonymousSessionsRequireAuthentication = false,
         };
         const string token = "anonymous@host:4040";
-        var frame = SessionFrame.CreateAuth(token, payload: null);
+        var frame = SessionFrame.CreateAuth(token, secret: null);
 
         var result = SessionFrameContract.TryValidateAuthentication(frame, options, out var validatedSessionKey, out var payload);
 
@@ -132,7 +132,7 @@ public class SessionFrameContractTests
     public void TryValidateAuthentication_ReturnsFalse_ForInvalidTokens()
     {
         var options = new ResilientSessionOptions { RequireAuthentication = true };
-        var frame = SessionFrame.CreateAuth("invalid-token", payload: null);
+        var frame = SessionFrame.CreateAuth("invalid-token", secret: null);
 
         var result = SessionFrameContract.TryValidateAuthentication(frame, options, out var sessionKey, out var payload);
 

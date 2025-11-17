@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -55,7 +55,7 @@ public class TCPEventTransportUnitTests
         var sessionKey = new SessionKey(Guid.NewGuid(), "remote", 5678);
         await inboundManager.RaisePingReceivedAsync(sessionKey).ConfigureAwait(false);
 
-        outboundManager.Pongs.Should().ContainSingle(sessionKey);
+        outboundManager.Pongs.Should().ContainSingle(item => item.Equals(sessionKey));
     }
 
     [Test]

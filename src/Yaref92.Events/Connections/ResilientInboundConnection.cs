@@ -1,9 +1,5 @@
-using System;
-using System.IO;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
-using System.Threading;
-using System.Threading.Tasks;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
@@ -45,7 +41,7 @@ public class ResilientInboundConnection : IInboundResilientConnection
 
     public string SessionToken => _sessionToken;
 
-    private event SessionFrameReceivedHandler? FrameReceived;
+    internal event SessionFrameReceivedHandler? FrameReceived;
 
     event SessionFrameReceivedHandler? IInboundResilientConnection.FrameReceived
     {

@@ -1,4 +1,4 @@
-#if DEBUG
+﻿#if DEBUG
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -98,7 +98,7 @@ public sealed class ResilientOutboundConnectionTests
 
         await using var connection = new ResilientOutboundConnection(options, sessionKey);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource();
         var refreshResult = await connection.RefreshConnectionAsync(cts.Token).ConfigureAwait(false);
 
         refreshResult.Should().BeFalse();
