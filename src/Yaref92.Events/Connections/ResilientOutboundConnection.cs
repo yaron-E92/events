@@ -718,6 +718,11 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
         if (!client.Connected)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             throw new TcpConnectionDisconnectedException();
         }
     }
@@ -881,7 +886,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             {
                 await Task.WhenAll(runTasks).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is IOException or SocketException)
+            catch (Exception ex) when (ex is IOException or SocketException or TcpConnectionDisconnectedException)
             {
                 await Console.Error.WriteLineAsync($"loop closed with {ex}")
                     .ConfigureAwait(false);

@@ -237,14 +237,14 @@ public class ResilientSessionIntegrationTests
 
         var peerAPayloads = await peerA.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         var peerBPayloads = await peerB.WaitForMessageCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        await peerA.WaitForAckCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        await peerB.WaitForAckCountAsync(1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await peerA.WaitForAckCountAsync(1, TimeSpan.FromSeconds(5), TestPersistentClientHost.AckWaitKind.Sent).ConfigureAwait(false);
+        await peerB.WaitForAckCountAsync(1, TimeSpan.FromSeconds(5), TestPersistentClientHost.AckWaitKind.Sent).ConfigureAwait(false);
         await WaitForServerInflightToDrainAsync(server, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
         peerAPayloads.Should().ContainSingle(p => p == payload);
         peerBPayloads.Should().HaveCount(2).And.OnlyContain(p => p == payload);
         peerB.ConnectionCount.Should().BeGreaterThanOrEqualTo(2);
-        peerB.AcknowledgedMessageIds.Should().HaveCount(1);
+        peerB.SentAcknowledgements.Should().HaveCount(1);
     }
 
     [Test]
@@ -592,11 +592,16 @@ public class ResilientSessionIntegrationTests
 internal sealed class TestPersistentClientHost : IAsyncDisposable
 {
     private readonly string _outboxPath;
+    private readonly TcpListener _callbackListener;
+    private readonly CancellationTokenSource _callbackListenerCts = new();
+    private readonly Task _callbackAcceptLoop;
     private readonly ConcurrentQueue<string> _payloads = new();
     private readonly IEventSerializer _serializer = new JsonEventSerializer();
     private readonly List<Guid> _acknowledged = new();
+    private readonly List<Guid> _sentAcknowledgements = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _messageWaiters = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _ackWaiters = new();
+    private readonly List<(int Target, TaskCompletionSource Completion)> _sentAckWaiters = new();
     private readonly List<(int Target, TaskCompletionSource Completion)> _connectionWaiters = new();
     private readonly object _waiterLock = new();
 
@@ -615,7 +620,14 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         bool dropFirstMessage = false)
     {
         _outboxPath = Path.Combine(Path.GetTempPath(), $"outbox-{Guid.NewGuid():N}.json");
-        Client = new ResilientCompositSessionConnection(sessionUserId ?? Guid.NewGuid(), host, port, options);
+        var clientOptions = CloneOptions(options);
+        _callbackListener = new TcpListener(IPAddress.Loopback, 0);
+        _callbackListener.Start();
+        var callbackEndpoint = (IPEndPoint)_callbackListener.LocalEndpoint;
+        clientOptions.CallbackHost = IPAddress.Loopback.ToString();
+        clientOptions.CallbackPort = callbackEndpoint.Port;
+
+        Client = new ResilientCompositSessionConnection(sessionUserId ?? Guid.NewGuid(), host, port, clientOptions);
         Client.SetOutboxPathForTesting(_outboxPath);
         _trackConnections = trackConnections;
         if (_trackConnections)
@@ -623,6 +635,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
             Client.OutboundConnection.ConnectionEstablished += OnConnectionEstablishedAsync;
         }
         Client.InboundConnection.FrameReceived += OnFrameReceivedAsync;
+        _callbackAcceptLoop = Task.Run(() => AcceptCallbackConnectionsAsync(_callbackListenerCts.Token));
         if (dropFirstAck)
         {
             DropNextAck();
@@ -647,6 +660,17 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
             lock (_acknowledged)
             {
                 return _acknowledged.ToArray();
+            }
+        }
+    }
+
+    public IReadOnlyCollection<Guid> SentAcknowledgements
+    {
+        get
+        {
+            lock (_sentAcknowledgements)
+            {
+                return _sentAcknowledgements.ToArray();
             }
         }
     }
@@ -693,6 +717,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
 
         await TryToAwaitWaiter(timeout, waiter).ConfigureAwait(false);
+
         return _payloads.ToArray();
     }
 
@@ -704,13 +729,17 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
         catch (Exception ex) when (ex is AggregateException or TimeoutException)
         {
-            var exOrFlattened = ex is AggregateException aggEx ? aggEx.Flatten() : ex;
-            await Console.Error.WriteLineAsync($"Persistent receive loop faulted: {exOrFlattened}");
-            throw exOrFlattened;
+            throw ex is AggregateException aggEx ? aggEx.Flatten() : ex;
         }
     }
 
-    public async Task WaitForAckCountAsync(int count, TimeSpan timeout)
+    internal enum AckWaitKind
+    {
+        Received,
+        Sent,
+    }
+
+    public async Task WaitForAckCountAsync(int count, TimeSpan timeout, AckWaitKind waitKind = AckWaitKind.Received)
     {
         if (count <= 0)
         {
@@ -720,16 +749,52 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         TaskCompletionSource waiter;
         lock (_waiterLock)
         {
-            if (_acknowledged.Count >= count)
+            if (GetAckCount(waitKind) >= count)
             {
                 return;
             }
 
             waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _ackWaiters.Add((count, waiter));
+            GetAckWaiters(waitKind).Add((count, waiter));
         }
 
         await TryToAwaitWaiter(timeout, waiter).ConfigureAwait(false);
+    }
+
+    private int GetAckCount(AckWaitKind kind)
+    {
+        return kind switch
+        {
+            AckWaitKind.Received => GetReceivedAckCount(),
+            AckWaitKind.Sent => GetSentAckCount(),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+        };
+    }
+
+    private int GetReceivedAckCount()
+    {
+        lock (_acknowledged)
+        {
+            return _acknowledged.Count;
+        }
+    }
+
+    private int GetSentAckCount()
+    {
+        lock (_sentAcknowledgements)
+        {
+            return _sentAcknowledgements.Count;
+        }
+    }
+
+    private List<(int Target, TaskCompletionSource Completion)> GetAckWaiters(AckWaitKind kind)
+    {
+        return kind switch
+        {
+            AckWaitKind.Received => _ackWaiters,
+            AckWaitKind.Sent => _sentAckWaiters,
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+        };
     }
 
     public async Task WaitForConnectionCountAsync(int count, TimeSpan timeout)
@@ -772,6 +837,17 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _callbackListenerCts.Cancel();
+        _callbackListener.Stop();
+        try
+        {
+            await _callbackAcceptLoop.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Swallow expected cancellation when shutting down the callback listener.
+        }
+        _callbackListenerCts.Dispose();
         if (_trackConnections)
         {
             Client.OutboundConnection.ConnectionEstablished -= OnConnectionEstablishedAsync;
@@ -799,6 +875,32 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         return Task.CompletedTask;
     }
 
+    private async Task AcceptCallbackConnectionsAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            TcpClient? callbackConnection = null;
+            try
+            {
+                callbackConnection = await _callbackListener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            if (callbackConnection is null)
+            {
+                continue;
+            }
+
+            var attachmentCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            await ((IInboundResilientConnection)Client.InboundConnection)
+                .AttachTransientConnection(callbackConnection, attachmentCts)
+                .ConfigureAwait(false);
+        }
+    }
+
     private async Task OnFrameReceivedAsync(SessionFrame frame, SessionKey _, CancellationToken cancellationToken)
     {
         switch (frame.Kind)
@@ -813,23 +915,39 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
                     break;
                 }
 
-                Client.OutboundConnection.EnqueueFrame(SessionFrame.CreateAck(frame.Id));
-                break;
-            case SessionFrameKind.Ack when frame.Id != Guid.Empty:
                 if (Interlocked.Exchange(ref _dropAckFlag, 0) == 1)
                 {
                     await Client.OutboundConnection.AbortActiveConnectionAsync().ConfigureAwait(false);
                     break;
                 }
 
+                Client.OutboundConnection.EnqueueFrame(SessionFrame.CreateAck(frame.Id));
+                RecordSentAcknowledgement(frame.Id);
+                break;
+            case SessionFrameKind.Ack when frame.Id != Guid.Empty:
+
+                int count;
                 lock (_acknowledged)
                 {
                     _acknowledged.Add(frame.Id);
+                    count = _acknowledged.Count;
                 }
 
-                NotifyWaiters(_ackWaiters, _acknowledged.Count);
+                NotifyWaiters(_ackWaiters, count);
                 break;
         }
+    }
+
+    private void RecordSentAcknowledgement(Guid eventId)
+    {
+        int count;
+        lock (_sentAcknowledgements)
+        {
+            _sentAcknowledgements.Add(eventId);
+            count = _sentAcknowledgements.Count;
+        }
+
+        NotifyWaiters(_sentAckWaiters, count);
     }
 
     private void EnqueueDomainPayload(string payload)
@@ -849,6 +967,24 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
         }
 
         _payloads.Enqueue(payload);
+    }
+
+    private static ResilientSessionOptions CloneOptions(ResilientSessionOptions options)
+    {
+        return new ResilientSessionOptions
+        {
+            RequireAuthentication = options.RequireAuthentication,
+            DoAnonymousSessionsRequireAuthentication = options.DoAnonymousSessionsRequireAuthentication,
+            AuthenticationToken = options.AuthenticationToken,
+            HeartbeatInterval = options.HeartbeatInterval,
+            HeartbeatTimeout = options.HeartbeatTimeout,
+            SessionBufferWindow = options.SessionBufferWindow,
+            BackoffInitialDelay = options.BackoffInitialDelay,
+            BackoffMaxDelay = options.BackoffMaxDelay,
+            MaximalReconnectAttempts = options.MaximalReconnectAttempts,
+            CallbackHost = options.CallbackHost,
+            CallbackPort = options.CallbackPort,
+        };
     }
 
     private IReadOnlyCollection<Guid> GetOutboxEntries()

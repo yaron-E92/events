@@ -226,7 +226,7 @@ public class ResilientInboundConnection : IInboundResilientConnection
                 if (!result.IsSuccess || result.Frame is null)
                 {
                     _ = Console.Error.WriteLineAsync("Frame read failed or resulted in null frame");
-                    continue;
+                    break;
                 }
 
                 await HandleInboundFrameAsync(result.Frame, incomingConnectionCancellation).ConfigureAwait(false);
