@@ -943,6 +943,12 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
                 break;
             case SessionFrameKind.Ack when frame.Id != Guid.Empty:
 
+                if (Interlocked.Exchange(ref _dropAckFlag, 0) == 1)
+                {
+                    await Client.OutboundConnection.AbortActiveConnectionAsync().ConfigureAwait(false);
+                    break;
+                }
+
                 int count;
                 lock (_acknowledged)
                 {
