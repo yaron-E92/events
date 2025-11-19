@@ -152,6 +152,8 @@ public class ResilientSessionIntegrationTests
         var messageId = await clientHost.EnqueueEventAsync(domainEvent.EventId, serializedEvent, CancellationToken.None).ConfigureAwait(false);
         messageId.Should().Be(domainEvent.EventId);
 
+        await serverHost.Publisher.PublishToAllAsync(domainEvent.EventId, serializedEvent, CancellationToken.None).ConfigureAwait(false);
+
         await clientHost.WaitForMessageCountAsync(initialMessageCount + 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         await clientHost.WaitForAckCountAsync(initialAckCount + 1, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
