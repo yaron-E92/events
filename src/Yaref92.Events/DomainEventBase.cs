@@ -1,4 +1,6 @@
-﻿using Yaref92.Events.Abstractions;
+﻿using System.Text.Json.Serialization;
+
+using Yaref92.Events.Abstractions;
 
 namespace Yaref92.Events;
 
@@ -8,15 +10,18 @@ namespace Yaref92.Events;
 public abstract class DomainEventBase : IDomainEvent
 {
     /// <inheritdoc/>
-    public Guid EventId { get; }
+    [JsonInclude]
+    public Guid EventId { get; private set; }
     /// <inheritdoc/>
-    public DateTime DateTimeOccurredUtc { get; }
+    [JsonInclude]
+    public DateTime DateTimeOccurredUtc { get; private set; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DomainEventBase"/> class.
     /// </summary>
     /// <param name="dateTimeOccurredUtc">The UTC time the event occurred. Defaults to now if not provided.</param>
     /// <param name="eventId">The unique event ID. If not provided or empty, a new Guid is generated.</param>
+    [JsonConstructor]
     protected DomainEventBase(DateTime dateTimeOccurredUtc = default, Guid eventId = default)
     {
         EventId = eventId == default ? Guid.NewGuid() : eventId;

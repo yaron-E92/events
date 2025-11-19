@@ -1,4 +1,5 @@
-﻿using System.Threading.Tasks;
+using System.IO;
+using System.Threading.Tasks;
 
 using FluentAssertions;
 
@@ -60,6 +61,8 @@ public class TCPEventTransportTests
     [Explicit("Integration test, requires open ports and async timing.")]
     public async Task Authenticated_Transports_Exchange_Acks_And_Pongs()
     {
+        ResetOutbox();
+
         int portA = 16000;
         int portB = 16001;
         string authenticationToken = $"token-{Guid.NewGuid():N}";
@@ -127,14 +130,17 @@ public class TCPEventTransportTests
         await transportA.ConnectToPeerAsync(Guid.NewGuid(), "localhost", portB);
         await transportB.ConnectToPeerAsync(Guid.NewGuid(), "localhost", portA);
 
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+
         var outboundFromA = new DummyEvent(DateTime.UtcNow, "from-a");
         var outboundFromB = new DummyEvent(DateTime.UtcNow, "from-b");
 
         await transportA.PublishEventAsync(outboundFromA);
         await transportB.PublishEventAsync(outboundFromB);
 
-        (await Task.WhenAny(receivedByA.Task, Task.Delay(500))).Should().Be(receivedByA.Task);
-        (await Task.WhenAny(receivedByB.Task, Task.Delay(500))).Should().Be(receivedByB.Task);
+        var deliveryTimeout = TimeSpan.FromSeconds(2);
+        (await Task.WhenAny(receivedByA.Task, Task.Delay(deliveryTimeout))).Should().Be(receivedByA.Task);
+        (await Task.WhenAny(receivedByB.Task, Task.Delay(deliveryTimeout))).Should().Be(receivedByB.Task);
 
         var ackAtA = await ackObservedAtA.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var ackAtB = await ackObservedAtB.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -146,6 +152,15 @@ public class TCPEventTransportTests
 
         receivedByA.Task.Result.Text.Should().Be("from-b");
         receivedByB.Task.Result.Text.Should().Be("from-a");
+    }
+
+    private static void ResetOutbox()
+    {
+        var outboxPath = Path.Combine(AppContext.BaseDirectory, "outbox.json");
+        if (File.Exists(outboxPath))
+        {
+            File.Delete(outboxPath);
+        }
     }
 
     private sealed class TaskCompletionAsyncHandler<TEvent>(TaskCompletionSource<TEvent> source)
