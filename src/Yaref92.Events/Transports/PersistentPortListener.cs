@@ -112,9 +112,27 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
-        await ConnectionManager.DisposeAsync().ConfigureAwait(false);
-        await _cts.CancelAsync();
-        _cts.Dispose();
+        try
+        {
+            await StopAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(PersistentPortListener)} stop failed: {ex}").ConfigureAwait(false);
+        }
+
+        try
+        {
+            await ConnectionManager.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await Console.Error.WriteLineAsync($"{nameof(PersistentPortListener)} disposal failed: {ex}").ConfigureAwait(false);
+        }
+        finally
+        {
+            await _cts.CancelAsync().ConfigureAwait(false);
+            _cts.Dispose();
+        }
     }
 }

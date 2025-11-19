@@ -77,6 +77,17 @@ internal class SessionManager : ISessionManager
         return session;
     }
 
+    internal IResilientPeerSession ResolveFallbackSession(EndPoint? remoteEndPoint)
+    {
+        SessionKey sessionKey = CreateFallbackSessionKey(remoteEndPoint);
+        HydrateAnonymousSessionId(sessionKey, remoteEndPoint);
+
+        var session = GetOrGenerate(sessionKey, isAnonymous: true);
+        session.RegisterAuthentication();
+        session.Touch();
+        return session;
+    }
+
     public IResilientPeerSession GetOrGenerate(SessionKey sessionKey, bool isAnonymous = false)
     {
         IResilientPeerSession session =
@@ -100,7 +111,7 @@ internal class SessionManager : ISessionManager
     {
         return remoteEndPoint switch
         {
-            IPEndPoint ip => ip.Address.ToString(),
+            IPEndPoint ip => FormatIpAddress(ip.Address),
             _ => IPAddress.Any.ToString(),
         };
     }
@@ -147,7 +158,7 @@ internal class SessionManager : ISessionManager
         (string host, int port) = remoteEndPoint switch
         {
             DnsEndPoint dnsEndPoint => (dnsEndPoint.Host, dnsEndPoint.Port),
-            IPEndPoint ipEndPoint => (ipEndPoint.Address.ToString(), ipEndPoint.Port),
+            IPEndPoint ipEndPoint => (FormatIpAddress(ipEndPoint.Address), ipEndPoint.Port),
             _ => (sessionKey.Host, sessionKey.Port),
         };
 
@@ -175,5 +186,40 @@ internal class SessionManager : ISessionManager
         {
             IsAnonymousKey = sessionKey.IsAnonymousKey,
         };
+    }
+
+    private SessionKey CreateFallbackSessionKey(EndPoint? remoteEndPoint)
+    {
+        if (remoteEndPoint is DnsEndPoint dns)
+        {
+            return new SessionKey(Guid.Empty, dns.Host, _listenerPort)
+            {
+                IsAnonymousKey = true,
+            };
+        }
+
+        if (remoteEndPoint is IPEndPoint ip)
+        {
+            return new SessionKey(Guid.Empty, FormatIpAddress(ip.Address), _listenerPort)
+            {
+                IsAnonymousKey = true,
+            };
+        }
+
+        var fallbackEndpoint = remoteEndPoint ?? new DnsEndPoint(IPAddress.Any.ToString(), _listenerPort);
+        return new SessionKey(Guid.Empty, FallbackHost(fallbackEndpoint), _listenerPort)
+        {
+            IsAnonymousKey = true,
+        };
+    }
+
+    private static string FormatIpAddress(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6)
+        {
+            return address.MapToIPv4().ToString();
+        }
+
+        return address.ToString();
     }
 }

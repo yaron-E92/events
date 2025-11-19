@@ -124,22 +124,38 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             return ConnectionInitializationResult.Failed();
         }
 
-        var authFrame = authFrameResult.Frame!;
+        var initialFrame = authFrameResult.Frame!;
+        var remoteEndPoint = transientIncomingConnection.Client.RemoteEndPoint;
+        var shouldReplayInitialFrame = false;
         IResilientPeerSession session;
         try
         {
-            session = SessionManager.ResolveSession(transientIncomingConnection.Client.RemoteEndPoint, authFrame);
+            if (initialFrame.Kind == SessionFrameKind.Auth)
+            {
+                session = SessionManager.ResolveSession(remoteEndPoint, initialFrame);
+            }
+            else if (!SessionManager.Options.RequireAuthentication)
+            {
+                session = SessionManager.ResolveFallbackSession(remoteEndPoint);
+                shouldReplayInitialFrame = true;
+            }
+            else
+            {
+                return ConnectionInitializationResult.Failed();
+            }
         }
         catch (System.Security.Authentication.AuthenticationException)
         {
             // TODO Log failure due to authentication invalidation
             return ConnectionInitializationResult.Failed();
         }
+
         if (session is null)
         {
             // TODO Log failure due to session resolution failure
             return ConnectionInitializationResult.Failed();
         }
+
         session.Touch();
         EnsureFrameHandlerSubscribed(session);
 
@@ -147,6 +163,11 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
         var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
         await session.InboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
+
+        if (shouldReplayInitialFrame)
+        {
+            await OnFrameReceivedAsync(initialFrame, session.Key, serverToken).ConfigureAwait(false);
+        }
 
         return ConnectionInitializationResult.Success(session, connectionCts);
     }

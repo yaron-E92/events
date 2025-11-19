@@ -603,13 +603,31 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         var timeout = SessionFrameContract.GetHeartbeatTimeout(_options);
         while (!cancellationToken.IsCancellationRequested)
         {
-            await Task.Delay(heartbeatInterval, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await Task.Delay(heartbeatInterval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
             EnqueueFrame(SessionFrame.CreatePing());
 
             var lastTicks = Volatile.Read(ref _lastRemoteActivityTicks);
             var lastActivity = new DateTime(lastTicks, DateTimeKind.Utc);
             if (DateTime.UtcNow - lastActivity > timeout)
             {
+                if (Volatile.Read(ref _activeOutboundConnectionCancellationRequested) == 1)
+                {
+                    break;
+                }
+
                 throw new IOException("Heartbeat timed out.");
             }
         }
@@ -684,18 +702,19 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 break;
             }
 
-            if (!OutboundBuffer.TryDequeue(out SessionFrame? frame))
-            {
-                await OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
-                continue;
-            }
-            if (frame!.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty && !TryMarkEventDequeued(frame.Id))
-            {
-                continue;
-            }
-
+            SessionFrame? frame = null;
             try
             {
+                if (!OutboundBuffer.TryDequeue(out frame))
+                {
+                    await OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+                if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty && !TryMarkEventDequeued(frame.Id))
+                {
+                    continue;
+                }
+
                 await WriteFrameAsync(stream, frame, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -704,7 +723,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             }
             catch (Exception ex) when (ex is IOException or SocketException)
             {
-                if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
+                if (frame is not null && frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
                 {
                     TryMarkEventQueued(frame.Id);
                     AcknowledgedEventIds[frame.Id] = AcknowledgementState.SendingFailed;
@@ -718,6 +737,11 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
         if (!client.Connected)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             throw new TcpConnectionDisconnectedException();
         }
     }
@@ -881,7 +905,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             {
                 await Task.WhenAll(runTasks).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is IOException or SocketException)
+            catch (Exception ex) when (ex is IOException or SocketException or TcpConnectionDisconnectedException)
             {
                 await Console.Error.WriteLineAsync($"loop closed with {ex}")
                     .ConfigureAwait(false);
