@@ -111,7 +111,7 @@ internal class SessionManager : ISessionManager
     {
         return remoteEndPoint switch
         {
-            IPEndPoint ip => ip.Address.ToString(),
+            IPEndPoint ip => FormatIpAddress(ip.Address),
             _ => IPAddress.Any.ToString(),
         };
     }
@@ -158,7 +158,7 @@ internal class SessionManager : ISessionManager
         (string host, int port) = remoteEndPoint switch
         {
             DnsEndPoint dnsEndPoint => (dnsEndPoint.Host, dnsEndPoint.Port),
-            IPEndPoint ipEndPoint => (ipEndPoint.Address.ToString(), ipEndPoint.Port),
+            IPEndPoint ipEndPoint => (FormatIpAddress(ipEndPoint.Address), ipEndPoint.Port),
             _ => (sessionKey.Host, sessionKey.Port),
         };
 
@@ -200,7 +200,7 @@ internal class SessionManager : ISessionManager
 
         if (remoteEndPoint is IPEndPoint ip)
         {
-            return new SessionKey(Guid.Empty, ip.Address.ToString(), _listenerPort)
+            return new SessionKey(Guid.Empty, FormatIpAddress(ip.Address), _listenerPort)
             {
                 IsAnonymousKey = true,
             };
@@ -211,5 +211,15 @@ internal class SessionManager : ISessionManager
         {
             IsAnonymousKey = true,
         };
+    }
+
+    private static string FormatIpAddress(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6)
+        {
+            return address.MapToIPv4().ToString();
+        }
+
+        return address.ToString();
     }
 }

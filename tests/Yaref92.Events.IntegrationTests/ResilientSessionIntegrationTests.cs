@@ -337,8 +337,8 @@ public class ResilientSessionIntegrationTests
         var sessionKeyFromClientHost = clientHost.Client.OutboundConnection.SessionKey;
 
         sessionKey.UserId.Should().Be(sessionKeyFromClientHost.UserId);
-        sessionKey.Host.Should().Be(sessionKeyFromClientHost.Host);
-        sessionKey.Port.Should().Be(sessionKeyFromClientHost.Port);
+        sessionKey.Host.Should().Be(clientHost.CallbackHost);
+        sessionKey.Port.Should().Be(clientHost.CallbackPort);
 
         clientHost.AcknowledgedMessageIds.Should().ContainSingle(id => id == messageId);
     }
@@ -405,7 +405,8 @@ public class ResilientSessionIntegrationTests
         sessionKey.Port.Should().BeGreaterThan(0);
 
         var remoteEndPoint = (IPEndPoint) client.Client.RemoteEndPoint!;
-        SessionKey fallbackKey = new(Guid.Empty, remoteEndPoint.Address.ToString(), remoteEndPoint.Port)
+        var fallbackHost = CanonicalizeHost(remoteEndPoint.Address);
+        SessionKey fallbackKey = new(Guid.Empty, fallbackHost, remoteEndPoint.Port)
         {
             IsAnonymousKey = true,
         };
@@ -587,6 +588,16 @@ public class ResilientSessionIntegrationTests
             listener.Stop();
         }
     }
+
+    private static string CanonicalizeHost(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6)
+        {
+            return address.MapToIPv4().ToString();
+        }
+
+        return address.ToString();
+    }
 }
 
 internal sealed class TestPersistentClientHost : IAsyncDisposable
@@ -650,6 +661,10 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
     public ResilientCompositSessionConnection Client { get; }
 
     public SessionKey SessionKey => Client.OutboundConnection.SessionKey;
+
+    public string CallbackHost => ((IPEndPoint)_callbackListener.LocalEndpoint).Address.ToString();
+
+    public int CallbackPort => ((IPEndPoint)_callbackListener.LocalEndpoint).Port;
 
     public IReadOnlyCollection<string> ReceivedPayloads => _payloads.ToArray();
 
@@ -929,11 +944,18 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
                 int count;
                 lock (_acknowledged)
                 {
-                    _acknowledged.Add(frame.Id);
+                    if (!_acknowledged.Contains(frame.Id))
+                    {
+                        _acknowledged.Add(frame.Id);
+                    }
                     count = _acknowledged.Count;
                 }
 
+                Client.OutboundConnection.OnAckReceived(frame.Id);
                 NotifyWaiters(_ackWaiters, count);
+                break;
+            case SessionFrameKind.Ping:
+                Client.OutboundConnection.EnqueueFrame(SessionFrame.CreatePong());
                 break;
         }
     }
