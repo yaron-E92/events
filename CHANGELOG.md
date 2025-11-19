@@ -11,11 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Consolidated resilient TCP inbound session management with canonical frame identifiers and shared client/server handshake semantics.
 - Implementation guide for integrating `Yaref92.Events` transports into external applications, covering client responsibilities, session wiring, and deployment considerations.
+- Documentation & testing readiness checklists that spell out which artifacts must be updated and which test suites must pass before tagging v2 releases.
 
 ### Changed
 
 - Promoted `ResilientSessionClient` to own reconnection, inbound dispatch, and ACK correlation for end-to-end delivery guarantees.
 - Updated resilient transport integration tests to exercise reconnection retries, inbound dispatch routing, and ACK handling against the new pipeline.
+- README now summarizes the refreshed documentation set and enumerates the unit, Rx, and integration suites required for release validation.
 
 ### Fixed
 

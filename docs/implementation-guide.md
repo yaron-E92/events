@@ -98,3 +98,23 @@ Outbound events are serialized via the transport’s `IEventSerializer` and publ
 - **Testing:** Use `dotnet test` locally and review the integration tests under `tests/Yaref92.Events.IntegrationTests` for concrete examples of reconnection flows.
 
 For detailed protocol semantics, see [`docs/networking/resilient-tcp.md`](./networking/resilient-tcp.md) and the README section on resilient transport configuration.
+
+## 8. Documentation Completeness Checklist
+
+Before tagging a release or onboarding new teams, verify that the following artifacts reflect the current codebase:
+
+1. **README** – Confirms the feature list, installation steps, quick start, API surface, and migration guidance. This document acts as the landing page for developers evaluating the aggregator.
+2. **Implementation Guide (this file)** – Explains how to compose the aggregator, transport, and diagnostics end-to-end, including operational responsibilities and deployment considerations.
+3. **Resilient TCP Transport reference** – Documents frame formats, authentication flows, heartbeat defaults, persistent outbox behavior, and wiring examples for `TCPEventTransport`.
+
+If any feature work touches the aggregator lifecycle, transport configuration, or event contracts, update the relevant section(s) above in the same pull request.
+
+## 9. Testing Completeness Checklist
+
+Run `dotnet test Yaref92.Events.sln` and ensure the following suites pass before releasing:
+
+- **`tests/Yaref92.Events.UnitTests`** – Covers the core in-memory aggregator behaviors (registration, publishing, deduplication windows, memory management, and logging hooks).
+- **`tests/Yaref92.Events.Rx.UnitTests`** – Validates the optional Rx integration so reactive subscribers continue to honor the aggregator contracts.
+- **`tests/Yaref92.Events.IntegrationTests`** – Exercises the resilient TCP transport over real sockets, including authentication, heartbeat monitoring, reconnect backoff, ACK replay, and aggregator rehydration.
+
+Record the test run (including the command output) in the release PR description or changelog entry for traceability.
