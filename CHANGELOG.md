@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Ensured end-to-end TCP event transport flows through real aggregators and async handlers to validate the resilient pipeline under load.
+- Disposed duplicate Rx subscriptions when tracking new observers to prevent untracked listeners and ensure cleanup symmetry for Rx subscribers.
 
 ---
 
