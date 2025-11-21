@@ -1,5 +1,6 @@
 ﻿using Yaref92.Events.Abstractions;
 using System.Collections.Concurrent;
+using System.Threading;
 using Timer = System.Timers.Timer;
 
 namespace Yaref92.Events;
@@ -13,6 +14,7 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     private readonly IEventAggregator _localAggregator;
     private readonly IEventTransport _transport;
     private readonly ConcurrentDictionary<Guid, DateTime> _recentIncomingEventIds = new();
+    private readonly SemaphoreSlim _deduplicationLock = new(1, 1);
     private readonly TimeSpan _deduplicationWindow;
     private readonly Timer _cleanupTimer;
     private bool _disposed;
@@ -39,9 +41,19 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     /// </returns>
     async Task<bool> OnEventReceived(IDomainEvent incomingDomainEvent)
     {
-        if (_recentIncomingEventIds.ContainsKey(incomingDomainEvent.EventId))
+        await _deduplicationLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            return true;
+            if (_recentIncomingEventIds.ContainsKey(incomingDomainEvent.EventId))
+            {
+                return true;
+            }
+
+            _recentIncomingEventIds[incomingDomainEvent.EventId] = DateTime.UtcNow;
+        }
+        finally
+        {
+            _deduplicationLock.Release();
         }
 
         Task publishTask = PublishIncomingEventLocallyAsync(incomingDomainEvent, CancellationToken.None);
@@ -49,12 +61,28 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
         try
         {
             await publishTask.ConfigureAwait(false);
-            _recentIncomingEventIds.TryAdd(incomingDomainEvent.EventId, DateTime.UtcNow);
+            await _deduplicationLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                _recentIncomingEventIds[incomingDomainEvent.EventId] = DateTime.UtcNow;
+            }
+            finally
+            {
+                _deduplicationLock.Release();
+            }
             return true;
         }
         catch
         {
-            _recentIncomingEventIds.TryRemove(incomingDomainEvent.EventId, out _);
+            await _deduplicationLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                _recentIncomingEventIds.TryRemove(incomingDomainEvent.EventId, out _);
+            }
+            finally
+            {
+                _deduplicationLock.Release();
+            }
             return false;
         }
     }
@@ -134,6 +162,7 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
         if (_disposed) return;
         _cleanupTimer?.Stop();
         _cleanupTimer?.Dispose();
+        _deduplicationLock.Dispose();
         _disposed = true;
     }
 }
