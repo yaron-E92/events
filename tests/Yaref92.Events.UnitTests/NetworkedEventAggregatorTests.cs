@@ -124,9 +124,74 @@ internal class NetworkedEventAggregatorTests
         await _localAggregator.Received(1).PublishEventAsync(evt, Arg.Any<CancellationToken>());
     }
 
+    [Test]
+    public void Dispose_UnsubscribesFromTransportEvents()
+    {
+        // Arrange
+        Func<IDomainEvent, Task<bool>>? handler = null;
+        _networkedAggregator.Dispose();
+        _transport = Substitute.For<IEventTransport>();
+        _transport
+            .When(t => t.EventReceived += Arg.Any<Func<IDomainEvent, Task<bool>>>())
+            .Do(call => handler += (Func<IDomainEvent, Task<bool>>)call[0]);
+        _transport
+            .When(t => t.EventReceived -= Arg.Any<Func<IDomainEvent, Task<bool>>>())
+            .Do(call => handler -= (Func<IDomainEvent, Task<bool>>)call[0]);
+
+        _networkedAggregator = new NetworkedEventAggregator(_localAggregator, _transport);
+
+        // Act
+        _networkedAggregator.Dispose();
+
+        // Assert
+        handler.Should().BeNull();
+    }
+
+    [Test]
+    public async Task OnEventReceived_ReturnsFalseAfterDispose()
+    {
+        // Arrange
+        Func<IDomainEvent, Task<bool>>? capturedHandler = null;
+        _networkedAggregator.Dispose();
+        _transport = Substitute.For<IEventTransport>();
+        _transport
+            .When(t => t.EventReceived += Arg.Any<Func<IDomainEvent, Task<bool>>>())
+            .Do(call => capturedHandler = (Func<IDomainEvent, Task<bool>>)call[0]);
+        var localAggregator = Substitute.For<IEventAggregator>();
+        localAggregator.PublishEventAsync(Arg.Any<DummyEvent>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        DummyEvent incomingEvent = new();
+
+        _networkedAggregator = new NetworkedEventAggregator(localAggregator, _transport);
+
+        // Act
+        _networkedAggregator.Dispose();
+        bool result = capturedHandler is null ? false : await capturedHandler(incomingEvent);
+
+        // Assert
+        result.Should().BeFalse();
+    }
+
+    [Test]
+    public void Dispose_DisposesOwnedDependencies()
+    {
+        // Arrange
+        var disposableAggregator = Substitute.For<IEventAggregator, IDisposable>();
+        var asyncDisposableTransport = Substitute.For<IEventTransport, IAsyncDisposable>();
+        ((IAsyncDisposable)asyncDisposableTransport).DisposeAsync().Returns(ValueTask.CompletedTask);
+
+        NetworkedEventAggregator aggregator = new(disposableAggregator, asyncDisposableTransport, ownsLocalAggregator: true, ownsTransport: true);
+
+        // Act
+        aggregator.Dispose();
+
+        // Assert
+        ((IDisposable)disposableAggregator).Received(1).Dispose();
+        _ = ((IAsyncDisposable)asyncDisposableTransport).Received(1).DisposeAsync();
+    }
+
     [TearDown]
     public void TearDown()
     {
         _networkedAggregator?.Dispose();
     }
-} 
+}
