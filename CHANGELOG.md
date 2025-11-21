@@ -5,14 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.1] - 2025-11-21
-
-### Fixed
-
-- Disposed duplicate Rx subscriptions when tracking new observers to prevent untracked listeners and ensure cleanup symmetry for Rx subscribers.
-
----
-
 ## [2.0.0] - 2025-11-19
 
 ### Added
@@ -30,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Ensured end-to-end TCP event transport flows through real aggregators and async handlers to validate the resilient pipeline under load.
+- Disposed duplicate Rx subscriptions when tracking new observers to prevent untracked listeners and ensure cleanup symmetry for Rx subscribers.
 
 ---
 
