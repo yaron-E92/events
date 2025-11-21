@@ -39,13 +39,24 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     /// </returns>
     async Task<bool> OnEventReceived(IDomainEvent incomingDomainEvent)
     {
-        if (TryMarkSeen(incomingDomainEvent))
+        if (_recentIncomingEventIds.ContainsKey(incomingDomainEvent.EventId))
         {
-            Task task = PublishIncomingEventLocallyAsync(incomingDomainEvent, CancellationToken.None);
-            await task.ConfigureAwait(false);
-            return task.IsCompletedSuccessfully;
+            return true;
         }
-        return true;
+
+        Task publishTask = PublishIncomingEventLocallyAsync(incomingDomainEvent, CancellationToken.None);
+
+        try
+        {
+            await publishTask.ConfigureAwait(false);
+            _recentIncomingEventIds.TryAdd(incomingDomainEvent.EventId, DateTime.UtcNow);
+            return true;
+        }
+        catch
+        {
+            _recentIncomingEventIds.TryRemove(incomingDomainEvent.EventId, out _);
+            return false;
+        }
     }
 
     public ISet<Type> EventTypes => _localAggregator.EventTypes;
@@ -93,12 +104,6 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     public void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
     {
         _localAggregator.UnsubscribeFromEventType(subscriber);
-    }
-
-    // Deduplication: returns true if this is the first time the event is seen (not a duplicate). False if already seen.
-    private bool TryMarkSeen(IDomainEvent evt)
-    {
-        return _recentIncomingEventIds.TryAdd(evt.EventId, DateTime.UtcNow);
     }
 
     private Task PublishIncomingEventLocallyAsync(IDomainEvent domainEvent, CancellationToken cancellationToken)
