@@ -192,7 +192,10 @@ public sealed class RxEventAggregator : EventAggregator, IDisposable
     private void SubscribeRxSubscriber<T>(IRxSubscriber subscriber) where T : class, IDomainEvent
     {
         var subscription = _eventStream.OfType<T>().Subscribe((IObserver<T>) subscriber);
-        _rxSubscriptions.TryAdd((typeof(T), subscriber), subscription);
+        if (!_rxSubscriptions.TryAdd((typeof(T), subscriber), subscription))
+        {
+            subscription.Dispose();
+        }
     }
 
     /// <summary>
