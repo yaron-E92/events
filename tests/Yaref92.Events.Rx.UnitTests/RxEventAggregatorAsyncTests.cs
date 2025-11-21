@@ -127,7 +127,7 @@ public class RxEventAggregatorAsyncTests
     }
 
     [Test]
-    public void AsyncRxSubscriber_Unsubscribed_DoesNotReceiveEvent()
+    public async Task AsyncRxSubscriber_Unsubscribed_DoesNotReceiveEvent()
     {
         var aggregator = new RxEventAggregator();
         aggregator.RegisterEventType<DummyEvent>();
@@ -141,6 +141,8 @@ public class RxEventAggregatorAsyncTests
             // Wait a bit to ensure no event is received
             await Task.Delay(100);
         };
+
+        await act();
 
         subscriber.Received.Task.IsCompleted.Should().BeFalse();
     }
@@ -205,7 +207,7 @@ public class RxEventAggregatorAsyncTests
     }
 
     [Test]
-    public void AsyncSubscriber_Unsubscribed_DoesNotReceiveEvent()
+    public async Task AsyncSubscriber_Unsubscribed_DoesNotReceiveEvent()
     {
         var aggregator = new RxEventAggregator();
         aggregator.RegisterEventType<DummyEvent>();
@@ -217,6 +219,8 @@ public class RxEventAggregatorAsyncTests
             await aggregator.PublishEventAsync(new DummyEvent());
             await Task.Delay(100);
         };
+        await act();
+
         asyncSubscriber.Received.Task.IsCompleted.Should().BeFalse();
     }
 
