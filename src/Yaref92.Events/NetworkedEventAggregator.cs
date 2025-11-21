@@ -17,13 +17,36 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     private readonly SemaphoreSlim _deduplicationLock = new(1, 1);
     private readonly TimeSpan _deduplicationWindow;
     private readonly Timer _cleanupTimer;
+    private readonly bool _ownsLocalAggregator;
+    private readonly bool _ownsTransport;
     private bool _disposed;
 
-    public NetworkedEventAggregator(IEventAggregator localAggregator, IEventTransport transport, TimeSpan? deduplicationWindow = null)
+    /// <summary>
+    /// Creates a new networked aggregator bridging local dispatch and transport publishing.
+    /// </summary>
+    /// <param name="localAggregator">The in-memory aggregator used for local dispatch.</param>
+    /// <param name="transport">The transport used to send and receive events.</param>
+    /// <param name="deduplicationWindow">Optional window for deduplicating received events.</param>
+    /// <param name="ownsLocalAggregator">
+    /// Whether this instance is responsible for disposing the provided <paramref name="localAggregator"/> when it
+    /// is disposed.
+    /// </param>
+    /// <param name="ownsTransport">
+    /// Whether this instance is responsible for disposing the provided <paramref name="transport"/> when it is
+    /// disposed.
+    /// </param>
+    public NetworkedEventAggregator(
+        IEventAggregator localAggregator,
+        IEventTransport transport,
+        TimeSpan? deduplicationWindow = null,
+        bool ownsLocalAggregator = false,
+        bool ownsTransport = false)
     {
         _localAggregator = localAggregator ?? throw new ArgumentNullException(nameof(localAggregator));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _transport.EventReceived += OnEventReceived; // Subscribe to incoming network events from transport
+        _ownsLocalAggregator = ownsLocalAggregator;
+        _ownsTransport = ownsTransport;
         _deduplicationWindow = deduplicationWindow ?? TimeSpan.FromMinutes(15);
         _cleanupTimer = new Timer(_deduplicationWindow.TotalMilliseconds / 2);
         _cleanupTimer.Elapsed += (s, e) => CleanupOldEventIds();
@@ -41,6 +64,11 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
     /// </returns>
     async Task<bool> OnEventReceived(IDomainEvent incomingDomainEvent)
     {
+        if (_disposed)
+        {
+            return false;
+        }
+
         await _deduplicationLock.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -159,10 +187,53 @@ public class NetworkedEventAggregator : IEventAggregator, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _cleanupTimer?.Stop();
-        _cleanupTimer?.Dispose();
-        _deduplicationLock.Dispose();
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    ~NetworkedEventAggregator()
+    {
+        Dispose(false);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (disposing)
+        {
+            _transport.EventReceived -= OnEventReceived;
+            _cleanupTimer?.Stop();
+            _cleanupTimer?.Dispose();
+            _deduplicationLock.Dispose();
+
+            if (_ownsLocalAggregator)
+            {
+                DisposeDependency(_localAggregator);
+            }
+
+            if (_ownsTransport)
+            {
+                DisposeDependency(_transport);
+            }
+        }
+
         _disposed = true;
+    }
+
+    private static void DisposeDependency(object dependency)
+    {
+        switch (dependency)
+        {
+            case IAsyncDisposable asyncDisposable:
+                asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                break;
+            case IDisposable disposable:
+                disposable.Dispose();
+                break;
+        }
     }
 }
