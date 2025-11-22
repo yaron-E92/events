@@ -826,8 +826,14 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 _runOutboundTask = null;
             }
 
-            _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            _runOutboundTask ??= Task.Run(() => RunOutboundAsync(cancellationToken));
+            if (_runOutboundTask is null)
+            {
+                _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _runOutboundTask = Task.Run(() => RunOutboundAsync(cancellationToken));
+                return;
+            }
+
+            _firstConnectionCompletion ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
     }
 
