@@ -358,7 +358,6 @@ public class EventAggregator : IEventAggregator
     /// </example>
     public virtual void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent
     {
-        //ValidateEventOrNestedEventRegistration<T>(subscriber);
         ValidateEventRegistration<T>();
         SubscribeSubscriber<T>(subscriber);
     }
@@ -376,22 +375,9 @@ public class EventAggregator : IEventAggregator
     /// </remarks>
     public virtual void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
     {
-        //ValidateEventOrNestedEventRegistration<T>(subscriber);
         ValidateEventRegistration<T>();
         SubscribeSubscriber<T>(subscriber);
     }
-
-    //private void ValidateEventOrNestedEventRegistration<T>(IEventHandler subscriber) where T : class, IDomainEvent
-    //{
-    //    if (typeof(T).Name.Contains(nameof(EventReceived)))
-    //    {
-    //        ValidateEventRegistration((subscriber as IEventReceivedHandler)!.InnerEventType);
-    //    }
-    //    else
-    //    {
-    //        ValidateEventRegistration<T>();
-    //    }
-    //}
 
     /// <summary>
     /// Adds a subscriber (sync or async) to the internal subscriber dictionary for the event type.
@@ -457,6 +443,22 @@ public class EventAggregator : IEventAggregator
     }
 
     /// <summary>
+    /// Unsubscribes an asynchronous subscriber from an event type.
+    /// </summary>
+    /// <typeparam name="T">The event type to unsubscribe from. Must be a registered event type.</typeparam>
+    /// <param name="subscriber">The async subscriber instance to unsubscribe. Cannot be null.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="subscriber"/> is null.</exception>
+    /// <exception cref="MissingEventTypeException">Thrown when the event type <typeparamref name="T"/> has not been registered.</exception>
+    /// <remarks>
+    /// This method removes an async subscriber from the list of subscribers for the specified event type.
+    /// Unsubscription is idempotent; unsubscribing a non-existent subscriber is a no-op.
+    /// </remarks>
+    public virtual void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
+    {
+        UnsubscribeSubscriber<T>(subscriber);
+    }
+
+    /// <summary>
     /// Removes a subscriber (sync or async) from the internal subscriber dictionary for the event type.
     /// </summary>
     /// <typeparam name="T">The event type.</typeparam>
@@ -497,21 +499,5 @@ public class EventAggregator : IEventAggregator
         {
             dict.TryRemove(subscriber, out _);
         }
-    }
-
-    /// <summary>
-    /// Unsubscribes an asynchronous subscriber from an event type.
-    /// </summary>
-    /// <typeparam name="T">The event type to unsubscribe from. Must be a registered event type.</typeparam>
-    /// <param name="subscriber">The async subscriber instance to unsubscribe. Cannot be null.</param>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="subscriber"/> is null.</exception>
-    /// <exception cref="MissingEventTypeException">Thrown when the event type <typeparamref name="T"/> has not been registered.</exception>
-    /// <remarks>
-    /// This method removes an async subscriber from the list of subscribers for the specified event type.
-    /// Unsubscription is idempotent; unsubscribing a non-existent subscriber is a no-op.
-    /// </remarks>
-    public virtual void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent
-    {
-        UnsubscribeSubscriber<T>(subscriber);
     }
 }

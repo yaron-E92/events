@@ -31,7 +31,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     private int _activeOutboundConnectionCancellationRequested;
     private readonly CancellationTokenSource _cts = new();
 
-    private TaskCompletionSource _firstConnectionCompletion;// = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _firstConnectionCompletion;
     private Task _heartbeatLoop = Task.CompletedTask;
     private bool _outboxLoaded;
 
@@ -161,58 +161,13 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task DumpBuffer()//touched
+    public async Task DumpBuffer()
     {
         Interlocked.Increment(ref _activeDumpOperations);
         try
         {
             OutboundBuffer.RequeueInflight();
-            bool bufferHasFrames;
-            var shouldPersist = false;
-            do
-            {
-                bufferHasFrames = OutboundBuffer.TryDequeue(out SessionFrame? frame);
-                if (frame?.Payload is not string payload)
-                {
-                    continue;
-                }
-
-                if (frame.Kind != SessionFrameKind.Event || frame.Id == Guid.Empty)
-                {
-                    continue;
-                }
-
-                await _stateLock.WaitAsync().ConfigureAwait(false);
-                try
-                {
-                    if (FrameIsAcknowledgedEvent(frame))
-                    {
-                        if (_outboxEntries.Remove(frame.Id))
-                        {
-                            shouldPersist = true;
-                        }
-
-                        ClearAcknowledgementState(frame.Id, AcknowledgementState.Acknowledged);
-                        continue;
-                    }
-
-                    if (!_outboxEntries.TryGetValue(frame.Id, out var entry)
-                        || !string.Equals(entry.Payload, payload, System.StringComparison.Ordinal))
-                    {
-                        entry = new OutboxEntry(frame.Id, payload);
-                        _outboxEntries[frame.Id] = entry;
-                    }
-
-                    entry.IsQueued = false;
-                    shouldPersist = true;
-                }
-                finally
-                {
-                    _stateLock.Release();
-                }
-
-            }
-            while (bufferHasFrames);
+            bool shouldPersist = await DumpFramesToOutbox().ConfigureAwait(false);
 
             if (shouldPersist)
             {
@@ -226,6 +181,57 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 DrainPendingAcknowledgements();
             }
         }
+    }
+
+    private async Task<bool> DumpFramesToOutbox()
+    {
+        bool bufferHasFrames;
+        var shouldPersist = false;
+        do
+        {
+            bufferHasFrames = OutboundBuffer.TryDequeue(out SessionFrame? frame);
+            if (frame?.Payload is not string payload)
+            {
+                continue;
+            }
+
+            if (frame.Kind != SessionFrameKind.Event || frame.Id == Guid.Empty)
+            {
+                continue;
+            }
+
+            await _stateLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (FrameIsAcknowledgedEvent(frame))
+                {
+                    if (_outboxEntries.Remove(frame.Id))
+                    {
+                        shouldPersist = true;
+                    }
+
+                    ClearAcknowledgementState(frame.Id, AcknowledgementState.Acknowledged);
+                    continue;
+                }
+
+                if (!_outboxEntries.TryGetValue(frame.Id, out var entry)
+                    || !string.Equals(entry.Payload, payload, System.StringComparison.Ordinal))
+                {
+                    entry = new OutboxEntry(frame.Id, payload);
+                    _outboxEntries[frame.Id] = entry;
+                }
+
+                entry.IsQueued = false;
+                shouldPersist = true;
+            }
+            finally
+            {
+                _stateLock.Release();
+            }
+
+        }
+        while (bufferHasFrames);
+        return shouldPersist;
     }
 
     private bool FrameIsAcknowledgedEvent(SessionFrame frame)
@@ -292,6 +298,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             }
             catch (OperationCanceledException) when (_cts.IsCancellationRequested)
             {
+                await Console.Error.WriteLineAsync("Acknowledgement removal cancelled");
             }
             finally
             {
@@ -635,54 +642,15 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     private async Task RunOutboundAsync(CancellationToken cancellationToken)
     {
-        var reconnectAttempt = 0;
-        var cancelled = false;
+        int reconnectAttempt = 0;
+        bool cancelled = false;
         while (!cancellationToken.IsCancellationRequested)
         {
-            try
+            (bool shouldBreak, reconnectAttempt, cancelled) =
+                await RunTransientOutboundConnection(reconnectAttempt, cancellationToken).ConfigureAwait(false);
+            if (shouldBreak)
             {
-                using TcpClient transientOutboundConnection = await ActivateTcpConnectionAsync(cancellationToken).ConfigureAwait(false);
-                var connectionToken = Volatile.Read(ref _activeOutboundConnectionCts)?.Token ?? cancellationToken;
-                await ActivateOutboundConnectionLoops(transientOutboundConnection, connectionToken).ConfigureAwait(false);
-                FullyReleaseReconnectGate();
-                await RunUntilCancellationOrDisconnectAsync(cancellationToken).ConfigureAwait(false);
-                reconnectAttempt = 0;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                if (!_firstConnectionCompletion.Task.IsCompleted)
-                {
-                    _firstConnectionCompletion.TrySetCanceled(cancellationToken);
-                }
-                cancelled = true;
                 break;
-            }
-            catch (Exception ex)
-            {
-                if (!_firstConnectionCompletion.Task.IsCompleted)
-                {
-                    _firstConnectionCompletion.TrySetException(ex);
-                }
-
-                reconnectAttempt++;
-                var hasRemainingBudget = TryConsumeReconnectBudget();
-                if (!hasRemainingBudget)
-                {
-                    break;
-                }
-
-                Interlocked.Exchange(ref _firstConnectionCompletion,
-                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                var delay = GetBackoffDelay(reconnectAttempt);
-                try
-                {
-                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    cancelled = true;
-                    break;
-                }
             }
         }
 
@@ -690,6 +658,55 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         {
             FullyReleaseReconnectGate();
         }
+    }
+
+    private async Task<(bool shouldBreak, int reconnectAttempt, bool cancelled)> RunTransientOutboundConnection(int reconnectAttempt, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using TcpClient transientOutboundConnection = await ActivateTcpConnectionAsync(cancellationToken).ConfigureAwait(false);
+            var connectionToken = Volatile.Read(ref _activeOutboundConnectionCts)?.Token ?? cancellationToken;
+            await ActivateOutboundConnectionLoops(transientOutboundConnection, connectionToken).ConfigureAwait(false);
+            FullyReleaseReconnectGate();
+            await RunUntilCancellationOrDisconnectAsync(cancellationToken).ConfigureAwait(false);
+            reconnectAttempt = 0;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (!_firstConnectionCompletion.Task.IsCompleted)
+            {
+                _firstConnectionCompletion.TrySetCanceled(cancellationToken);
+            }
+            return (shouldBreak: true, reconnectAttempt: reconnectAttempt + 1, cancelled: true);
+        }
+        catch (Exception ex)
+        {
+            if (!_firstConnectionCompletion.Task.IsCompleted)
+            {
+                _firstConnectionCompletion.TrySetException(ex);
+            }
+
+            reconnectAttempt++;
+            var hasRemainingBudget = TryConsumeReconnectBudget();
+            if (!hasRemainingBudget)
+            {
+                return (shouldBreak: true, reconnectAttempt, cancelled: false);
+            }
+
+            Interlocked.Exchange(ref _firstConnectionCompletion,
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            var delay = GetBackoffDelay(reconnectAttempt);
+            try
+            {
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return (shouldBreak: true, reconnectAttempt: reconnectAttempt + 1, cancelled: true);
+            }
+        }
+
+        return (shouldBreak: false, reconnectAttempt, cancelled: false);
     }
 
     private async Task RunSendLoopAsync(TcpClient client, CancellationToken cancellationToken)//touched
@@ -705,17 +722,13 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             SessionFrame? frame = null;
             try
             {
-                if (!OutboundBuffer.TryDequeue(out frame))
-                {
-                    await OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-                if (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty && !TryMarkEventDequeued(frame.Id))
+                (bool shouldContinue, frame) = await TryDequeueValidEventFrame(cancellationToken).ConfigureAwait(false);
+                if (shouldContinue)
                 {
                     continue;
                 }
 
-                await WriteFrameAsync(stream, frame, cancellationToken).ConfigureAwait(false);
+                await WriteFrameAsync(stream, frame!, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -723,13 +736,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             }
             catch (Exception ex) when (ex is IOException or SocketException)
             {
-                if (frame is not null && frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
-                {
-                    TryMarkEventQueued(frame.Id);
-                    AcknowledgedEventIds[frame.Id] = AcknowledgementState.SendingFailed;
-                    OutboundBuffer.Return(frame);
-                    ClearAcknowledgementState(frame.Id, AcknowledgementState.SendingFailed);
-                }
+                HandleFramePostException(frame);
                 await Console.Error.WriteLineAsync($"{nameof(ResilientOutboundConnection)} send loop error: {ex}").ConfigureAwait(false);
                 break;
             }
@@ -744,6 +751,33 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
             throw new TcpConnectionDisconnectedException();
         }
+    }
+
+    private void HandleFramePostException(SessionFrame? frame)
+    {
+        if (frame is not null && frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty)
+        {
+            TryMarkEventQueued(frame.Id);
+            AcknowledgedEventIds[frame.Id] = AcknowledgementState.SendingFailed;
+            OutboundBuffer.Return(frame);
+            ClearAcknowledgementState(frame.Id, AcknowledgementState.SendingFailed);
+        }
+    }
+
+    private async Task<(bool shouldContinue, SessionFrame? value)> TryDequeueValidEventFrame(CancellationToken cancellationToken)
+    {
+        SessionFrame? frame;
+        if (!OutboundBuffer.TryDequeue(out frame))
+        {
+            await OutboundBuffer.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return (shouldContinue: true, value: null);
+        }
+        if (frame is null || (frame.Kind == SessionFrameKind.Event && frame.Id != Guid.Empty && !TryMarkEventDequeued(frame.Id)))
+        {
+            return (shouldContinue: true, value: null);
+        }
+
+        return (shouldContinue: false, value: frame);
     }
 
     private async Task RunUntilCancellationOrDisconnectAsync(CancellationToken cancellationToken)//touched
@@ -856,7 +890,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         return false;
     }
 
-    private bool TryMarkEventQueued(Guid messageId)
+    private void TryMarkEventQueued(Guid messageId)
     {
         _stateLock.Wait();
         try
@@ -864,15 +898,13 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             if (_outboxEntries.TryGetValue(messageId, out var entry))
             {
                 entry.IsQueued = true;
-                return true;
+                return;
             }
         }
         finally
         {
             _stateLock.Release();
         }
-
-        return false;
     }
 
     private async Task WaitForReconnectGateCountChangeOrFullRelease(CancellationToken cancellationToken)
@@ -905,21 +937,18 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             runTasks = [_sendLoop ?? Task.CompletedTask, _heartbeatLoop ?? Task.CompletedTask, _runOutboundTask ?? Task.CompletedTask];
         }
 
-        if (runTasks is not null)
+        try
         {
-            try
-            {
-                await Task.WhenAll(runTasks).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or SocketException or TcpConnectionDisconnectedException)
-            {
-                await Console.Error.WriteLineAsync($"loop closed with {ex}")
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // expected during shutdown
-            }
+            await Task.WhenAll(runTasks).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or TcpConnectionDisconnectedException)
+        {
+            await Console.Error.WriteLineAsync($"loop closed with {ex}")
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // expected during shutdown
         }
 
         await SchedulePersist();

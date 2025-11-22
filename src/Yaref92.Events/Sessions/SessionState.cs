@@ -3,22 +3,13 @@
 internal partial class ResilientPeerSession
 {
 
-    internal partial class SessionState
+    internal partial class SessionState(SessionKey key)
     {
         private long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
 
-        public SessionState(SessionKey key)
-        {
-            Key = key;
-        }
-
-        public SessionKey Key { get; }
+        public SessionKey Key { get; } = key;
 
         public bool RemoteEndpointHasAuthenticated { get; private set; }
-
-        public bool IsAuthenticatedWithRemoteEndpoint { get; private set; }
-
-        //public bool RemoteEndpointHasAuthenticated { get; private set; }
 
         public void RegisterAuthentication()
         {

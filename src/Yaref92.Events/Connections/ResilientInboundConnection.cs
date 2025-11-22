@@ -105,17 +105,17 @@ public class ResilientInboundConnection : IInboundResilientConnection
         await ResilientCompositSessionConnection.CancelAndDisposeTokenSource(_cts).ConfigureAwait(false);
         await ResilientCompositSessionConnection.CancelAndDisposeTokenSource(_incomingConnectionCts).ConfigureAwait(false);
 
-        Task[] runTasks = new Task[2];
+        Task runTask;
         lock (_runLock)
         {
-            runTasks = [_runInboundTask ?? Task.CompletedTask];
+            runTask = _runInboundTask ?? Task.CompletedTask;
         }
 
-        if (runTasks is not null)
+        if (runTask is not null)
         {
             try
             {
-                await Task.WhenAll(runTasks).ConfigureAwait(false);
+                await runTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

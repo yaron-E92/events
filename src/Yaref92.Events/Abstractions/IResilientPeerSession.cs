@@ -1,5 +1,4 @@
 ﻿using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports;
 
 using static Yaref92.Events.Abstractions.IInboundResilientConnection;
 
@@ -28,19 +27,6 @@ internal interface IResilientPeerSession : IAsyncDisposable
     SessionOutboundBuffer OutboundBuffer { get; }
 
     event SessionFrameReceivedHandler? FrameReceived;
-
-    /// <summary>
-    /// Initialize the inbound and outbound resilient connections
-    /// </summary>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    //Task InitConnectionsAsync(CancellationToken cancellationToken);
-
-    //Task PublishToAllAsync(string payload, CancellationToken cancellationToken);// SHOULD NOT BE THE RESPONSIBILITY OF THE SESSION
-
-    //void AttachResilientConnection(IResilientConnection resilientConnection);
-
-    //void EnqueueEvent(Guid eventId, string payload);// SHOULD NOT BE THE RESPONSIBILITY OF THE SESSION
 
     void RegisterAuthentication(); // TODO ensure this method is doing what it should
 

@@ -72,9 +72,9 @@ public interface IRxSubscriber
 /// aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 /// </code>
 /// </example>
-public interface IRxSubscriber<T> : IRxSubscriber, IEventHandler<T>, IObserver<T> where T : class, IDomainEvent
+public interface IRxSubscriber<in T> : IRxSubscriber, IEventHandler<T>, IObserver<T> where T : class, IDomainEvent
 {
 }
-public interface IAsyncRxSubscriber<T> : IRxSubscriber, IAsyncEventHandler<T>, IObserver<T> where T : class, IDomainEvent
+public interface IAsyncRxSubscriber<in T> : IRxSubscriber, IAsyncEventHandler<T>, IObserver<T> where T : class, IDomainEvent
 {
 }
