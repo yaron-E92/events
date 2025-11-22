@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Sessions;
 
 public static class SessionFrameIO
 {

@@ -11,7 +11,7 @@ namespace Yaref92.Events.UnitTests;
 internal class EventAggregatorTests
 {
     private IEventAggregator _aggregator;
-    private IEventSubscriber<DummyEvent> _subscriber;
+    private IEventHandler<DummyEvent> _subscriber;
     private ILogger<EventAggregator> _logger;
 
     [SetUp]
@@ -19,7 +19,7 @@ internal class EventAggregatorTests
     {
         _logger = Substitute.For<ILogger<EventAggregator>>();
         _aggregator = new EventAggregator(_logger);
-        _subscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
+        _subscriber = Substitute.For<IEventHandler<DummyEvent>>();
         _subscriber.ClearReceivedCalls();
     }
 
@@ -223,7 +223,7 @@ internal class EventAggregatorTests
             tasks.Add(Task.Run(() => _aggregator.PublishEvent(new DummyEvent())));
             if (i % 10 == 0)
             {
-                tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(Substitute.For<IEventSubscriber<DummyEvent>>())));
+                tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(Substitute.For<IEventHandler<DummyEvent>>())));
             }
         }
         Task.WaitAll(tasks.ToArray());
@@ -249,7 +249,7 @@ internal class EventAggregatorTests
                 tasks.Add(Task.Run(() => _aggregator.PublishEvent(new DummyEvent())));
                 if (i % 10 == 0)
                 {
-                    tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(Substitute.For<IEventSubscriber<DummyEvent>>())));
+                    tasks.Add(Task.Run(() => _aggregator.SubscribeToEventType(Substitute.For<IEventHandler<DummyEvent>>())));
                 }
             }
             Task.WaitAll(tasks.ToArray());
@@ -310,8 +310,8 @@ internal class EventAggregatorTests
         // Arrange
         _aggregator.RegisterEventType<DummyEvent>();
         _aggregator.RegisterEventType<OtherDummyEvent>();
-        var dummySubscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
-        var otherSubscriber = Substitute.For<IEventSubscriber<OtherDummyEvent>>();
+        var dummySubscriber = Substitute.For<IEventHandler<DummyEvent>>();
+        var otherSubscriber = Substitute.For<IEventHandler<OtherDummyEvent>>();
         _aggregator.SubscribeToEventType(dummySubscriber);
         _aggregator.SubscribeToEventType(otherSubscriber);
         var dummyEvent = new DummyEvent();
@@ -333,8 +333,8 @@ internal class EventAggregatorTests
     {
         // Arrange
         _aggregator.RegisterEventType<DummyEvent>();
-        var sub1 = Substitute.For<IEventSubscriber<DummyEvent>>();
-        var sub2 = Substitute.For<IEventSubscriber<DummyEvent>>();
+        var sub1 = Substitute.For<IEventHandler<DummyEvent>>();
+        var sub2 = Substitute.For<IEventHandler<DummyEvent>>();
         _aggregator.SubscribeToEventType(sub1);
         _aggregator.SubscribeToEventType(sub2);
         var evt = new DummyEvent();
@@ -406,7 +406,7 @@ internal class EventAggregatorTests
         _aggregator.RegisterEventType<DummyEvent>();
 
         // Act
-        Action act = () => _aggregator.SubscribeToEventType(null as IEventSubscriber<DummyEvent>);
+        Action act = () => _aggregator.SubscribeToEventType(null as IEventHandler<DummyEvent>);
 
         // Assert
         act.Should().Throw<ArgumentNullException>();
@@ -419,7 +419,7 @@ internal class EventAggregatorTests
         _aggregator.RegisterEventType<DummyEvent>();
 
         // Act
-        Action act = () => _aggregator.UnsubscribeFromEventType(null as IEventSubscriber<DummyEvent>);
+        Action act = () => _aggregator.UnsubscribeFromEventType(null as IEventHandler<DummyEvent>);
 
         // Assert
         act.Should().Throw<ArgumentNullException>();
@@ -446,7 +446,7 @@ internal class EventAggregatorTests
         // Arrange
         _aggregator.RegisterEventType<DummyEvent>();
         var completionSource = new TaskCompletionSource<bool>();
-        var asyncSubscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
+        var asyncSubscriber = Substitute.For<IEventHandler<DummyEvent>>();
         asyncSubscriber.When(x => x.OnNext(Arg.Any<DummyEvent>())).Do(_ =>
         {
             Task.Run(async () =>
@@ -493,7 +493,7 @@ internal class EventAggregatorTests
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
-    private class DummyAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+    private class DummyAsyncSubscriber : IAsyncEventHandler<DummyEvent>
     {
         public TaskCompletionSource<DummyEvent> Received { get; } = new();
         public Task OnNextAsync(DummyEvent domainEvent, CancellationToken cancellationToken = default)
@@ -503,7 +503,7 @@ internal class EventAggregatorTests
         }
     }
 
-    private class CancellableAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+    private class CancellableAsyncSubscriber : IAsyncEventHandler<DummyEvent>
     {
         public TaskCompletionSource<DummyEvent> Received { get; } = new();
         public TaskCompletionSource<bool> Cancelled { get; } = new();
@@ -600,7 +600,7 @@ internal class EventAggregatorTests
         subscriber.Cancelled.Task.IsCompleted.Should().BeTrue();
     }
 
-    private class FailingAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+    private class FailingAsyncSubscriber : IAsyncEventHandler<DummyEvent>
     {
         public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default) => throw new InvalidOperationException("fail");
     }

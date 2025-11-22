@@ -22,7 +22,7 @@ public interface IRxSubscriber
 /// <para>
 /// The <see cref="IRxSubscriber{T}"/> interface combines the functionality of:
 /// <list type="bullet">
-/// <item><description><see cref="IEventSubscriber{T}"/> - Traditional event subscription</description></item>
+/// <item><description><see cref="IEventHandler{T}"/> - Traditional event subscription</description></item>
 /// <item><description><see cref="IObserver{T}"/> - Rx observer pattern</description></item>
 /// <item><description><see cref="IRxSubscriber"/> - Rx subscriber marker</description></item>
 /// </list>
@@ -54,7 +54,7 @@ public interface IRxSubscriber
 ///     
 ///     public void OnError(Exception error)
 ///     {
-///         Console.WriteLine($"Audit error: {error.Message}");
+///         Console.WriteLine($"Audit error: {error.Event}");
 ///     }
 ///     
 ///     public void OnCompleted()
@@ -72,9 +72,9 @@ public interface IRxSubscriber
 /// aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 /// </code>
 /// </example>
-public interface IRxSubscriber<T> : IRxSubscriber, IEventSubscriber<T>, IObserver<T> where T : class, IDomainEvent
+public interface IRxSubscriber<in T> : IRxSubscriber, IEventHandler<T>, IObserver<T> where T : class, IDomainEvent
 {
 }
-public interface IAsyncRxSubscriber<T> : IRxSubscriber, IAsyncEventSubscriber<T>, IObserver<T> where T : class, IDomainEvent
+public interface IAsyncRxSubscriber<in T> : IRxSubscriber, IAsyncEventHandler<T>, IObserver<T> where T : class, IDomainEvent
 {
 }

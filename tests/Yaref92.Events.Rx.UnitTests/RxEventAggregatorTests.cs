@@ -89,11 +89,31 @@ public class RxEventAggregatorTests
     }
 
     [Test]
+    public void SubscribeToEventType_DuplicateRxSubscriber_DoesNotKeepUntrackedSubscription()
+    {
+        // Arrange
+        var rxSubscriber = new RxDummySubscriber();
+        _aggregator.SubscribeToEventType(rxSubscriber);
+
+        // Act
+        _aggregator.SubscribeToEventType(rxSubscriber);
+        var evt = new DummyEvent();
+        _aggregator.PublishEvent(evt);
+
+        _aggregator.UnsubscribeFromEventType(rxSubscriber);
+        _aggregator.PublishEvent(new DummyEvent());
+
+        // Assert
+        rxSubscriber.ReceivedEvent.Should().Be(evt);
+        rxSubscriber.OnNextCount.Should().Be(1);
+    }
+
+    [Test]
     public void PublishEvent_MixedRegularAndRxSubscribers_BothReceiveEvent()
     {
         // Arrange
         var rxSubscriber = new RxDummySubscriber();
-        var regularSubscriber = Substitute.For<IEventSubscriber<DummyEvent>>();
+        var regularSubscriber = Substitute.For<IEventHandler<DummyEvent>>();
         _aggregator.SubscribeToEventType(rxSubscriber);
         _aggregator.SubscribeToEventType(regularSubscriber);
         var evt = new DummyEvent();

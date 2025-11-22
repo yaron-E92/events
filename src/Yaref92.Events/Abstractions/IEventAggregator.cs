@@ -13,7 +13,7 @@ public interface IEventAggregator
     /// <summary>
     /// Gets the collection of all current subscribers.
     /// </summary>
-    IReadOnlyCollection<IEventSubscriber> Subscribers { get; }
+    IReadOnlyCollection<IEventHandler> Subscribers { get; }
 
     /// <summary>
     /// Registers a new event type.
@@ -34,18 +34,18 @@ public interface IEventAggregator
     /// </summary>
     /// <typeparam name="T">The event type.</typeparam>
     /// <param name="subscriber">The subscriber instance.</param>
-    void SubscribeToEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent;
+    void SubscribeToEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent;
 
-    void SubscribeToEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent;
+    void SubscribeToEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent;
 
     /// <summary>
     /// Unsubscribes a synchronous subscriber from an event type.
     /// </summary>
     /// <typeparam name="T">The event type.</typeparam>
     /// <param name="subscriber">The subscriber instance.</param>
-    void UnsubscribeFromEventType<T>(IEventSubscriber<T> subscriber) where T : class, IDomainEvent;
+    void UnsubscribeFromEventType<T>(IEventHandler<T> subscriber) where T : class, IDomainEvent;
 
-    void UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T> subscriber) where T : class, IDomainEvent;
+    void UnsubscribeFromEventType<T>(IAsyncEventHandler<T> subscriber) where T : class, IDomainEvent;
 
     Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent;
 }

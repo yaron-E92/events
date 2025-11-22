@@ -1,15 +1,14 @@
-﻿using System;
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Sessions;
 
 public enum SessionFrameKind
 {
     Auth,
     Ping,
     Pong,
-    Message,
+    Event,
     Ack,
 }
 
@@ -19,8 +18,14 @@ public sealed class SessionFrame
     public SessionFrameKind Kind { get; init; }
 
     [JsonPropertyName("id")]
-    public long? Id { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public Guid Id { get; init; }
 
+    /// <summary>
+    /// Session authentication token.
+    /// Starts with "userId@host:port", followed by "||"
+    /// and either a Guid or secret if authentication is required.
+    /// </summary>
     [JsonPropertyName("token")]
     public string? Token { get; init; }
 
@@ -29,10 +34,7 @@ public sealed class SessionFrame
 
     public static SessionFrame CreateAuth(string token, string? secret = null)
     {
-        if (token is null)
-        {
-            throw new ArgumentNullException(nameof(token));
-        }
+        ArgumentNullException.ThrowIfNull(token);
 
         return new SessionFrame
         {
@@ -46,24 +48,21 @@ public sealed class SessionFrame
 
     public static SessionFrame CreatePong() => new() { Kind = SessionFrameKind.Pong };
 
-    public static SessionFrame CreateAck(long messageId) => new()
+    public static SessionFrame CreateAck(Guid eventId) => new()
     {
         Kind = SessionFrameKind.Ack,
-        Id = messageId,
+        Id = eventId,
     };
 
-    public static SessionFrame CreateMessage(long messageId, string payload)
+    public static SessionFrame CreateEventFrame(Guid eventId, string eventEnvelopeJson)
     {
-        if (payload is null)
-        {
-            throw new ArgumentNullException(nameof(payload));
-        }
+        ArgumentNullException.ThrowIfNull(eventEnvelopeJson);
 
         return new SessionFrame
         {
-            Kind = SessionFrameKind.Message,
-            Id = messageId,
-            Payload = payload,
+            Kind = SessionFrameKind.Event,
+            Id = eventId,
+            Payload = eventEnvelopeJson,
         };
     }
 }
@@ -99,7 +98,7 @@ internal static class SessionFrameSerializer
                 AuthKind => SessionFrameKind.Auth,
                 PingKind => SessionFrameKind.Ping,
                 PongKind => SessionFrameKind.Pong,
-                MessageKind or MessageKindLong => SessionFrameKind.Message,
+                MessageKind or MessageKindLong => SessionFrameKind.Event,
                 AckKind => SessionFrameKind.Ack,
                 _ => throw new JsonException($"Unsupported session frame kind '{value}'."),
             };
@@ -112,7 +111,7 @@ internal static class SessionFrameSerializer
                 SessionFrameKind.Auth => AuthKind,
                 SessionFrameKind.Ping => PingKind,
                 SessionFrameKind.Pong => PongKind,
-                SessionFrameKind.Message => MessageKind,
+                SessionFrameKind.Event => MessageKind,
                 SessionFrameKind.Ack => AckKind,
                 _ => throw new ArgumentOutOfRangeException(nameof(value), value, null),
             };
