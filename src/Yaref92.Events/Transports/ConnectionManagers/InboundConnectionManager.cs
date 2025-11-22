@@ -146,13 +146,15 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         }
         catch (System.Security.Authentication.AuthenticationException)
         {
-            // TODO Log failure due to authentication invalidation
+            await Console.Error.WriteLineAsync($"Authentication failed for incoming connection from {remoteEndPoint}.")
+                .ConfigureAwait(false);
             return ConnectionInitializationResult.Failed();
         }
 
         if (session is null)
         {
-            // TODO Log failure due to session resolution failure
+            await Console.Error.WriteLineAsync($"Could not resolve session for incoming connection from {remoteEndPoint}.")
+                .ConfigureAwait(false);
             return ConnectionInitializationResult.Failed();
         }
 
@@ -257,8 +259,8 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
                       .FirstOrDefault(session => session.Key == sessionKey);
         if (sessionWithValidAuthentication == null)
         {
-            // TODO UNAUTHMSG Session is not authenticated or valid anonymous,
-            // log, ignore the event, and inform the sender if necessary
+            await Console.Error.WriteLineAsync($"Received event frame for unauthenticated or invalid anonymous session {sessionKey}. Ignoring.")
+                .ConfigureAwait(false);
             return;
         }
         sessionWithValidAuthentication.Touch();

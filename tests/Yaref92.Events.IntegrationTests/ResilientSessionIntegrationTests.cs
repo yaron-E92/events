@@ -286,7 +286,12 @@ public class ResilientSessionIntegrationTests
         ForceInboundConnectionTimeout(session, options.HeartbeatTimeout + options.HeartbeatInterval);
 
         await dropTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        await clientHost.WaitForConnectionCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        dropTcs.Task.Status.Should().Be(TaskStatus.RanToCompletion);
+        Func<Task> waitForTwoConnections = async () =>
+        {
+            await clientHost.WaitForConnectionCountAsync(2, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        };
+        await waitForTwoConnections.Should().NotThrowAsync();
     }
 
     [Test]
@@ -816,10 +821,7 @@ internal sealed class TestPersistentClientHost : IAsyncDisposable
 
     public async Task WaitForConnectionCountAsync(int count, TimeSpan timeout)
     {
-        if (count <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(count));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
 
         TaskCompletionSource waiter;
         lock (_waiterLock)

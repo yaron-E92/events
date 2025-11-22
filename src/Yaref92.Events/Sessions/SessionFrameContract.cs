@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Yaref92.Events.Sessions;
@@ -70,7 +70,7 @@ internal static class SessionFrameContract
         authenticationPayload = null;
         if (frame.Kind != SessionFrameKind.Auth)
         {
-            // TODO: Log invalid frame kind for authentication
+            Console.Error.WriteLine($"Frame kind {frame.Kind} is not an authentication frame.");
             return false;
         }
 

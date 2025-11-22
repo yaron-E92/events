@@ -11,54 +11,6 @@ public class SessionKey(Guid userId, string host, int port)
     public int Port { get; } = port;
     public bool IsAnonymousKey { get; init; }
 
-    //public static bool TryParse(string? value, out SessionKey? sessionKey)
-    //{
-    //    sessionKey = null;
-    //    if (string.IsNullOrWhiteSpace(value))
-    //    {
-    //        return false;
-    //    }
-
-    //    var atIndex = value.IndexOf('@');
-    //    if (atIndex <= 0)
-    //    {
-    //        return false;
-    //    }
-
-    //    var hostPortSegment = value[(atIndex + 1)..];
-    //    if (hostPortSegment.Length == 0)
-    //    {
-    //        return false;
-    //    }
-
-    //    var colonIndex = hostPortSegment.LastIndexOf(':');
-    //    if (colonIndex <= 0 || colonIndex == hostPortSegment.Length - 1)
-    //    {
-    //        return false;
-    //    }
-
-    //    var userIdSegment = value[..atIndex];
-    //    if (!Guid.TryParse(userIdSegment, out var userId))
-    //    {
-    //        return false;
-    //    }
-
-    //    var hostSegment = hostPortSegment[..colonIndex];
-    //    if (string.IsNullOrWhiteSpace(hostSegment))
-    //    {
-    //        return false;
-    //    }
-
-    //    var portSegment = hostPortSegment[(colonIndex + 1)..];
-    //    if (!int.TryParse(portSegment, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port) || port <= 0)
-    //    {
-    //        return false;
-    //    }
-
-    //    sessionKey = new SessionKey(userId, hostSegment, port);
-    //    return true;
-    //}
-
     internal static bool IsNullOrEmpty(SessionKey sessionKey)
     {
         if (sessionKey is null)

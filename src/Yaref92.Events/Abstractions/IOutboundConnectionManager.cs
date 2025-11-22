@@ -4,8 +4,6 @@ namespace Yaref92.Events.Abstractions;
 
 internal interface IOutboundConnectionManager : IConnectionManager
 {
-    //event IOutboundResilientConnection.PublishFailedHandler PublishFailed;
-
     Task ConnectAsync(Guid userId, string host, int port, CancellationToken cancellationToken);
     Task ConnectAsync(SessionKey sessionKey, CancellationToken cancellationToken);
     /// <summary>
