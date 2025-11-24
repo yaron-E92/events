@@ -7,9 +7,11 @@ namespace Yaref92.Events.Rx.UnitTests;
 
 public class DummyAsyncRxSubscriber : AsyncRxSubscriber<DummyEvent>
 {
+    public int OnNextCallCount { get; private set; }
     public TaskCompletionSource<DummyEvent> Received { get; } = new();
     public override Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default)
     {
+        OnNextCallCount++;
         Received.TrySetResult(value);
         return Task.CompletedTask;
     }
@@ -23,7 +25,7 @@ public class DummySyncRxSubscriber : IRxSubscriber<DummyEvent>
     public void OnCompleted() { }
 }
 
-public class DummyAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+public class DummyAsyncSubscriber : IAsyncEventHandler<DummyEvent>
 {
     public TaskCompletionSource<DummyEvent> Received { get; } = new();
     public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default)
@@ -33,7 +35,7 @@ public class DummyAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
     }
 }
 
-public class CancellableAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+public class CancellableAsyncSubscriber : IAsyncEventHandler<DummyEvent>
 {
     public TaskCompletionSource<DummyEvent> Received { get; } = new();
     public TaskCompletionSource<bool> Cancelled { get; } = new();
@@ -86,6 +88,28 @@ public class RxEventAggregatorAsyncTests
     }
 
     [Test]
+    public async Task AsyncRxSubscriber_DoubleSubscribe_DoesNotLeaveUntrackedSubscriptions()
+    {
+        var aggregator = new RxEventAggregator();
+        aggregator.RegisterEventType<DummyEvent>();
+        var subscriber = new DummyAsyncRxSubscriber();
+
+        aggregator.SubscribeToEventType(subscriber);
+        aggregator.SubscribeToEventType(subscriber);
+
+        var evt = new DummyEvent();
+        await aggregator.PublishEventAsync(evt);
+
+        subscriber.OnNextCallCount.Should().Be(1);
+        (await subscriber.Received.Task).Should().Be(evt);
+
+        aggregator.UnsubscribeFromEventType(subscriber);
+        await aggregator.PublishEventAsync(new DummyEvent());
+
+        subscriber.OnNextCallCount.Should().Be(1);
+    }
+
+    [Test]
     public async Task MixedSyncAndAsyncRxSubscribers_AllReceiveEvent()
     {
         var aggregator = new RxEventAggregator();
@@ -103,7 +127,7 @@ public class RxEventAggregatorAsyncTests
     }
 
     [Test]
-    public void AsyncRxSubscriber_Unsubscribed_DoesNotReceiveEvent()
+    public async Task AsyncRxSubscriber_Unsubscribed_DoesNotReceiveEvent()
     {
         var aggregator = new RxEventAggregator();
         aggregator.RegisterEventType<DummyEvent>();
@@ -117,6 +141,8 @@ public class RxEventAggregatorAsyncTests
             // Wait a bit to ensure no event is received
             await Task.Delay(100);
         };
+
+        await act();
 
         subscriber.Received.Task.IsCompleted.Should().BeFalse();
     }
@@ -181,7 +207,7 @@ public class RxEventAggregatorAsyncTests
     }
 
     [Test]
-    public void AsyncSubscriber_Unsubscribed_DoesNotReceiveEvent()
+    public async Task AsyncSubscriber_Unsubscribed_DoesNotReceiveEvent()
     {
         var aggregator = new RxEventAggregator();
         aggregator.RegisterEventType<DummyEvent>();
@@ -193,6 +219,8 @@ public class RxEventAggregatorAsyncTests
             await aggregator.PublishEventAsync(new DummyEvent());
             await Task.Delay(100);
         };
+        await act();
+
         asyncSubscriber.Received.Task.IsCompleted.Should().BeFalse();
     }
 
@@ -207,7 +235,7 @@ public class RxEventAggregatorAsyncTests
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
-    private class FailingAsyncSubscriber : IAsyncEventSubscriber<DummyEvent>
+    private class FailingAsyncSubscriber : IAsyncEventHandler<DummyEvent>
     {
         public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default) => throw new InvalidOperationException("fail");
     }

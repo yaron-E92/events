@@ -58,6 +58,7 @@ Designed for decoupled communication in modern applications.
   - [Logging](#logging)
     - [Logged Events](#logged-events)
   - [Extensibility](#extensibility)
+  - [Documentation & Testing Readiness](#documentation--testing-readiness)
   - [Versioning \& Breaking Changes](#versioning--breaking-changes)
   - [Changelog](#changelog)
   - [License](#license)
@@ -168,17 +169,24 @@ The built-in TCP transport ships with a resilient session layer that manages aut
 var transport = new TCPEventTransport(
     listenPort: 9000,
     serializer: new JsonEventSerializer(),
-    eventAggregator: localAggregator,
     heartbeatInterval: TimeSpan.FromSeconds(15),
     authenticationToken: "shared-secret");
 ```
 
 - **Authentication:** Set `authenticationToken` to require peers to present the matching `AUTH` frame.
-- **Heartbeats:** Omit `heartbeatInterval` to use the 30s default. The timeout automatically scales to 90s.
+- **Heartbeats:** Omit `heartbeatInterval` to use the 30s default. The timeout automatically scales to twice the provided interval.
 - **Outbox:** Events are durably staged in `<AppContext.BaseDirectory>/outbox.json` until acknowledged by a peer.
 - **Reconnection:** Exponential backoff starts at 1s and caps at 30s. Adjust `heartbeatInterval` to tune detection speed.
 
-See [docs/networking/resilient-tcp.md](docs/networking/resilient-tcp.md) for a deeper dive into the frame format, configuration options, and integration guidance.
+#### Persistent building blocks
+
+`PersistentPortListener` hosts the TCP listener, handles inbound authentication, and multiplexes `SessionFrame` traffic into `ResilientInboundConnection` instances. On the publishing side, `PersistentEventPublisher` uses the shared `SessionManager` to persist outbound envelopes and replay them through `ResilientCompositSessionConnection` objects whenever a peer reconnects.
+
+#### Canonical frame identifiers
+
+All frames use the same identifier contract: `SessionFrame.Id` is always a `Guid` supplied by the sender. The receiver echoes the identifier when issuing an `ACK`, which allows both sides to correlate inflight deliveries across reconnect attempts.
+
+See [docs/networking/resilient-tcp.md](docs/networking/resilient-tcp.md) for a deeper dive into the frame format, configuration options, and integration guidance. For an end-to-end walkthrough on wiring the transport into your application, check the [Implementation Guide](docs/implementation-guide.md).
 
 ### API Reference
 
@@ -495,10 +503,27 @@ var aggregator = new EventAggregator(logger);
 
 ## Extensibility
 
-- **Rx Support:**  
+- **Rx Support:**
   Rx (Reactive Extensions) support is available via the optional `Yaref92.Events.Rx` package.
-- **Other Integrations:**  
+- **Other Integrations:**
   You can build adapters for MediatR, ASP.NET, or other frameworks as needed.
+
+---
+
+## Documentation & Testing Readiness
+
+The v2.0.0 release includes refreshed documentation and a reviewed test suite so teams can adopt the resilient transport with confidence:
+
+- **Documentation coverage**
+  - The [Implementation Guide](docs/implementation-guide.md) now doubles as a readiness checklist that walks through package installation, transport wiring, operational considerations, and validation steps before promoting the transport to production.
+  - The [Resilient TCP Transport reference](docs/networking/resilient-tcp.md) details frame formats, authentication modes, heartbeat defaults, and durable outbox semantics for the built-in transport.
+  - This README consolidates the quick-start, API reference, and migration notes so that developers can discover requirements without digging into source code.
+
+- **Testing coverage**
+  - `tests/Yaref92.Events.UnitTests` verifies the in-memory aggregator behaviors, including registration, publishing, deduplication windows, and memory-safety guarantees.
+  - `tests/Yaref92.Events.Rx.UnitTests` exercises the optional Reactive Extensions surface to ensure async push-based consumers stay compliant with aggregator internals.
+  - `tests/Yaref92.Events.IntegrationTests` runs the resilient TCP transport through authentication, heartbeat, reconnection, and ACK/replay flows over real sockets.
+  - Execute the full suite with `dotnet test Yaref92.Events.sln` to validate the combined surface before packaging or deployment.
 
 ---
 

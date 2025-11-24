@@ -1,39 +1,162 @@
-﻿using System.Collections.Concurrent;
-using System.Net.Sockets;
-using System.Text.Json;
-
-using Yaref92.Events.Abstractions;
+﻿using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
+using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Transports;
 
 public class TCPEventTransport : IEventTransport, IAsyncDisposable
 {
-    private readonly ConcurrentDictionary<Type, ConcurrentBag<Func<object, CancellationToken, Task>>> _handlers = new();
-    private readonly ConcurrentDictionary<string, PersistentSessionClient> _persistentSessions = new();
-    private readonly ConcurrentDictionary<TcpClient, Task> _receiveTasks = new();
-
-    private readonly int _listenPort;
     private readonly IEventSerializer _serializer;
-    private readonly IEventAggregator? _eventAggregator;
-    private readonly ResilientSessionOptions _sessionOptions;
+    private readonly IPersistentPortListener _listener;
+    private readonly IPersistentFramePublisher _publisher;
+    private Task? _disposeTask;
+    private int _disposeState;
 
-    private ResilientTcpServer? _server;
-    private CancellationTokenSource? _cts;
+#if DEBUG
+    internal IEventSerializer SerializerForTesting => _serializer;
+    internal IPersistentFramePublisher PublisherForTesting => _publisher;
+#endif
+
+    IPersistentPortListener IEventTransport.PersistentPortListener => _listener;
+
+    IPersistentFramePublisher IEventTransport.PersistentFramePublisher => _publisher;
+
+    private event Func<IDomainEvent, Task<bool>>? EventReceived;
+
+    event Func<IDomainEvent, Task<bool>> IEventTransport.EventReceived 
+    {
+        add => EventReceived += value;
+        remove => EventReceived -= value;
+    }
+
+    public event IEventTransport.SessionInboundConnectionDroppedHandler SessionInboundConnectionDropped
+    {
+        add => _listener.SessionInboundConnectionDropped += value;
+        remove => _listener.SessionInboundConnectionDropped -= value;
+    }
 
     public TCPEventTransport(
         int listenPort,
         IEventSerializer? serializer = null,
-        IEventAggregator? eventAggregator = null,
         TimeSpan? heartbeatInterval = null,
         string? authenticationToken = null)
+        : this(CreateListener(listenPort, serializer, heartbeatInterval, authenticationToken, out var publisher, out var serializerToUse), publisher, serializerToUse)
     {
-        _listenPort = listenPort;
-        _serializer = serializer ?? new JsonEventSerializer();
-        _eventAggregator = eventAggregator;
+    }
+
+    internal TCPEventTransport(
+        IPersistentPortListener listener,
+        IPersistentFramePublisher publisher,
+        IEventSerializer serializer)
+    {
+        _listener = listener ?? throw new ArgumentNullException(nameof(listener));
+        _publisher = publisher ?? throw new ArgumentNullException(nameof(publisher));
+        _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
+
+        _listener.SessionConnectionAccepted += OnSessionConnectionAcceptedByListener;
+        SessionInboundConnectionDropped += OnSessionInboundConnectionDropped;
+        _listener.ConnectionManager.EventReceived += OnEventReceived;
+        _listener.ConnectionManager.AckReceived += OnAckReceived;
+        _listener.ConnectionManager.PingReceived += OnPingReceived;
+    }
+
+    private Task OnPingReceived(SessionKey key)
+    {
+        _publisher.ConnectionManager.SendPong(key);
+        return Task.CompletedTask;
+    }
+
+    private async Task OnAckReceived(Guid eventId, SessionKey sessionKey)
+    {
+        await _publisher.ConnectionManager.OnAckReceived(eventId, sessionKey);
+    }
+
+    private async Task<bool> OnSessionInboundConnectionDropped(SessionKey key, CancellationToken token)
+    {
+        return await _publisher.ConnectionManager.TryReconnectAsync(key, token);
+    }
+
+    // Invoked from the listener when a resilient inbound session connection is accepted
+    private async Task OnSessionConnectionAcceptedByListener(SessionKey sessionKey, CancellationToken cancellationToken)
+    {
+        await _publisher?.ConnectionManager.ConnectAsync(sessionKey, cancellationToken)!;
+    }
+
+    // Invoked from the listener's inbound connection manager when an event is received
+    // Invokes the transports EventReceived so the aggregator can react
+    private async Task OnEventReceived(IDomainEvent domainEvent, SessionKey sessionKey)
+    {
+        var handler = EventReceived;
+        if (handler is null)
+        {
+            return;
+        }
+
+        bool eventReceievedSuccessfully = await handler(domainEvent).ConfigureAwait(false);
+        if (eventReceievedSuccessfully)
+        {
+            _publisher.AcknowledgeEventReceipt(domainEvent.EventId, sessionKey);
+        }
+    }
+
+    public Task StartListeningAsync(CancellationToken cancellationToken = default)
+    {
+        return _listener.StartAsync(cancellationToken);
+    }
+
+    public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default)
+    {
+        return ConnectToPeerAsync(Guid.Empty, host, port, cancellationToken);
+    }
+
+    public Task ConnectToPeerAsync(Guid userId, string host, int port, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
+        }
+
+        return _publisher.ConnectionManager.ConnectAsync(userId, host, port, cancellationToken);
+    }
+
+    public async Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
+    {
+        ArgumentNullException.ThrowIfNull(domainEvent);
+
+        var eventEnvelopeJson = _serializer.Serialize(domainEvent);
+        await _publisher.PublishToAllAsync(domainEvent.EventId, eventEnvelopeJson, cancellationToken).ConfigureAwait(false);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.CompareExchange(ref _disposeState, 1, 0) == 0)
+        {
+            _disposeTask = DisposeAsyncCore();
+        }
+
+        return _disposeTask is null ? ValueTask.CompletedTask : new ValueTask(_disposeTask);
+    }
+
+    private async Task DisposeAsyncCore()
+    {
+        Task publisherDispose = _publisher.DisposeAsync().AsTask();
+        Task listenerDispose = _listener.DisposeAsync().AsTask();
+
+        await Task.WhenAll(publisherDispose, listenerDispose).ConfigureAwait(false);
+    }
+
+    private static IPersistentPortListener CreateListener(
+        int listenPort,
+        IEventSerializer? serializer,
+        TimeSpan? heartbeatInterval,
+        string? authenticationToken,
+        out IPersistentFramePublisher publisher,
+        out IEventSerializer serializerToUse)
+    {
+        serializerToUse = serializer ?? new JsonEventSerializer();
 
         var interval = heartbeatInterval ?? TimeSpan.FromSeconds(30);
-        _sessionOptions = new ResilientSessionOptions
+        ResilientSessionOptions sessionOptions = new()
         {
             RequireAuthentication = authenticationToken is not null,
             AuthenticationToken = authenticationToken,
@@ -41,249 +164,8 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
             HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
         };
 
-        _eventAggregator?.RegisterEventType<PublishFailed>();
-        _eventAggregator?.RegisterEventType<MessageReceived>();
-        _eventAggregator?.SubscribeToEventType(new PublishFailedHandler());
+        var sessionManager = new SessionManager(listenPort, sessionOptions);
+        publisher = new PersistentEventPublisher(sessionManager);
+        return new PersistentPortListener(listenPort, serializerToUse, sessionManager);
     }
-
-    public Task StartListeningAsync(CancellationToken cancellationToken = default)
-    {
-        if (_server is not null)
-        {
-            throw new InvalidOperationException("The transport is already listening.");
-        }
-
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _server = new ResilientTcpServer(_listenPort, _sessionOptions, HandleInboundMessageAsync);
-        foreach (var pair in _persistentSessions)
-        {
-            _server.RegisterPersistentClient(pair.Value.SessionToken, pair.Value);
-        }
-        return _server.StartAsync(cancellationToken);
-    }
-
-    public async Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(host))
-        {
-            throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
-        }
-
-        var key = GetSessionKey(host, port);
-        var session = _persistentSessions.GetOrAdd(key, k =>
-        {
-            var persistent = new PersistentSessionClient(
-                host,
-                port,
-                OnPersistentClientConnected,
-                _sessionOptions,
-                _eventAggregator);
-            return persistent;
-        });
-
-        _server?.RegisterPersistentClient(session.SessionToken, session);
-        await session.StartAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
-    {
-        ArgumentNullException.ThrowIfNull(domainEvent);
-
-        var payload = _serializer.Serialize(domainEvent);
-        _server?.QueueBroadcast(payload);
-
-        foreach (var session in _persistentSessions.Values)
-        {
-            await session.EnqueueEventAsync(payload, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    public void Subscribe<T>(Func<T, CancellationToken, Task> handler) where T : class, IDomainEvent
-    {
-        if (handler is null)
-        {
-            throw new ArgumentNullException(nameof(handler));
-        }
-
-        var bag = _handlers.GetOrAdd(typeof(T), _ => new ConcurrentBag<Func<object, CancellationToken, Task>>());
-        bag.Add(async (obj, ct) => await handler((T)obj, ct).ConfigureAwait(false));
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_cts is not null)
-        {
-            await _cts.CancelAsync().ConfigureAwait(false);
-        }
-
-        foreach (var task in _receiveTasks.Values)
-        {
-            try
-            {
-                await task.WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            catch (Exception ex) when (ex is AggregateException or TimeoutException)
-            {
-                var exOrflattened = ex is AggregateException aggEx ? aggEx.Flatten() : ex;
-                await Console.Error.WriteLineAsync($"Persistent receive loop faulted: {exOrflattened}");
-            }
-        }
-
-        _receiveTasks.Clear();
-
-        foreach (var session in _persistentSessions.Values)
-        {
-            await session.DisposeAsync();
-        }
-
-        _persistentSessions.Clear();
-
-        if (_server is not null)
-        {
-            await _server.DisposeAsync();
-            _server = null;
-        }
-
-        if (_cts is not null)
-        {
-            _cts.Dispose();
-            _cts = null;
-        }
-    }
-
-    private async Task HandleInboundMessageAsync(string sessionKey, string payload, CancellationToken cancellationToken)
-    {
-        await NotifyMessageReceivedAsync(sessionKey, payload, cancellationToken).ConfigureAwait(false);
-        await DispatchEventAsync(payload, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task NotifyMessageReceivedAsync(string sessionKey, string payload, CancellationToken cancellationToken)
-    {
-        var messageEvent = new MessageReceived(sessionKey, payload);
-
-        if (_eventAggregator is not null)
-        {
-            await _eventAggregator.PublishEventAsync(messageEvent, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (_handlers.TryGetValue(typeof(MessageReceived), out var handlers) && handlers.Count > 0)
-        {
-            await InvokeHandlersAsync(handlers, messageEvent, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    private Task DispatchEventAsync(string payload, CancellationToken cancellationToken)
-    {
-        Type? eventType;
-        IDomainEvent? domainEvent;
-        try
-        {
-
-            (eventType, domainEvent) = _serializer.Deserialize(payload);
-        }
-        catch (JsonException ex)
-        {
-            return Console.Error.WriteLineAsync($"Failed to deserialize event envelope: {ex}");
-        }
-
-        if (eventType is null)
-        {
-            return Console.Error.WriteLineAsync($"Unknown or missing event type.");
-        }
-
-        if (domainEvent is null)
-        {
-            return Console.Error.WriteLineAsync($"missing event.");
-        }
-
-        if (!_handlers.TryGetValue(eventType, out var handlers) || handlers.Count == 0)
-        {
-            return Console.Error.WriteLineAsync($"No handlers found for the event type {eventType}");
-        }
-
-        return InvokeHandlersAsync(handlers, domainEvent, cancellationToken);
-    }
-
-    private static Task InvokeHandlersAsync(IEnumerable<Func<object, CancellationToken, Task>> handlers, object domainEvent, CancellationToken cancellationToken)
-    {
-        var tasks = handlers.Select(handler => handler(domainEvent, cancellationToken));
-        return Task.WhenAll(tasks);
-    }
-
-    private Task OnPersistentClientConnected(PersistentSessionClient session, TcpClient client, CancellationToken cancellationToken)
-    {
-        if (_server is not null)
-        {
-            _server.RegisterPersistentClient(session.SessionToken, session);
-        }
-
-        var receiveTask = Task.Run(() => RunReceiveLoopAsync(session, client, cancellationToken), cancellationToken);
-        _receiveTasks[client] = receiveTask;
-        receiveTask.ContinueWith(_ =>
-        {
-            _receiveTasks.TryRemove(client, out _);
-            client.Dispose();
-        }, TaskContinuationOptions.ExecuteSynchronously);
-
-        return Task.CompletedTask;
-    }
-
-    private async Task RunReceiveLoopAsync(PersistentSessionClient session, TcpClient client, CancellationToken cancellationToken)
-    {
-        var stream = client.GetStream();
-        var lengthBuffer = new byte[4];
-
-        try
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                var result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, cancellationToken).ConfigureAwait(false);
-                if (!result.IsSuccess)
-                {
-                    break;
-                }
-
-                await HandleSessionFrameAsync(session, result.Frame!, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // shutdown requested
-        }
-        catch (Exception ex) when (ex is IOException or SocketException)
-        {
-            await Console.Error.WriteLineAsync($"Persistent receive loop terminated: {ex}").ConfigureAwait(false);
-        }
-    }
-
-    private async Task HandleSessionFrameAsync(PersistentSessionClient session, SessionFrame frame, CancellationToken cancellationToken)
-    {
-        switch (frame.Kind)
-        {
-            case SessionFrameKind.Message when frame.Payload is not null && frame.Id is long messageId:
-                var sessionKey = GetSessionKey(session.RemoteEndPoint.Host, session.RemoteEndPoint.Port);
-                await NotifyMessageReceivedAsync(sessionKey, frame.Payload, cancellationToken).ConfigureAwait(false);
-                await DispatchEventAsync(frame.Payload, cancellationToken).ConfigureAwait(false);
-                session.RecordRemoteActivity();
-                session.EnqueueControlMessage(SessionFrame.CreateAck(messageId));
-                break;
-            case SessionFrameKind.Ack when frame.Id is long ackId:
-                session.Acknowledge(ackId);
-                session.RecordRemoteActivity();
-                break;
-            case SessionFrameKind.Ping:
-                session.EnqueueControlMessage(SessionFrame.CreatePong());
-                session.RecordRemoteActivity();
-                break;
-            case SessionFrameKind.Pong:
-                session.RecordRemoteActivity();
-                break;
-            case SessionFrameKind.Auth:
-                session.RecordRemoteActivity();
-                break;
-        }
-    }
-
-    private static string GetSessionKey(string host, int port) => $"{host}:{port}";
-
 }

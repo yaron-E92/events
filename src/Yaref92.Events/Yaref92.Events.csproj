@@ -30,6 +30,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Yaref92.Events.UnitTests" />
+    <InternalsVisibleTo Include="Yaref92.Events.IntegrationTests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2"/>
   </ItemGroup>
 
 </Project>
