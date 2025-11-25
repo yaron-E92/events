@@ -8,6 +8,13 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: "Publish snapshot (RC) release"
+        required: false
+        default: "false"
+        type: boolean
 
 jobs:
   gitVersion:
@@ -25,6 +32,15 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+    - name: Prepare GitVersion arguments
+      id: gitversionArgs
+      run: |
+        args="/updateprojectfiles"
+        if [ "${{ inputs.snapshot }}" = "true" ]; then
+          args="$args /overrideconfig tag=rc"
+        fi
+
+        echo "value=$args" >> $GITHUB_OUTPUT
     - name: Install GitVersion
       uses: gittools/actions/gitversion/setup@v1.1.1
       with:
@@ -34,7 +50,7 @@ jobs:
       id:   gitversion # id to later be referenced
       uses: gittools/actions/gitversion/execute@v1.1.1
       with:
-        additionalArguments: '/updateprojectfiles'
+        additionalArguments: ${{ steps.gitversionArgs.outputs.value }}
         useConfigFile: true
         configFilePath: '.github/GitVersion.yaml'
 
