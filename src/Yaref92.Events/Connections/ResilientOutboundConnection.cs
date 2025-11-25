@@ -415,7 +415,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
         {
             await CancelAndDisposeActiveConnectionCtsAsync().ConfigureAwait(false);
             client.Close();
-            throw new TcpConnectionDisconnectedException();
+            throw new TcpConnectionDisconnectedException($"An exception was thrown during an attempt to {nameof(ActivateTcpConnectionAsync)} with the message:\n{ex.Message}", ex);
         }
         catch
         {
