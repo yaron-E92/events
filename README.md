@@ -530,6 +530,9 @@ The v2.0.0 release includes refreshed documentation and a reviewed test suite so
 ## Versioning & Breaking Changes
 
 - **1.0.0** is a major release with breaking changes, including the removal of Rx from the core package.
+- Release candidates advance through `-rc1`, `-rc2`, and so on while keeping the
+  target semantic version constant (for example, `2.0.0-rc1`, `2.0.0-rc2`) until
+  the stable release is ready.
 - See the [Changelog](#changelog) for migration steps and details.
 
 ---

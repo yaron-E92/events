@@ -21,11 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       branchName: ${{ steps.gitversion.outputs.branchName }} # To use an output in another job, you have to map it to a job output.
-      semVer: ${{ steps.gitversion.outputs.semVer }}
+      semVer: ${{ steps.select-version.outputs.semVer }}
       sha: ${{ steps.gitversion.outputs.sha }}
-      nugetVersion: ${{ steps.gitversion.outputs.nuGetVersion }}
-      assemblySemFileVer: ${{ steps.gitversion.outputs.assemblySemFileVer }}
-      informationalVersion: ${{ steps.gitversion.outputs.informationalVersion }}
+      nugetVersion: ${{ steps.select-version.outputs.nugetVersion }}
+      assemblySemFileVer: ${{ steps.select-version.outputs.assemblySemFileVer }}
+      informationalVersion: ${{ steps.select-version.outputs.informationalVersion }}
 
     steps:
     - name: Checkout
@@ -53,6 +53,36 @@ jobs:
         additionalArguments: ${{ steps.gitversionArgs.outputs.value }}
         useConfigFile: true
         configFilePath: '.github/GitVersion.yaml'
+
+    - name: Select version (snapshot-aware)
+      id: select-version
+      run: |
+        semVer="${{ steps.gitversion.outputs.semVer }}"
+        nugetVersion="${{ steps.gitversion.outputs.nuGetVersion }}"
+        assemblySemFileVer="${{ steps.gitversion.outputs.assemblySemFileVer }}"
+        informationalVersion="${{ steps.gitversion.outputs.informationalVersion }}"
+
+        if [ "${{ inputs.snapshot }}" = "true" ]; then
+          baseVersion="${{ steps.gitversion.outputs.majorMinorPatch }}"
+          rcPrefix="${baseVersion}-rc"
+
+          lastRcNumber=$(git tag --list "${rcPrefix}*" | sed -E "s/^${rcPrefix}[.-]?//" | sed '/^$/d' | sort -V | tail -n 1)
+
+          if [ -z "$lastRcNumber" ]; then
+            nextRcNumber=1
+          else
+            nextRcNumber=$((lastRcNumber + 1))
+          fi
+
+          semVer="${rcPrefix}${nextRcNumber}"
+          nugetVersion="$semVer"
+          informationalVersion="$semVer"
+        fi
+
+        echo "semVer=$semVer" >> $GITHUB_OUTPUT
+        echo "nugetVersion=$nugetVersion" >> $GITHUB_OUTPUT
+        echo "assemblySemFileVer=$assemblySemFileVer" >> $GITHUB_OUTPUT
+        echo "informationalVersion=$informationalVersion" >> $GITHUB_OUTPUT
 
   buildAndTest:
     needs: [gitVersion]
