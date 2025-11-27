@@ -1,4 +1,6 @@
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Threading.Tasks;
 
 using FluentAssertions;
@@ -55,6 +57,50 @@ public class TCPEventTransportTests
         (await Task.WhenAny(tcsA.Task, Task.Delay(2000))).Should().Be(tcsA.Task);
         tcsB.Task.Result.Should().NotBeNull();
         tcsA.Task.Result.Should().NotBeNull();
+    }
+
+    [Test]
+    public async Task Transport_Accepts_Inbound_Session_And_Propagates_Events_Bidirectionally()
+    {
+        int portA = GetFreePort();
+        int portB = GetFreePort();
+
+        var aggregatorA = new EventAggregator();
+        var aggregatorB = new EventAggregator();
+
+        var receivedByA = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var receivedByB = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var transportA = new TCPEventTransport(portA);
+        await using var transportB = new TCPEventTransport(portB);
+
+        using NetworkedEventAggregator networkedEventAggregatorA = new(aggregatorA, transportA);
+        networkedEventAggregatorA.RegisterEventType<DummyEvent>();
+        using NetworkedEventAggregator networkedEventAggregatorB = new(aggregatorB, transportB);
+        networkedEventAggregatorB.RegisterEventType<DummyEvent>();
+
+        networkedEventAggregatorA.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(receivedByA));
+        networkedEventAggregatorB.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(receivedByB));
+
+        await transportA.StartListeningAsync();
+        await transportB.StartListeningAsync();
+
+        await transportA.ConnectToPeerAsync("localhost", portB);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+
+        var outboundFromA = new DummyEvent(DateTime.UtcNow, "from-a");
+        await networkedEventAggregatorA.PublishEventAsync(outboundFromA);
+
+        (await Task.WhenAny(receivedByB.Task, Task.Delay(2000))).Should().Be(receivedByB.Task);
+
+        var outboundFromB = new DummyEvent(DateTime.UtcNow, "from-b");
+        await networkedEventAggregatorB.PublishEventAsync(outboundFromB);
+
+        (await Task.WhenAny(receivedByA.Task, Task.Delay(2000))).Should().Be(receivedByA.Task);
+
+        receivedByA.Task.Result.Text.Should().Be("from-b");
+        receivedByB.Task.Result.Text.Should().Be("from-a");
     }
 
     [Test]
@@ -161,6 +207,15 @@ public class TCPEventTransportTests
         {
             File.Delete(outboxPath);
         }
+    }
+
+    private static int GetFreePort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
     }
 
     private sealed class TaskCompletionAsyncHandler<TEvent>(TaskCompletionSource<TEvent> source)
