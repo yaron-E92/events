@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
@@ -16,6 +16,9 @@ namespace Yaref92.Events.IntegrationTests;
 [Category("Integration")]
 public class TCPEventTransportTests
 {
+    private const string FromA = "from-a";
+    private const string FromB = "from-b";
+
     [Test]
     public async Task Event_Is_Transmitted_Between_Transports()
     {
@@ -37,8 +40,8 @@ public class TCPEventTransportTests
         using NetworkedEventAggregator networkedEventAggregatorB = new(aggregatorB, transportB);
         networkedEventAggregatorB.RegisterEventType<DummyEvent>();
 
-        networkedEventAggregatorA.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(tcsA));
-        networkedEventAggregatorB.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(tcsB));
+        networkedEventAggregatorA.SubscribeToEventType(new TaskCompletionAsyncHandler(tcsA));
+        networkedEventAggregatorB.SubscribeToEventType(new TaskCompletionAsyncHandler(tcsB));
 
         await transportA.StartListeningAsync();
         await transportB.StartListeningAsync();
@@ -79,8 +82,8 @@ public class TCPEventTransportTests
         using NetworkedEventAggregator networkedEventAggregatorB = new(aggregatorB, transportB);
         networkedEventAggregatorB.RegisterEventType<DummyEvent>();
 
-        networkedEventAggregatorA.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(receivedByA));
-        networkedEventAggregatorB.SubscribeToEventType(new TaskCompletionAsyncHandler<DummyEvent>(receivedByB));
+        networkedEventAggregatorA.SubscribeToEventType(new TaskCompletionAsyncHandler(receivedByA, FromA));
+        networkedEventAggregatorB.SubscribeToEventType(new TaskCompletionAsyncHandler(receivedByB, FromB));
 
         await transportA.StartListeningAsync();
         await transportB.StartListeningAsync();
@@ -89,18 +92,18 @@ public class TCPEventTransportTests
 
         await Task.Delay(TimeSpan.FromMilliseconds(200));
 
-        var outboundFromA = new DummyEvent(DateTime.UtcNow, "from-a");
+        var outboundFromA = new DummyEvent(DateTime.UtcNow, FromA);
         await networkedEventAggregatorA.PublishEventAsync(outboundFromA);
 
         (await Task.WhenAny(receivedByB.Task, Task.Delay(2000))).Should().Be(receivedByB.Task);
 
-        var outboundFromB = new DummyEvent(DateTime.UtcNow, "from-b");
+        var outboundFromB = new DummyEvent(DateTime.UtcNow, FromB);
         await networkedEventAggregatorB.PublishEventAsync(outboundFromB);
 
         (await Task.WhenAny(receivedByA.Task, Task.Delay(2000))).Should().Be(receivedByA.Task);
 
-        receivedByA.Task.Result.Text.Should().Be("from-b");
-        receivedByB.Task.Result.Text.Should().Be("from-a");
+        receivedByA.Task.Result.Text.Should().Be(FromB);
+        receivedByB.Task.Result.Text.Should().Be(FromA);
     }
 
     [Test]
@@ -178,8 +181,8 @@ public class TCPEventTransportTests
 
         await Task.Delay(TimeSpan.FromMilliseconds(200));
 
-        var outboundFromA = new DummyEvent(DateTime.UtcNow, "from-a");
-        var outboundFromB = new DummyEvent(DateTime.UtcNow, "from-b");
+        var outboundFromA = new DummyEvent(DateTime.UtcNow, FromA);
+        var outboundFromB = new DummyEvent(DateTime.UtcNow, FromB);
 
         await transportA.PublishEventAsync(outboundFromA);
         await transportB.PublishEventAsync(outboundFromB);
@@ -196,8 +199,8 @@ public class TCPEventTransportTests
         await pingObservedAtA.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await pingObservedAtB.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-        receivedByA.Task.Result.Text.Should().Be("from-b");
-        receivedByB.Task.Result.Text.Should().Be("from-a");
+        receivedByA.Task.Result.Text.Should().Be(FromB);
+        receivedByB.Task.Result.Text.Should().Be(FromA);
     }
 
     private static void ResetOutbox()
@@ -218,14 +221,15 @@ public class TCPEventTransportTests
         return port;
     }
 
-    private sealed class TaskCompletionAsyncHandler<TEvent>(TaskCompletionSource<TEvent> source)
-        : IAsyncEventHandler<TEvent> where TEvent : class, IDomainEvent
+    private sealed class TaskCompletionAsyncHandler(TaskCompletionSource<DummyEvent> source, string messageToIgnore = "")
+        : IAsyncEventHandler<DummyEvent>
     {
-        private readonly TaskCompletionSource<TEvent> _source = source;
+        private readonly TaskCompletionSource<DummyEvent> _source = source;
+        private readonly string _messageToIgnore = messageToIgnore;
 
-        public Task OnNextAsync(TEvent domainEvent, CancellationToken cancellationToken = default)
+        public Task OnNextAsync(DummyEvent domainEvent, CancellationToken cancellationToken = default)
         {
-            if (_source.TrySetResult(domainEvent))
+            if (domainEvent.Text?.Equals(_messageToIgnore) is true || _source.TrySetResult(domainEvent))
             {
                 return Task.CompletedTask;
 
