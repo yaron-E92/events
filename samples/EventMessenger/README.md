@@ -2,6 +2,8 @@
 
 A lightweight .NET MAUI sample that demonstrates how to use `NetworkedEventAggregator` with `TCPEventTransport` to exchange events between two devices running the app.
 
+> ℹ️ This sample is intentionally excluded from CI builds and NuGet packing via the `Yaref92.Events.ci.slnf` filter because it targets mobile platforms and is meant only for local/manual experimentation.
+
 ## Running
 
 1. Open the project on two devices or emulators and ensure both are on the same network.
