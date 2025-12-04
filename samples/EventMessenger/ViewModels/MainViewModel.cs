@@ -1,18 +1,16 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.Net;
 using System.Runtime.CompilerServices;
-using System.Linq;
-using Microsoft.Maui.ApplicationModel;
-using Microsoft.Maui.Controls;
-using MauiEventMessenger.Events;
-using MauiEventMessenger;
+
+using EventMessenger.Events;
+
 using Yaref92.Events;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Transports;
 
-namespace MauiEventMessenger.ViewModels;
+namespace EventMessenger.ViewModels;
 
 public class MainViewModel : INotifyPropertyChanged
 {

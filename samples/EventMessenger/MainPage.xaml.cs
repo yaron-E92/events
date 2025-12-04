@@ -1,7 +1,6 @@
-using MauiEventMessenger.ViewModels;
-using Microsoft.Maui.Controls;
+﻿using EventMessenger.ViewModels;
 
-namespace MauiEventMessenger;
+namespace EventMessenger;
 
 public partial class MainPage : ContentPage
 {

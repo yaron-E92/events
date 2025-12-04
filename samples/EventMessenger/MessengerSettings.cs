@@ -1,4 +1,4 @@
-namespace MauiEventMessenger;
+﻿namespace EventMessenger;
 
 public class MessengerSettings
 {

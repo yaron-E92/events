@@ -1,4 +1,4 @@
-# MauiEventMessenger sample
+# EventMessenger sample
 
 A lightweight .NET MAUI sample that demonstrates how to use `NetworkedEventAggregator` with `TCPEventTransport` to exchange events between two devices running the app.
 

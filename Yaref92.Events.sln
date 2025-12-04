@@ -20,7 +20,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Yaref92.Events.IntegrationT
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{D09DD89D-92F9-4A0B-912C-1478E8764E39}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MauiEventMessenger", "samples\MauiEventMessenger\MauiEventMessenger.csproj", "{3FE31365-4725-416D-BD54-AC0D83F10D8C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EventMessenger", "samples\EventMessenger\EventMessenger.csproj", "{7901D738-F48A-4D3A-8E07-DF553E408568}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -48,18 +48,20 @@ Global
 		{5E656493-AD02-424E-9C39-114FE1E7BC15}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5E656493-AD02-424E-9C39-114FE1E7BC15}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5E656493-AD02-424E-9C39-114FE1E7BC15}.Release|Any CPU.Build.0 = Release|Any CPU
-		{3FE31365-4725-416D-BD54-AC0D83F10D8C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{3FE31365-4725-416D-BD54-AC0D83F10D8C}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{3FE31365-4725-416D-BD54-AC0D83F10D8C}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{3FE31365-4725-416D-BD54-AC0D83F10D8C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7901D738-F48A-4D3A-8E07-DF553E408568}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7901D738-F48A-4D3A-8E07-DF553E408568}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7901D738-F48A-4D3A-8E07-DF553E408568}.Debug|Any CPU.Deploy.0 = Debug|Any CPU
+		{7901D738-F48A-4D3A-8E07-DF553E408568}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7901D738-F48A-4D3A-8E07-DF553E408568}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7901D738-F48A-4D3A-8E07-DF553E408568}.Release|Any CPU.Deploy.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{7901D738-F48A-4D3A-8E07-DF553E408568} = {D09DD89D-92F9-4A0B-912C-1478E8764E39}
+	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {3DF92ACB-BB74-4ED1-A388-F7FB058FBF4B}
-	EndGlobalSection
-	GlobalSection(NestedProjects) = preSolution
-		{3FE31365-4725-416D-BD54-AC0D83F10D8C} = {D09DD89D-92F9-4A0B-912C-1478E8764E39}
 	EndGlobalSection
 EndGlobal

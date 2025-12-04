@@ -1,6 +1,4 @@
-using Microsoft.Maui.Controls;
-
-namespace MauiEventMessenger;
+﻿namespace EventMessenger;
 
 public partial class App : Application
 {

@@ -1,12 +1,10 @@
-using Microsoft.Maui;
-using Microsoft.Maui.Hosting;
-using Microsoft.Extensions.DependencyInjection;
-using MauiEventMessenger.Events;
-using MauiEventMessenger.ViewModels;
+﻿using EventMessenger.Events;
+using EventMessenger.ViewModels;
+
 using Yaref92.Events;
 using Yaref92.Events.Transports;
 
-namespace MauiEventMessenger;
+namespace EventMessenger;
 
 public static class MauiProgram
 {
@@ -17,12 +15,12 @@ public static class MauiProgram
         var builder = MauiApp.CreateBuilder();
         builder
             .UseMauiApp<App>();
-
+        int port = DefaultListenPort + Random.Shared.Next(1, 500);
         builder.Services.AddSingleton<MainPage>();
         builder.Services.AddSingleton<MainViewModel>();
-        builder.Services.AddSingleton(new MessengerSettings { ListenPort = DefaultListenPort });
+        builder.Services.AddSingleton(new MessengerSettings { ListenPort = port });
 
-        builder.Services.AddSingleton(provider => new TCPEventTransport(DefaultListenPort));
+        builder.Services.AddSingleton(provider => new TCPEventTransport(port));
         builder.Services.AddSingleton<EventAggregator>();
         builder.Services.AddSingleton(provider =>
         {
