@@ -3,6 +3,7 @@
     "path": "Yaref92.Events.sln",
     "projects": [
       "src/Yaref92.Events.Rx/Yaref92.Events.Rx.csproj",
+      "src/Yaref92.Events.Transport.Grpc/Yaref92.Events.Transport.Grpc.csproj",
       "src/Yaref92.Events/Yaref92.Events.csproj",
       "tests/Yaref92.Events.IntegrationTests/Yaref92.Events.IntegrationTests.csproj",
       "tests/Yaref92.Events.Rx.UnitTests/Yaref92.Events.Rx.UnitTests.csproj",
