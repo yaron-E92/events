@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package yaref92.events.transport.v1;
+
+option csharp_namespace = "Yaref92.Events.Transport.Grpc.Protos";
+
+message ReconnectToken {
+  string session_key = 1;
+  string token = 2;
+}

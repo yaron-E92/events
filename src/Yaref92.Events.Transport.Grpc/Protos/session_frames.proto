@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package yaref92.events.transport.v1;
+
+option csharp_namespace = "Yaref92.Events.Transport.Grpc.Protos";
+
+import "event_envelope.proto";
+import "reconnect.proto";
+
+message AuthFrame {
+  string session_token = 1;
+  string secret = 2;
+  ReconnectToken reconnect_token = 3;
+}
+
+message PingFrame {}
+
+message PongFrame {}
+
+message MessageFrame {
+  string event_id = 1;
+  EventEnvelope envelope = 2;
+  string deduplication_id = 3;
+}
+
+message AckFrame {
+  string event_id = 1;
+  string deduplication_id = 2;
+}
+
+message SessionFrame {
+  string session_id = 1;
+  oneof frame {
+    AuthFrame auth = 2;
+    PingFrame ping = 3;
+    PongFrame pong = 4;
+    MessageFrame message = 5;
+    AckFrame ack = 6;
+  }
+}
