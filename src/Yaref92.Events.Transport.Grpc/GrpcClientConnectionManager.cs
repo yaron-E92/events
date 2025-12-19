@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Grpc.Core;
 using Grpc.Net.Client;
-using Yaref92.Events;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
@@ -44,7 +43,7 @@ public sealed class GrpcClientConnectionManager : IAsyncDisposable
     }
 
     public async Task PublishAsync<T>(T domainEvent, string? deduplicationId = null, CancellationToken cancellationToken = default)
-        where T : DomainEventBase
+        where T : IDomainEvent
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
 
