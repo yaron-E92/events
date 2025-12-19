@@ -7,6 +7,8 @@
 
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" Version="3.27.1" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.66.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.66.0" />
     <PackageReference Include="Grpc.Tools" Version="2.66.0" PrivateAssets="All" />
   </ItemGroup>
 
@@ -15,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="Protos\\session_frames.proto" GrpcServices="None" />
+    <Protobuf Include="Protos\\session_frames.proto" GrpcServices="Both" />
     <Protobuf Include="Protos\\event_envelope.proto" GrpcServices="None" />
     <Protobuf Include="Protos\\reconnect.proto" GrpcServices="None" />
   </ItemGroup>

@@ -38,3 +38,7 @@ message SessionFrame {
     AckFrame ack = 6;
   }
 }
+
+service SessionTransport {
+  rpc Connect(stream SessionFrame) returns (stream SessionFrame);
+}
