@@ -45,7 +45,7 @@ public sealed class GrpcSessionService : SessionTransport.SessionTransportBase
         CancellationToken cancellationToken = context.CancellationToken;
         string sessionId = Guid.NewGuid().ToString("D");
         SessionKey sessionKey = ResolveSessionKey(context) ?? _defaultSessionKey;
-        bool isAuthenticated = !_options.RequireAuthentication;
+        var authState = new StreamAuthenticationState(_options.RequireAuthentication);
 
         var outbound = Channel.CreateUnbounded<SessionFrame>();
         using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -68,10 +68,10 @@ public sealed class GrpcSessionService : SessionTransport.SessionTransportBase
                     case GrpcSessionFrameKind.Auth:
                         ValidateAuthentication(frame.Auth);
                         sessionId = frame.SessionId ?? sessionId;
-                        isAuthenticated = true;
+                        authState.MarkAuthenticated();
                         break;
                     case GrpcSessionFrameKind.Ping:
-                        EnsureAuthenticated(isAuthenticated);
+                        authState.EnsureAuthenticated();
                         if (InboundPingReceived is not null)
                         {
                             await InboundPingReceived.Invoke(sessionKey).ConfigureAwait(false);
@@ -79,15 +79,15 @@ public sealed class GrpcSessionService : SessionTransport.SessionTransportBase
                         await outbound.Writer.WriteAsync(CreatePong(sessionId), cancellationToken).ConfigureAwait(false);
                         break;
                     case GrpcSessionFrameKind.Message:
-                        EnsureAuthenticated(isAuthenticated);
+                        authState.EnsureAuthenticated();
                         await OnMessageReceivedAsync(frame, sessionId, sessionKey, outbound.Writer, cancellationToken).ConfigureAwait(false);
                         break;
                     case GrpcSessionFrameKind.Ack:
-                        EnsureAuthenticated(isAuthenticated);
+                        authState.EnsureAuthenticated();
                         await OnAckReceivedAsync(frame.Ack!, sessionKey, cancellationToken).ConfigureAwait(false);
                         break;
                     case GrpcSessionFrameKind.Pong:
-                        EnsureAuthenticated(isAuthenticated);
+                        authState.EnsureAuthenticated();
                         // keep-alive; no-op
                         break;
                 }
@@ -122,16 +122,6 @@ public sealed class GrpcSessionService : SessionTransport.SessionTransportBase
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, "Invalid authentication secret."));
         }
-    }
-
-    private static void EnsureAuthenticated(bool isAuthenticated)
-    {
-        if (isAuthenticated)
-        {
-            return;
-        }
-
-        throw new RpcException(new Status(StatusCode.Unauthenticated, "Authentication required."));
     }
 
     private Task PumpOutboundAsync(ChannelReader<SessionFrame> reader, IServerStreamWriter<SessionFrame> writer, CancellationToken token)
@@ -274,5 +264,30 @@ public sealed class GrpcSessionService : SessionTransport.SessionTransportBase
 
         host = rawHost.Trim('[', ']');
         return !string.IsNullOrWhiteSpace(host);
+    }
+
+    private sealed class StreamAuthenticationState
+    {
+        private bool _isAuthenticated;
+
+        public StreamAuthenticationState(bool requiresAuthentication)
+        {
+            _isAuthenticated = !requiresAuthentication;
+        }
+
+        public void MarkAuthenticated()
+        {
+            _isAuthenticated = true;
+        }
+
+        public void EnsureAuthenticated()
+        {
+            if (_isAuthenticated)
+            {
+                return;
+            }
+
+            throw new RpcException(new Status(StatusCode.Unauthenticated, "Authentication required."));
+        }
     }
 }
