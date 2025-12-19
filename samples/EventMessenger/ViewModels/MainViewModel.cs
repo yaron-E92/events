@@ -90,8 +90,17 @@ public class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        await _transport.ConnectToPeerAsync(PeerHost, port);
-        await ShowToastAsync($"Connected to {PeerHost}:{PeerPort}");
+        try
+        {
+            await _transport.ConnectToPeerAsync(PeerHost, port);
+            await ShowToastAsync($"Connected to {PeerHost}:{PeerPort}");
+        }
+        catch (Exception ex)
+        {
+            var message = FormatExceptionMessage(ex);
+            await Console.Error.WriteLineAsync($"Failed to connect to {PeerHost}:{PeerPort}. {message}");
+            await ShowToastAsync($"Failed to connect to {PeerHost}:{PeerPort}. {message}");
+        }
     }
 
     public async Task SendMessageAsync()
@@ -147,6 +156,14 @@ public class MainViewModel : INotifyPropertyChanged
                 await page.DisplayAlert("Notification", message, "OK");
             }
         });
+    }
+
+    private static string FormatExceptionMessage(Exception exception)
+    {
+        var baseException = exception.GetBaseException();
+        return string.IsNullOrWhiteSpace(baseException.Message)
+            ? baseException.GetType().Name
+            : baseException.Message;
     }
 
     protected void SetProperty<T>(ref T storage, T value, [CallerMemberName] string? propertyName = null)
