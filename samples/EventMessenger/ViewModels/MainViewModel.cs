@@ -8,6 +8,7 @@ using EventMessenger.Events;
 
 using Yaref92.Events;
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Server;
 using Yaref92.Events.Transports;
 
 namespace EventMessenger.ViewModels;
@@ -15,7 +16,8 @@ namespace EventMessenger.ViewModels;
 public class MainViewModel : INotifyPropertyChanged
 {
     private readonly NetworkedEventAggregator _aggregator;
-    private readonly TCPEventTransport _transport;
+    private readonly GrpcEventTransport _transport;
+    private readonly GrpcEventTransportServer _server;
     private readonly MessengerSettings _settings;
     private bool _isListening;
     private string _peerHost = "localhost";
@@ -23,10 +25,15 @@ public class MainViewModel : INotifyPropertyChanged
     private string _myPort = "5050";
     private string _messageText = string.Empty;
 
-    public MainViewModel(NetworkedEventAggregator aggregator, TCPEventTransport transport, MessengerSettings settings)
+    public MainViewModel(
+        NetworkedEventAggregator aggregator,
+        GrpcEventTransport transport,
+        GrpcEventTransportServer server,
+        MessengerSettings settings)
     {
         _aggregator = aggregator;
         _transport = transport;
+        _server = server;
         _settings = settings;
         Messages = new ObservableCollection<string>();
         HostHint = ResolveLocalHost();
@@ -77,7 +84,7 @@ public class MainViewModel : INotifyPropertyChanged
             MyPort = _settings.ListenPort.ToString(CultureInfo.InvariantCulture);
         }
 
-        await _transport.StartListeningAsync();
+        await _server.StartListeningAsync();
         _isListening = true;
         await ShowToastAsync($"Listening on {HostHint}:{MyPort}");
     }

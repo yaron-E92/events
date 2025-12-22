@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net8.0-android;net8.0-ios;net8.0-maccatalyst;net8.0-windows10.0.19041.0</TargetFrameworks>
+    <TargetFrameworks>net8.0-android;net8.0-windows10.0.19041.0</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <RootNamespace>EventMessenger</RootNamespace>
     <UseMaui>true</UseMaui>
@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Yaref92.Events\Yaref92.Events.csproj" />
+    <ProjectReference Include="..\..\src\Yaref92.Events.Server\Yaref92.Events.Server.csproj" />
   </ItemGroup>
 
   <ItemGroup>

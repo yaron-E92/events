@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net8.0-android</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Authors>yaref92</Authors>
+    <Description>Server hosting for Yaref92.Events gRPC transport.</Description>
+    <RepositoryUrl>https://github.com/yaron-E92/events</RepositoryUrl>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-android'">
+    <DefineConstants>$(DefineConstants);ANDROID</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Yaref92.Events\Yaref92.Events.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFrameworkIdentifier)' != 'Android'">
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.65.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFrameworkIdentifier)' == 'Android'">
+    <PackageReference Include="Grpc.Core" Version="2.65.0" />
+  </ItemGroup>
+
+</Project>

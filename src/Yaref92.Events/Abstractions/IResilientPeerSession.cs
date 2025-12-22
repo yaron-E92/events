@@ -12,7 +12,7 @@ namespace Yaref92.Events.Abstractions;
 /// be delivered to the remote endpoint.
 /// </summary>
 /// <remarks>At construction ensures an existing in/outbound connection</remarks>
-internal interface IResilientPeerSession : IAsyncDisposable
+public interface IResilientPeerSession : IAsyncDisposable
 {
     SessionKey Key { get; }
 

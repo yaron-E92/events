@@ -149,7 +149,7 @@ public class TCPEventTransportTests
             return Task.FromResult(false);
         };
 
-        var inboundA = ((IEventTransport) transportA).PersistentPortListener.ConnectionManager;
+        var inboundA = transportA.ListenerForTesting.ConnectionManager;
         inboundA.AckReceived += (eventId, _) =>
         {
             ackObservedAtA.TrySetResult(eventId);
@@ -161,7 +161,7 @@ public class TCPEventTransportTests
             return Task.CompletedTask;
         };
 
-        var inboundB = ((IEventTransport) transportB).PersistentPortListener.ConnectionManager;
+        var inboundB = transportB.ListenerForTesting.ConnectionManager;
         inboundB.AckReceived += (eventId, _) =>
         {
             ackObservedAtB.TrySetResult(eventId);

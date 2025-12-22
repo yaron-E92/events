@@ -5,6 +5,8 @@ VisualStudioVersion = 17.10.35004.147
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Yaref92.Events", "src\Yaref92.Events\Yaref92.Events.csproj", "{074FC83F-E8AD-45EC-878E-B9E1E7EDA8E4}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Yaref92.Events.Server", "src\Yaref92.Events.Server\Yaref92.Events.Server.csproj", "{9E865316-B6FF-4E69-BFF4-EF5487FBA3DE}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{72CB48D8-B0B3-40BD-8F17-B4F4E7C3849B}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
@@ -32,6 +34,10 @@ Global
 		{074FC83F-E8AD-45EC-878E-B9E1E7EDA8E4}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{074FC83F-E8AD-45EC-878E-B9E1E7EDA8E4}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{074FC83F-E8AD-45EC-878E-B9E1E7EDA8E4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9E865316-B6FF-4E69-BFF4-EF5487FBA3DE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9E865316-B6FF-4E69-BFF4-EF5487FBA3DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9E865316-B6FF-4E69-BFF4-EF5487FBA3DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9E865316-B6FF-4E69-BFF4-EF5487FBA3DE}.Release|Any CPU.Build.0 = Release|Any CPU
 		{6B8217D5-E58D-4505-A02B-B60F9F2EACA5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{6B8217D5-E58D-4505-A02B-B60F9F2EACA5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6B8217D5-E58D-4505-A02B-B60F9F2EACA5}.Release|Any CPU.ActiveCfg = Release|Any CPU
