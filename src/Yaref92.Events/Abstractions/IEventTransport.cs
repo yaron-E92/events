@@ -28,10 +28,6 @@ public interface IEventTransport
     /// </summary>
     event SessionInboundConnectionDroppedHandler SessionInboundConnectionDropped;
 
-    internal IPersistentPortListener PersistentPortListener { get; }
-
-    internal IPersistentFramePublisher PersistentFramePublisher { get; }
-
     /// <summary>
     /// Publishes an event asynchronously to the transport.
     /// </summary>

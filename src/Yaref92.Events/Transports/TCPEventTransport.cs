@@ -15,11 +15,8 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
 #if DEBUG
     internal IEventSerializer SerializerForTesting => _serializer;
     internal IPersistentFramePublisher PublisherForTesting => _publisher;
+    internal IPersistentPortListener ListenerForTesting => _listener;
 #endif
-
-    IPersistentPortListener IEventTransport.PersistentPortListener => _listener;
-
-    IPersistentFramePublisher IEventTransport.PersistentFramePublisher => _publisher;
 
     private event Func<IDomainEvent, Task<bool>>? EventReceived;
 
