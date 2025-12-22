@@ -15,7 +15,7 @@ namespace EventMessenger.ViewModels;
 public class MainViewModel : INotifyPropertyChanged
 {
     private readonly NetworkedEventAggregator _aggregator;
-    private readonly TCPEventTransport _transport;
+    private readonly GrpcEventTransport _transport;
     private readonly MessengerSettings _settings;
     private bool _isListening;
     private string _peerHost = "localhost";
@@ -23,7 +23,7 @@ public class MainViewModel : INotifyPropertyChanged
     private string _myPort = "5050";
     private string _messageText = string.Empty;
 
-    public MainViewModel(NetworkedEventAggregator aggregator, TCPEventTransport transport, MessengerSettings settings)
+    public MainViewModel(NetworkedEventAggregator aggregator, GrpcEventTransport transport, MessengerSettings settings)
     {
         _aggregator = aggregator;
         _transport = transport;

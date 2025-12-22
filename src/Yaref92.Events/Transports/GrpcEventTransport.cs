@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -166,7 +166,7 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
 
     private async Task HandleIncomingFrameAsync(TransportFrame frame, StreamRegistration registration)
     {
-        if (frame.Kind != FrameKind.EVENT)
+        if (frame.Kind != FrameKind.Event)
         {
             return;
         }
@@ -189,7 +189,7 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
             await WriteFrameAsync(registration, new TransportFrame
             {
                 EventId = frame.EventId,
-                Kind = FrameKind.ACK,
+                Kind = FrameKind.Ack,
             }).ConfigureAwait(false);
         }
     }
@@ -214,7 +214,7 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
             EventId = domainEvent.EventId.ToString("D"),
             TypeName = domainEvent.GetType().AssemblyQualifiedName ?? string.Empty,
             EventJson = eventEnvelopeJson,
-            Kind = FrameKind.EVENT,
+            Kind = FrameKind.Event,
         };
     }
 
