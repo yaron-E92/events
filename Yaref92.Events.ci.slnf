@@ -2,6 +2,7 @@
   "solution": {
     "path": "Yaref92.Events.sln",
     "projects": [
+      "src/Yaref92.Events.Server/Yaref92.Events.Server.csproj",
       "src/Yaref92.Events.Rx/Yaref92.Events.Rx.csproj",
       "src/Yaref92.Events/Yaref92.Events.csproj",
       "tests/Yaref92.Events.IntegrationTests/Yaref92.Events.IntegrationTests.csproj",

@@ -2,6 +2,7 @@
 using EventMessenger.ViewModels;
 
 using Yaref92.Events;
+using Yaref92.Events.Server;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
 
@@ -22,6 +23,11 @@ public static class MauiProgram
         builder.Services.AddSingleton(new MessengerSettings { ListenPort = port });
 
         builder.Services.AddSingleton(provider => new GrpcEventTransport(port, new SessionManager(port, new ResilientSessionOptions())));
+        builder.Services.AddSingleton(provider =>
+        {
+            var transport = provider.GetRequiredService<GrpcEventTransport>();
+            return new GrpcEventTransportServer(transport);
+        });
         builder.Services.AddSingleton<EventAggregator>();
         builder.Services.AddSingleton(provider =>
         {
