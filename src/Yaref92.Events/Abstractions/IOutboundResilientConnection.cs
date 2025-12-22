@@ -5,7 +5,7 @@ using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Abstractions;
 
-internal interface IOutboundResilientConnection : IResilientConnection
+public interface IOutboundResilientConnection : IResilientConnection
 {
     DnsEndPoint RemoteEndPoint { get; }
     string OutboxPath { get; }

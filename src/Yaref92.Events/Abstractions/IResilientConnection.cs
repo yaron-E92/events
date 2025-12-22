@@ -2,7 +2,7 @@
 
 namespace Yaref92.Events.Abstractions;
 
-internal interface IResilientConnection
+public interface IResilientConnection
 {
     SessionKey SessionKey { get; }
 

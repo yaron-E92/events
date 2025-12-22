@@ -36,4 +36,6 @@ public interface IEventTransport
     /// <param name="cancellationToken">A cancellation token for the operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent;
+    Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default);
+    Task ConnectToPeerAsync(Guid userId, string host, int port, CancellationToken cancellationToken = default);
 }

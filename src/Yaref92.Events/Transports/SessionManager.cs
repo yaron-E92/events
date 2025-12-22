@@ -6,7 +6,7 @@ using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Transports;
 
-internal class SessionManager : ISessionManager
+public class SessionManager : ISessionManager
 {
     private readonly ResilientSessionOptions _options;
     private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
@@ -99,7 +99,7 @@ internal class SessionManager : ISessionManager
         return session;
     }
 
-    internal void HydrateAnonymousSessionId(SessionKey sessionKey, EndPoint? remoteEndPoint)
+    public void HydrateAnonymousSessionId(SessionKey sessionKey, EndPoint? remoteEndPoint)
     {
         remoteEndPoint ??= new DnsEndPoint(IPAddress.Any.ToString(), _listenerPort);
         string identityKey = ResolveAnonymousIdentityKey(remoteEndPoint);

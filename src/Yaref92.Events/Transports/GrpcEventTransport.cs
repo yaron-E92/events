@@ -1,14 +1,18 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Generic;
+using System.Net;
+
 using Grpc.Core;
 using Grpc.Net.Client;
+
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
+using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Transports;
 
@@ -22,6 +26,8 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
     private int _disposeState;
     private IHost? _host;
 
+    internal ISessionManager SessionManager { get; }
+
     private event Func<IDomainEvent, Task<bool>>? EventReceived;
 
     event Func<IDomainEvent, Task<bool>> IEventTransport.EventReceived
@@ -32,9 +38,10 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
 
     public event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
 
-    public GrpcEventTransport(int listenPort, IEventSerializer? serializer = null)
+    public GrpcEventTransport(int listenPort, ISessionManager sessionManager, IEventSerializer? serializer = null)
     {
         _listenPort = listenPort;
+        SessionManager = sessionManager;
         _serializer = serializer ?? new JsonEventSerializer();
         AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
     }
@@ -78,9 +85,23 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
 
     public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default)
     {
+        return ConnectToPeerAsync(Guid.Empty, host, port, cancellationToken);
+    }
+
+    public Task ConnectToPeerAsync(Guid userId, string host, int port, CancellationToken cancellationToken = default)
+    {
         if (string.IsNullOrWhiteSpace(host))
         {
             throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
+        }
+
+        SessionKey sessionKey = new(userId, host, port)
+        {
+            IsAnonymousKey = userId == Guid.Empty,
+        };
+        if (sessionKey.IsAnonymousKey)
+        {
+            SessionManager.HydrateAnonymousSessionId(sessionKey, new DnsEndPoint(host, port));
         }
 
         var channel = GrpcChannel.ForAddress($"http://{host}:{port}");
