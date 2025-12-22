@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Authors>yaref92</Authors>
+    <Description>Server hosting for Yaref92.Events gRPC transport.</Description>
+    <RepositoryUrl>https://github.com/yaron-E92/events</RepositoryUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Yaref92.Events\Yaref92.Events.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.65.0" />
+  </ItemGroup>
+
+</Project>

@@ -26,7 +26,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.6" />
-    <PackageReference Include="Grpc.AspNetCore" Version="2.65.0" />
     <PackageReference Include="Grpc.Net.Client" Version="2.65.0" />
     <PackageReference Include="Grpc.Tools" Version="2.65.0">
       <PrivateAssets>all</PrivateAssets>
@@ -36,6 +35,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Yaref92.Events.UnitTests" />
     <InternalsVisibleTo Include="Yaref92.Events.IntegrationTests" />
+    <InternalsVisibleTo Include="Yaref92.Events.Server" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2"/>
   </ItemGroup>
 

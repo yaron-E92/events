@@ -4,12 +4,6 @@ using System.Net;
 using Grpc.Core;
 using Grpc.Net.Client;
 
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
@@ -18,15 +12,15 @@ namespace Yaref92.Events.Transports;
 
 public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
 {
-    private readonly int _listenPort;
     private readonly IEventSerializer _serializer;
     private readonly ConcurrentDictionary<Guid, StreamRegistration> _activeStreams = new();
     private readonly ConcurrentBag<GrpcChannel> _channels = new();
     private Task? _disposeTask;
     private int _disposeState;
-    private IHost? _host;
 
     internal ISessionManager SessionManager { get; }
+
+    public int ListenPort { get; }
 
     private event Func<IDomainEvent, Task<bool>>? EventReceived;
 
@@ -40,47 +34,10 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
 
     public GrpcEventTransport(int listenPort, ISessionManager sessionManager, IEventSerializer? serializer = null)
     {
-        _listenPort = listenPort;
+        ListenPort = listenPort;
         SessionManager = sessionManager;
         _serializer = serializer ?? new JsonEventSerializer();
         AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-    }
-
-    public Task StartListeningAsync(CancellationToken cancellationToken = default)
-    {
-        if (_host is not null)
-        {
-            return Task.CompletedTask;
-        }
-
-        _host = Host.CreateDefaultBuilder()
-            .ConfigureWebHostDefaults(webBuilder =>
-            {
-                webBuilder.ConfigureKestrel(options =>
-                {
-                    options.ListenAnyIP(_listenPort, listenOptions =>
-                    {
-                        listenOptions.Protocols = HttpProtocols.Http2;
-                    });
-                });
-                webBuilder.ConfigureServices(services =>
-                {
-                    services.AddGrpc();
-                    services.AddSingleton(this);
-                    services.AddSingleton<EventStreamService>();
-                });
-                webBuilder.Configure(app =>
-                {
-                    app.UseRouting();
-                    app.UseEndpoints(endpoints =>
-                    {
-                        endpoints.MapGrpcService<EventStreamService>();
-                    });
-                });
-            })
-            .Build();
-
-        return _host.StartAsync(cancellationToken);
     }
 
     public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default)
@@ -142,33 +99,26 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
 
     private async Task DisposeAsyncCore()
     {
-        if (_host is not null)
-        {
-            await _host.StopAsync().ConfigureAwait(false);
-            _host.Dispose();
-            _host = null;
-        }
-
         foreach (var channel in _channels)
         {
             channel.Dispose();
         }
     }
 
-    private StreamRegistration RegisterStream(IAsyncStreamWriter<TransportFrame> writer)
+    internal StreamRegistration RegisterStream(IAsyncStreamWriter<TransportFrame> writer)
     {
         var registration = new StreamRegistration(Guid.NewGuid(), writer);
         _activeStreams.TryAdd(registration.Id, registration);
         return registration;
     }
 
-    private void UnregisterStream(StreamRegistration registration)
+    internal void UnregisterStream(StreamRegistration registration)
     {
         _activeStreams.TryRemove(registration.Id, out _);
         registration.Dispose();
     }
 
-    private async Task ProcessIncomingStreamAsync(
+    internal async Task ProcessIncomingStreamAsync(
         IAsyncStreamReader<TransportFrame> reader,
         StreamRegistration registration,
         CancellationToken cancellationToken)
@@ -239,34 +189,7 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
         };
     }
 
-    private sealed class EventStreamService : global::EventStream.EventStreamBase
-    {
-        private readonly GrpcEventTransport _transport;
-
-        public EventStreamService(GrpcEventTransport transport)
-        {
-            _transport = transport;
-        }
-
-        public override async Task Connect(
-            IAsyncStreamReader<TransportFrame> requestStream,
-            IServerStreamWriter<TransportFrame> responseStream,
-            ServerCallContext context)
-        {
-            var registration = _transport.RegisterStream(responseStream);
-            try
-            {
-                await _transport.ProcessIncomingStreamAsync(requestStream, registration, context.CancellationToken)
-                    .ConfigureAwait(false);
-            }
-            finally
-            {
-                _transport.UnregisterStream(registration);
-            }
-        }
-    }
-
-    private sealed class StreamRegistration : IDisposable
+    internal sealed class StreamRegistration : IDisposable
     {
         public StreamRegistration(Guid id, IAsyncStreamWriter<TransportFrame> writer)
         {
