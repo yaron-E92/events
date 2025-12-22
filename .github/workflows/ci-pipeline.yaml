@@ -64,17 +64,8 @@ jobs:
 
         if [ "${{ inputs.snapshot }}" = "true" ]; then
           baseVersion="${{ steps.gitversion.outputs.majorMinorPatch }}"
-          rcPrefix="${baseVersion}-rc"
-
-          lastRcNumber=$(git tag --list "${rcPrefix}*" | sed -E "s/^${rcPrefix}[.-]?//" | sed '/^$/d' | sort -V | tail -n 1)
-
-          if [ -z "$lastRcNumber" ]; then
-            nextRcNumber=1
-          else
-            nextRcNumber=$((lastRcNumber + 1))
-          fi
-
-          semVer="${rcPrefix}${nextRcNumber}"
+          rcTimestamp="$(date -u +%Y%m%d%H%M%S)"
+          semVer="${baseVersion}-rc.${rcTimestamp}"
           nugetVersion="$semVer"
           informationalVersion="$semVer"
         fi
