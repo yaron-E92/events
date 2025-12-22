@@ -1,12 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net8.0-android</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Authors>yaref92</Authors>
     <Description>Server hosting for Yaref92.Events gRPC transport.</Description>
     <RepositoryUrl>https://github.com/yaron-E92/events</RepositoryUrl>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-android'">
+    <DefineConstants>$(DefineConstants);ANDROID</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
