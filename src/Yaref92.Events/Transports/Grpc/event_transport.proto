@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+service EventStream {
+  rpc Connect(stream TransportFrame) returns (stream TransportFrame);
+}
+
+message TransportFrame {
+  string event_id = 1;
+  string type_name = 2;
+  string event_json = 3;
+  string sender_id = 4;
+  FrameKind kind = 5;
+}
+
+enum FrameKind {
+  EVENT = 0;
+  ACK = 1;
+}
