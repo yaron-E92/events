@@ -107,7 +107,7 @@ jobs:
   tagAndRelease:
     needs: [gitVersion, buildAndTest]
     runs-on: ubuntu-latest
-    if: contains(needs.gitVersion.outputs.branchName, 'main') || (github.event_name == 'workflow_dispatch' && inputs.snapshot == 'true')
+    if: contains(needs.gitVersion.outputs.branchName, 'main') || inputs.snapshot == 'true'
     permissions:
       contents: write
       packages: write
