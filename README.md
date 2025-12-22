@@ -28,6 +28,7 @@ Designed for decoupled communication in modern applications.
   - [Installation](#installation)
     - [Core Package](#core-package)
     - [Rx Integration (Optional)](#rx-integration-optional)
+  - [Server hosting](#server-hosting)
   - [Quick Start](#quick-start)
     - [1. Define an Event](#1-define-an-event)
     - [2. Implement a Subscriber](#2-implement-a-subscriber)
@@ -218,6 +219,43 @@ For Reactive Extensions support:
 
 ```sh
 dotnet add package Yaref92.Events.Rx
+```
+
+---
+
+## Server hosting
+
+- The core package is platform-agnostic and does not host servers.
+- `Yaref92.Events.Server` provides hosting for the gRPC transport.
+- Android requires the Android-specific server implementation (no `Grpc.AspNetCore`).
+
+**Server startup (`StartListeningAsync`):**
+
+```csharp
+using Yaref92.Events.Server;
+using Yaref92.Events.Sessions;
+using Yaref92.Events.Transports;
+
+var transport = new GrpcEventTransport(listenPort, new SessionManager(listenPort, new ResilientSessionOptions()));
+await using var server = new GrpcEventTransportServer(transport);
+await server.StartListeningAsync(cancellationToken);
+```
+
+**Build-time selection (multi-targeted app):**
+
+```xml
+<PropertyGroup>
+  <TargetFrameworks>net8.0-android;net8.0</TargetFrameworks>
+</PropertyGroup>
+
+<ItemGroup Condition="'$(TargetFrameworkIdentifier)' == 'Android'">
+  <PackageReference Include="Yaref92.Events.Server" Version="x.y.z" />
+  <!-- Android uses the Grpc.Core-based server host (no Grpc.AspNetCore). -->
+</ItemGroup>
+
+<ItemGroup Condition="'$(TargetFrameworkIdentifier)' != 'Android'">
+  <PackageReference Include="Yaref92.Events.Server" Version="x.y.z" />
+</ItemGroup>
 ```
 
 ---
