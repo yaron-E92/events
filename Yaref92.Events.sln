@@ -22,6 +22,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{D09D
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EventMessenger", "samples\EventMessenger\EventMessenger.csproj", "{7901D738-F48A-4D3A-8E07-DF553E408568}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yaref92.Events.Transport.Tcp", "src\Yaref92.Events.Transport.Tcp\Yaref92.Events.Transport.Tcp.csproj", "{18B2F85C-58D1-4F45-BB2A-8E7731AA46EC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -54,6 +56,10 @@ Global
 		{7901D738-F48A-4D3A-8E07-DF553E408568}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7901D738-F48A-4D3A-8E07-DF553E408568}.Release|Any CPU.Build.0 = Release|Any CPU
 		{7901D738-F48A-4D3A-8E07-DF553E408568}.Release|Any CPU.Deploy.0 = Release|Any CPU
+		{18B2F85C-58D1-4F45-BB2A-8E7731AA46EC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{18B2F85C-58D1-4F45-BB2A-8E7731AA46EC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{18B2F85C-58D1-4F45-BB2A-8E7731AA46EC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{18B2F85C-58D1-4F45-BB2A-8E7731AA46EC}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

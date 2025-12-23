@@ -1,8 +1,8 @@
 ﻿using Yaref92.Events.Transports;
 
-namespace Yaref92.Events.Abstractions;
+namespace Yaref92.Events.Transport.Tcp.Abstractions;
 
 internal interface IConnectionManager : IAsyncDisposable
 {
-    SessionManager SessionManager { get; }
+    TcpSessionManager SessionManager { get; }
 }

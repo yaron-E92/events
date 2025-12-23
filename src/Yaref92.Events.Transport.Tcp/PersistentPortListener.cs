@@ -3,10 +3,12 @@ using System.Net.Sockets;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports.ConnectionManagers;
+using Yaref92.Events.Transport.Tcp.Abstractions;
+using Yaref92.Events.Transport.Tcp.ConnectionManagers;
+using Yaref92.Events.Transports;
 
-namespace Yaref92.Events.Transports;
-internal class PersistentPortListener(int listenPort, IEventSerializer eventSerializer, SessionManager sessionManager) : IPersistentPortListener
+namespace Yaref92.Events.Transport.Tcp;
+internal class PersistentPortListener(int listenPort, IEventSerializer eventSerializer, TcpSessionManager sessionManager) : IPersistentPortListener
 {
 
     public event Func<SessionKey, CancellationToken, Task>? SessionConnectionAccepted;

@@ -1,10 +1,11 @@
 ﻿using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Transport.Tcp;
 
-public class TCPEventTransport : IEventTransport, IAsyncDisposable
+public class TcpEventTransport : IEventTransport, IAsyncDisposable
 {
     private readonly IEventSerializer _serializer;
     private readonly IPersistentPortListener _listener;
@@ -32,7 +33,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
         remove => _listener.SessionInboundConnectionDropped -= value;
     }
 
-    public TCPEventTransport(
+    public TcpEventTransport(
         int listenPort,
         IEventSerializer? serializer = null,
         TimeSpan? heartbeatInterval = null,
@@ -41,7 +42,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
     {
     }
 
-    internal TCPEventTransport(
+    internal TcpEventTransport(
         IPersistentPortListener listener,
         IPersistentFramePublisher publisher,
         IEventSerializer serializer)
@@ -161,7 +162,7 @@ public class TCPEventTransport : IEventTransport, IAsyncDisposable
             HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
         };
 
-        var sessionManager = new SessionManager(listenPort, sessionOptions);
+        var sessionManager = new TcpSessionManager(listenPort, sessionOptions);
         publisher = new PersistentEventPublisher(sessionManager);
         return new PersistentPortListener(listenPort, serializerToUse, sessionManager);
     }

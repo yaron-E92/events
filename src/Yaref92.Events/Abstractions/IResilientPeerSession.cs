@@ -1,7 +1,5 @@
 ﻿using Yaref92.Events.Sessions;
 
-using static Yaref92.Events.Abstractions.IInboundResilientConnection;
-
 namespace Yaref92.Events.Abstractions;
 
 /// <summary>
@@ -19,14 +17,8 @@ public interface IResilientPeerSession : IAsyncDisposable
     string AuthToken { get; }
 
     bool IsAnonymous { get; }
-
-    IOutboundResilientConnection OutboundConnection { get; }
-
-    IInboundResilientConnection InboundConnection { get; }
     bool RemoteEndpointHasAuthenticated { get; }
     SessionOutboundBuffer OutboundBuffer { get; }
-
-    event SessionFrameReceivedHandler? FrameReceived;
 
     void RegisterAuthentication(); // TODO ensure this method is doing what it should
 

@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Yaref92.Events.Sessions;
 
-internal static class SessionFrameContract
+public static class SessionFrameContract
 {
     private static readonly JsonSerializerOptions AuthPayloadSerializerOptions = new(JsonSerializerDefaults.Web)
     {
@@ -235,4 +235,4 @@ internal static class SessionFrameContract
     }
 }
 
-internal sealed record SessionAuthenticationPayload(string? Secret, string? CallbackHost, int? CallbackPort);
+public sealed record SessionAuthenticationPayload(string? Secret, string? CallbackHost, int? CallbackPort);

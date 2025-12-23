@@ -1,9 +1,10 @@
 ﻿using System.Net.Sockets;
 
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports.ConnectionManagers;
+using Yaref92.Events.Transport.Tcp.ConnectionManagers;
 
-namespace Yaref92.Events.Abstractions;
+namespace Yaref92.Events.Transport.Tcp.Abstractions;
 
 internal interface IInboundConnectionManager : IConnectionManager
 {
