@@ -1,15 +1,12 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Net.Sockets;
+﻿using System.Net.Sockets;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using FluentAssertions;
-using NUnit.Framework;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
-using Yaref92.Events.Transports.ConnectionManagers;
+using Yaref92.Events.Transport.Tcp.ConnectionManagers;
+using Yaref92.Events.Transport.Tcp;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
 namespace Yaref92.Events.UnitTests.Transports;
 
@@ -104,7 +101,7 @@ public class TCPEventTransportUnitTests
         evt.Should().BeOfType<DummyEvent>();
     }
 
-    private static TCPEventTransport CreateTransport(
+    private static TcpEventTransport CreateTransport(
         FakeInboundConnectionManager? inbound = null,
         FakeOutboundConnectionManager? outbound = null,
         FakePersistentFramePublisher? publisher = null,
@@ -115,7 +112,7 @@ public class TCPEventTransportUnitTests
         serializer ??= new FakeEventSerializer("payload");
         var listener = new FakePortListener(inbound);
         var publisherInstance = publisher ?? new FakePersistentFramePublisher(outbound);
-        return new TCPEventTransport(listener, publisherInstance, serializer);
+        return new TcpEventTransport(listener, publisherInstance, serializer);
     }
 
     private sealed class FakeEventSerializer : IEventSerializer
@@ -199,7 +196,7 @@ public class TCPEventTransportUnitTests
 
     private sealed class FakeInboundConnectionManager : IInboundConnectionManager
     {
-        public SessionManager SessionManager { get; } = new(0, new ResilientSessionOptions());
+        public TcpSessionManager SessionManager { get; } = new(0, new ResilientSessionOptions());
 
         public event Func<IDomainEvent, SessionKey, Task>? EventReceived;
         public event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
@@ -236,7 +233,7 @@ public class TCPEventTransportUnitTests
 
     private sealed class FakeOutboundConnectionManager : IOutboundConnectionManager
     {
-        public SessionManager SessionManager { get; } = new(0, new ResilientSessionOptions());
+        public TcpSessionManager SessionManager { get; } = new(0, new ResilientSessionOptions());
 
         public List<(Guid EventId, string Payload)> Broadcasts { get; } = new();
         public List<(Guid EventId, SessionKey SessionKey)> SentAcks { get; } = new();

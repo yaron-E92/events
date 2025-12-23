@@ -8,6 +8,7 @@ using FluentAssertions;
 using Yaref92.Events;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.IntegrationTests;
@@ -32,8 +33,8 @@ public class TCPEventTransportTests
         var tcsA = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         var tcsB = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await using var transportA = new TCPEventTransport(portA);
-        await using var transportB = new TCPEventTransport(portB);
+        await using var transportA = new TcpEventTransport(portA);
+        await using var transportB = new TcpEventTransport(portB);
 
         using NetworkedEventAggregator networkedEventAggregatorA = new(aggregatorA, transportA);
         networkedEventAggregatorA.RegisterEventType<DummyEvent>();
@@ -74,8 +75,8 @@ public class TCPEventTransportTests
         var receivedByA = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         var receivedByB = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await using var transportA = new TCPEventTransport(portA);
-        await using var transportB = new TCPEventTransport(portB);
+        await using var transportA = new TcpEventTransport(portA);
+        await using var transportB = new TcpEventTransport(portB);
 
         using NetworkedEventAggregator networkedEventAggregatorA = new(aggregatorA, transportA);
         networkedEventAggregatorA.RegisterEventType<DummyEvent>();
@@ -117,8 +118,8 @@ public class TCPEventTransportTests
         string authenticationToken = $"token-{Guid.NewGuid():N}";
         TimeSpan heartbeat = TimeSpan.FromMilliseconds(50);
 
-        await using var transportA = new TCPEventTransport(portA, heartbeatInterval: heartbeat, authenticationToken: authenticationToken);
-        await using var transportB = new TCPEventTransport(portB, heartbeatInterval: heartbeat, authenticationToken: authenticationToken);
+        await using var transportA = new TcpEventTransport(portA, heartbeatInterval: heartbeat, authenticationToken: authenticationToken);
+        await using var transportB = new TcpEventTransport(portB, heartbeatInterval: heartbeat, authenticationToken: authenticationToken);
 
         var receivedByA = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         var receivedByB = new TaskCompletionSource<DummyEvent>(TaskCreationOptions.RunContinuationsAsynchronously);

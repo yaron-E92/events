@@ -1,18 +1,15 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
+﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 using Yaref92.Events.Transports;
-using Yaref92.Events.Transports.ConnectionManagers;
-using Yaref92.Events.UnitTests;
+using Yaref92.Events.Transport.Tcp.ConnectionManagers;
 
-using static Yaref92.Events.Abstractions.IInboundResilientConnection;
+using static Yaref92.Events.Transport.Tcp.Abstractions.IInboundResilientConnection;
+using Yaref92.Events.Transport.Tcp;
 
 namespace Yaref92.Events.UnitTests.Transports;
 
@@ -119,7 +116,7 @@ internal sealed class FakeOutboundResilientConnection : IOutboundResilientConnec
     }
 }
 
-internal sealed class FakeResilientPeerSession : IResilientPeerSession
+internal sealed class FakeResilientPeerSession : IResilientTcpSession
 {
     public FakeResilientPeerSession(SessionKey key, FakeInboundResilientConnection inbound, FakeOutboundResilientConnection outbound, bool isAnonymous = false, bool remoteEndpointHasAuthenticated = true)
     {
@@ -170,9 +167,9 @@ internal sealed class FakeResilientPeerSession : IResilientPeerSession
 
 internal static class SessionManagerTestExtensions
 {
-    private static readonly FieldInfo SessionsField = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+    private static readonly FieldInfo SessionsField = typeof(TcpSessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
-    internal static void InjectSession(this SessionManager sessionManager, IResilientPeerSession session)
+    internal static void InjectSession(this TcpSessionManager sessionManager, IResilientPeerSession session)
     {
         var sessions = (ConcurrentDictionary<SessionKey, IResilientPeerSession>)SessionsField.GetValue(sessionManager)!;
         sessions[session.Key] = session;

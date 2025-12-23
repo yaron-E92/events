@@ -9,13 +9,15 @@ using System.Text.Json;
 using FluentAssertions;
 
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Connections;
+using Yaref92.Events.Transport.Tcp.Connections;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Sessions.Events;
 using Yaref92.Events.Transports;
-using Yaref92.Events.Transports.ConnectionManagers;
+using Yaref92.Events.Transport.Tcp.ConnectionManagers;
 using static Yaref92.Events.IntegrationTests.ResilientSessionIntegrationTests;
+using Yaref92.Events.Transport.Tcp;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
 namespace Yaref92.Events.IntegrationTests;
 
@@ -280,7 +282,7 @@ public class ResilientSessionIntegrationTests
 
         var session = server.SessionManager.AuthenticatedSessions
             .Concat(server.SessionManager.ValidAnonymousSessions)
-            .OfType<ResilientPeerSession>()
+            .OfType<ResilientTcpPeerSession>()
             .First();
 
         ForceInboundConnectionTimeout(session, options.HeartbeatTimeout + options.HeartbeatInterval);
@@ -425,7 +427,7 @@ public class ResilientSessionIntegrationTests
         var fallbackPort = GetFreeTcpPort();
         var fallbackSerializer = new JsonEventSerializer();
         var fallbackOptions = new ResilientSessionOptions();
-        var fallbackSessionManager = new SessionManager(fallbackPort, fallbackOptions);
+        var fallbackSessionManager = new TcpSessionManager(fallbackPort, fallbackOptions);
         await using var fallbackListener = new PersistentPortListener(fallbackPort, fallbackSerializer, fallbackSessionManager);
         await using var fallbackPublisher = new PersistentEventPublisher(fallbackSessionManager);
         await fallbackListener.StartAsync().ConfigureAwait(false);
@@ -496,7 +498,7 @@ public class ResilientSessionIntegrationTests
         throw new TimeoutException("Active outbound loops were not observed before the timeout elapsed.");
     }
 
-    private static void ForceInboundConnectionTimeout(ResilientPeerSession session, TimeSpan delta)
+    private static void ForceInboundConnectionTimeout(ResilientTcpPeerSession session, TimeSpan delta)
     {
         var inbound = (ResilientInboundConnection) session.InboundConnection;
         var field = typeof(ResilientInboundConnection).GetField("_lastRemoteActivityTicks", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -507,7 +509,7 @@ public class ResilientSessionIntegrationTests
     private static async Task<ServerHost> StartServerAsync(int port, ResilientSessionOptions options)
     {
         var serializer = new JsonEventSerializer();
-        var sessionManager = new SessionManager(port, options);
+        var sessionManager = new TcpSessionManager(port, options);
         var listener = new PersistentPortListener(port, serializer, sessionManager);
         var publisher = new PersistentEventPublisher(sessionManager);
         var host = new ServerHost(listener, publisher, serializer, sessionManager);
@@ -530,7 +532,7 @@ public class ResilientSessionIntegrationTests
 
     private sealed class ServerHost : IAsyncDisposable
     {
-        internal ServerHost(PersistentPortListener listener, PersistentEventPublisher publisher, IEventSerializer serializer, SessionManager sessionManager)
+        internal ServerHost(PersistentPortListener listener, PersistentEventPublisher publisher, IEventSerializer serializer, TcpSessionManager sessionManager)
         {
             Listener = listener;
             Publisher = publisher;
@@ -547,7 +549,7 @@ public class ResilientSessionIntegrationTests
         internal PersistentPortListener Listener { get; }
         internal PersistentEventPublisher Publisher { get; }
         internal IEventSerializer Serializer { get; }
-        internal SessionManager SessionManager { get; }
+        internal TcpSessionManager SessionManager { get; }
         internal InboundConnectionManager Server { get; }
 
         private Task OnSessionConnectionAcceptedAsync(SessionKey sessionKey, CancellationToken token)

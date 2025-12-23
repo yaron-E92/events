@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Connections;
 
 namespace Yaref92.Events.UnitTests.Connections;
 
