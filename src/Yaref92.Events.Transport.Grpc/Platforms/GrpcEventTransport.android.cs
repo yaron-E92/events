@@ -96,7 +96,7 @@ public sealed partial class GrpcEventTransport
 
         if (session is not null)
         {
-            _webRtcSessions.TryRemove(session.Id, out _);
+            _webRtcSessions.TryRemove(session.Id, out var _);
             await session.DisposeAsync().ConfigureAwait(false);
         }
     }
@@ -185,7 +185,7 @@ public sealed partial class GrpcEventTransport
                 },
             });
 
-            _peerConnection.OnIceCandidate += candidate =>
+            _peerConnection.onicecandidate += candidate =>
             {
                 if (candidate is null)
                 {
@@ -201,7 +201,7 @@ public sealed partial class GrpcEventTransport
                 });
             };
 
-            _peerConnection.OnDataChannel += channel =>
+            _peerConnection.ondatachannel += channel =>
             {
                 _dataChannel = channel;
                 HookDataChannel(channel);
@@ -218,7 +218,7 @@ public sealed partial class GrpcEventTransport
                 sdp = offer.Sdp ?? string.Empty,
             };
 
-            await _peerConnection.setRemoteDescription(offerDescription).ConfigureAwait(false);
+            _peerConnection.setRemoteDescription(offerDescription);
             var answer = _peerConnection.createAnswer(null);
             await _peerConnection.setLocalDescription(answer).ConfigureAwait(false);
 
@@ -240,7 +240,7 @@ public sealed partial class GrpcEventTransport
             {
                 candidate = candidate.Candidate,
                 sdpMid = candidate.SdpMid,
-                sdpMLineIndex = candidate.SdpMLineIndex ?? 0,
+                sdpMLineIndex = (ushort) (candidate.SdpMLineIndex ?? 0),
             };
 
             _peerConnection.addIceCandidate(iceCandidate);
@@ -254,22 +254,22 @@ public sealed partial class GrpcEventTransport
                 _registration = null;
             }
 
-            _dataChannel?.Close();
-            _peerConnection.Close();
+            _dataChannel?.close();
+            _peerConnection.close();
             _sendLock.Dispose();
         }
 
         private void HookDataChannel(RTCDataChannel channel)
         {
-            channel.OnOpen += () =>
+            channel.onopen += () =>
             {
                 var writer = new WebRtcStreamWriter(channel);
                 _registration = _transport.RegisterStream(writer);
             };
 
-            channel.OnMessage += async (_, protocol, data) =>
+            channel.onmessage += async (_, protocol, data) =>
             {
-                if (_registration is null || protocol != DataChannelPayloadProtocols.Binary)
+                if (_registration is null || protocol != DataChannelPayloadProtocols.WebRTC_Binary)
                 {
                     return;
                 }
@@ -287,7 +287,7 @@ public sealed partial class GrpcEventTransport
                 await _transport.HandleIncomingFrameAsync(frame, _registration).ConfigureAwait(false);
             };
 
-            channel.OnClose += () =>
+            channel.onclose += () =>
             {
                 if (_registration is null)
                 {
@@ -332,7 +332,7 @@ public sealed partial class GrpcEventTransport
         public Task WriteAsync(TransportFrame message)
         {
             byte[] payload = message.ToByteArray();
-            _channel.Send(payload);
+            _channel.send(payload);
             return Task.CompletedTask;
         }
     }
