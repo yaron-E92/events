@@ -1,16 +1,13 @@
-﻿using System;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 
-using Yaref92.Events.Abstractions;
-using Yaref92.Events.Connections;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Abstractions;
+using Yaref92.Events.Transport.Tcp.Connections;
 
 namespace Yaref92.Events.UnitTests.Connections;
 

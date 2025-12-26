@@ -1,12 +1,12 @@
 ﻿using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Text.Json;
-using System.Threading;
 
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
-namespace Yaref92.Events.Transports.ConnectionManagers;
+namespace Yaref92.Events.Transport.Tcp.ConnectionManagers;
 
 internal sealed partial class InboundConnectionManager : IInboundConnectionManager
 {
@@ -15,7 +15,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     private readonly ConcurrentDictionary<SessionKey, Lazy<IInboundResilientConnection.SessionFrameReceivedHandler>> _sessionFrameHandlers = new();
     private readonly CancellationTokenSource _cts = new();
 
-    public SessionManager SessionManager { get; }
+    public TcpSessionManager SessionManager { get; }
     public event Func<Guid, SessionKey, Task>? AckReceived;
     public event Func<SessionKey, Task>? PingReceived;
 
@@ -32,7 +32,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     private readonly IEventSerializer _serializer; // To deserialize incoming event frames
     private readonly Task? _monitorConnectionsLoop;
 
-    public InboundConnectionManager(SessionManager sessionManager, IEventSerializer serializer)
+    public InboundConnectionManager(TcpSessionManager sessionManager, IEventSerializer serializer)
     {
         SessionManager = sessionManager;
         _serializer = serializer;
@@ -45,7 +45,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         {
             foreach (IInboundResilientConnection? inboundConnectionPastTimeout in SessionManager.AuthenticatedSessions.Concat(SessionManager.ValidAnonymousSessions)
                                                                                                            .DistinctBy(session => session.Key)
-                                                                                                           .Select(session => session.InboundConnection)
+                                                                                                           .Select(session => (session as IResilientTcpSession).InboundConnection)
                                                                                                            .Where(inboundConnection => inboundConnection.IsPastTimeout))
             {
                 _ = Task.Run(() => ReactToStaleConnection(inboundConnectionPastTimeout.SessionKey, monitorToken), monitorToken);
@@ -164,7 +164,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         await EnsureInboundConnectionInitializedAsync(session, serverToken).ConfigureAwait(false);
 
         var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-        await session.InboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
+        await (session as IResilientTcpSession).InboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
 
         if (shouldReplayInitialFrame)
         {
@@ -187,9 +187,9 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
     private IInboundResilientConnection.SessionFrameReceivedHandler AttachFrameHandler(IResilientPeerSession session)
     {
-        session.FrameReceived += OnFrameReceivedAsync;
+        (session as IResilientTcpSession).FrameReceived += OnFrameReceivedAsync;
 
-        if (session is ResilientPeerSession resilientSession)
+        if (session is ResilientTcpPeerSession resilientSession)
         {
             resilientSession.Disposed += OnSessionDisposed;
         }
@@ -197,12 +197,12 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         return OnFrameReceivedAsync;
     }
 
-    private void OnSessionDisposed(ResilientPeerSession session)
+    private void OnSessionDisposed(ResilientTcpPeerSession session)
     {
         if (_sessionFrameHandlers.TryRemove(session.Key, out Lazy<IInboundResilientConnection.SessionFrameReceivedHandler>? subscription)
             && subscription.IsValueCreated)
         {
-            (session as IResilientPeerSession).FrameReceived -= subscription.Value;
+            (session as IResilientTcpSession).FrameReceived -= subscription.Value;
         }
 
         session.Disposed -= OnSessionDisposed;
@@ -212,7 +212,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     {
         Lazy<Task> initializer = _inboundInitialization.GetOrAdd(
             session.Key,
-            _ => new Lazy<Task>(() => session.InboundConnection.InitAsync(serverToken), LazyThreadSafetyMode.ExecutionAndPublication));
+            _ => new Lazy<Task>(() => (session as IResilientTcpSession).InboundConnection.InitAsync(serverToken), LazyThreadSafetyMode.ExecutionAndPublication));
 
         try
         {

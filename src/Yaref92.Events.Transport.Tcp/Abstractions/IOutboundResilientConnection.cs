@@ -3,9 +3,9 @@ using System.Net;
 
 using Yaref92.Events.Sessions;
 
-namespace Yaref92.Events.Abstractions;
+namespace Yaref92.Events.Transport.Tcp.Abstractions;
 
-internal interface IOutboundResilientConnection : IResilientConnection
+public interface IOutboundResilientConnection : IResilientConnection
 {
     DnsEndPoint RemoteEndPoint { get; }
     string OutboxPath { get; }

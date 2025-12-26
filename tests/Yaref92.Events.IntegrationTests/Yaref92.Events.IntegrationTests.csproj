@@ -30,6 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Yaref92.Events.Transport.Tcp\Yaref92.Events.Transport.Tcp.csproj" />
     <ProjectReference Include="..\..\src\Yaref92.Events\Yaref92.Events.csproj" />
   </ItemGroup>
 

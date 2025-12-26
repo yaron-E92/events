@@ -39,7 +39,7 @@ public sealed class ResilientSessionOptions
     /// <summary>
     /// Checks that all options are valid, returning false if not.
     /// </summary>
-    internal bool Validate()
+    public bool Validate()
     {
         if (HeartbeatInterval <= TimeSpan.Zero)
         {

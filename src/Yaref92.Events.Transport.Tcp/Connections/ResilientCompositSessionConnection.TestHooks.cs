@@ -1,4 +1,4 @@
-#if DEBUG
+﻿#if DEBUG
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 using Yaref92.Events.Sessions;
 
-namespace Yaref92.Events.Connections;
+namespace Yaref92.Events.Transport.Tcp.Connections;
 
 internal sealed partial class ResilientCompositSessionConnection
 {

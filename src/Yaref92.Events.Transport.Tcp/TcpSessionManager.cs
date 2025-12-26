@@ -4,16 +4,16 @@ using System.Net;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Transport.Tcp;
 
-public class SessionManager : ISessionManager
+public class TcpSessionManager : ISessionManager
 {
     private readonly ResilientSessionOptions _options;
     private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
     private readonly ConcurrentDictionary<string, Guid> _anonymousSessionIds = new();
     private readonly int _listenerPort;
 
-    public SessionManager(int listenPort, ResilientSessionOptions options)
+    public TcpSessionManager(int listenPort, ResilientSessionOptions options)
     {
         if (options is null || !options.Validate())
         {
@@ -92,7 +92,7 @@ public class SessionManager : ISessionManager
     {
         IResilientPeerSession session =
             _sessions.GetOrAdd(sessionKey,
-                key => new ResilientPeerSession(key, _options, null)
+                key => new ResilientTcpPeerSession(key, _options)
                 {
                     IsAnonymous = isAnonymous,
                 });

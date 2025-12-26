@@ -3,7 +3,7 @@
 using NSubstitute;
 
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Transports;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
 namespace Yaref92.Events.UnitTests;
 

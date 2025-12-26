@@ -1,14 +1,12 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading;
-using System.Threading.Tasks;
 using FluentAssertions;
-using NUnit.Framework;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports;
-using Yaref92.Events.Transports.ConnectionManagers;
+using Yaref92.Events.Transport.Tcp.ConnectionManagers;
+using Yaref92.Events.Transport.Tcp;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
 namespace Yaref92.Events.UnitTests.Transports;
 
@@ -19,7 +17,7 @@ public sealed class OutboundConnectionManagerTests
     public async Task TryReconnectAsync_Completes_after_simulated_drop()
     {
         var options = new ResilientSessionOptions();
-        var sessionManager = new SessionManager(0, options);
+        var sessionManager = new TcpSessionManager(0, options);
         var sessionKey = new SessionKey(Guid.NewGuid(), "localhost", 1234);
 
         var outbound = new StubOutboundConnection(sessionKey);
@@ -43,7 +41,7 @@ public sealed class OutboundConnectionManagerTests
     public async Task StopAsync_Disposes_anonymous_outbound_connections()
     {
         var options = new ResilientSessionOptions();
-        var sessionManager = new SessionManager(0, options);
+        var sessionManager = new TcpSessionManager(0, options);
         var manager = new OutboundConnectionManager(sessionManager);
 
         var anonymousSessionKey = new SessionKey(Guid.Empty, "localhost", 2345)
@@ -66,7 +64,7 @@ public sealed class OutboundConnectionManagerTests
     public void QueueEventBroadcast_EnqueuesFramesOnEachDistinctSession()
     {
         var options = new ResilientSessionOptions();
-        var sessionManager = new SessionManager(0, options);
+        var sessionManager = new TcpSessionManager(0, options);
         var firstKey = new SessionKey(Guid.NewGuid(), "host-one", 1111);
         var secondKey = new SessionKey(Guid.NewGuid(), "host-two", 2222);
 
@@ -92,7 +90,7 @@ public sealed class OutboundConnectionManagerTests
     public void SendAck_UsesSessionManagerToLocateSession()
     {
         var options = new ResilientSessionOptions();
-        var sessionManager = new SessionManager(0, options);
+        var sessionManager = new TcpSessionManager(0, options);
         var firstKey = new SessionKey(Guid.NewGuid(), "host-one", 1111);
         var secondKey = new SessionKey(Guid.NewGuid(), "host-two", 2222);
 
@@ -117,7 +115,7 @@ public sealed class OutboundConnectionManagerTests
     public void SendPong_EnqueuesFrameOnTargetedSession()
     {
         var options = new ResilientSessionOptions();
-        var sessionManager = new SessionManager(0, options);
+        var sessionManager = new TcpSessionManager(0, options);
         var firstKey = new SessionKey(Guid.NewGuid(), "host-one", 1111);
         var secondKey = new SessionKey(Guid.NewGuid(), "host-two", 2222);
 
@@ -141,7 +139,7 @@ public sealed class OutboundConnectionManagerTests
     public async Task TryReconnectAsync_UsesSessionSelectedBySessionManager()
     {
         var options = new ResilientSessionOptions();
-        var sessionManager = new SessionManager(0, options);
+        var sessionManager = new TcpSessionManager(0, options);
         var firstKey = new SessionKey(Guid.NewGuid(), "host-one", 1111);
         var secondKey = new SessionKey(Guid.NewGuid(), "host-two", 2222);
 
@@ -231,7 +229,7 @@ public sealed class OutboundConnectionManagerTests
         }
     }
 
-    private sealed class StubPeerSession : IResilientPeerSession
+    private sealed class StubPeerSession : IResilientTcpSession
     {
         private readonly bool _isAnonymous;
         private readonly bool _remoteEndpointHasAuthenticated;

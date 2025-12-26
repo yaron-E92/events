@@ -7,8 +7,10 @@ using FluentAssertions;
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transports;
-using Yaref92.Events.Transports.ConnectionManagers;
+using Yaref92.Events.Transport.Tcp.ConnectionManagers;
 using Yaref92.Events.UnitTests;
+using Yaref92.Events.Transport.Tcp.Abstractions;
+using Yaref92.Events.Transport.Tcp;
 
 namespace Yaref92.Events.UnitTests.Transports;
 
@@ -31,7 +33,7 @@ public class InboundConnectionManagerTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
-        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var sessionManager = new TcpSessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
         var serializer = new FakeEventSerializer();
 
         await using var manager = new InboundConnectionManager(sessionManager, serializer);
@@ -91,7 +93,7 @@ public class InboundConnectionManagerTests
         };
 
         var sessionKey = new SessionKey(Guid.NewGuid(), "loopback", 5000);
-        var sessionManager = new SessionManager(sessionKey.Port, options);
+        var sessionManager = new TcpSessionManager(sessionKey.Port, options);
         var serializer = new DeterministicEventSerializer();
 
         var inbound = new FakeInboundResilientConnection(sessionKey);
@@ -177,7 +179,7 @@ public class InboundConnectionManagerTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
-        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var sessionManager = new TcpSessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
         var serializer = new FakeEventSerializer();
 
         await using var manager = new InboundConnectionManager(sessionManager, serializer);
@@ -306,7 +308,7 @@ public class InboundConnectionManagerTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
-        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var sessionManager = new TcpSessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
         var serializer = new FakeEventSerializer();
 
         await using var manager = new InboundConnectionManager(sessionManager, serializer);
@@ -360,7 +362,7 @@ public class InboundConnectionManagerTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
-        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var sessionManager = new TcpSessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
         var serializer = new FakeEventSerializer();
 
         await using var manager = new InboundConnectionManager(sessionManager, serializer);
@@ -491,7 +493,7 @@ public class InboundConnectionManagerTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
 
-        var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+        var sessionManager = new TcpSessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
         var serializer = new FakeEventSerializer();
 
         await using var manager = new InboundConnectionManager(sessionManager, serializer);
@@ -519,13 +521,13 @@ public class InboundConnectionManagerTests
             initialization.ConnectionCancellation.Should().NotBeNull();
 
             var session = initialization.Session!;
-            session.InboundConnection.IsPastTimeout.Should().BeFalse("authentication should count as remote activity");
+            (session as IResilientTcpSession).InboundConnection.IsPastTimeout.Should().BeFalse("authentication should count as remote activity");
 
             await Task.Delay(options.HeartbeatTimeout / 2).ConfigureAwait(false);
-            session.InboundConnection.IsPastTimeout.Should().BeFalse("connection should remain active before the timeout elapses");
+            (session as IResilientTcpSession).InboundConnection.IsPastTimeout.Should().BeFalse("connection should remain active before the timeout elapses");
 
             await Task.Delay(options.HeartbeatTimeout + options.HeartbeatInterval).ConfigureAwait(false);
-            session.InboundConnection.IsPastTimeout.Should().BeTrue("connection should become stale once the timeout elapses");
+            (session as IResilientTcpSession).InboundConnection.IsPastTimeout.Should().BeTrue("connection should become stale once the timeout elapses");
 
             await initialization.ConnectionCancellation!.CancelAsync().ConfigureAwait(false);
             initialization.ConnectionCancellation.Dispose();
@@ -560,7 +562,7 @@ public class InboundConnectionManagerTests
 
         try
         {
-            var sessionManager = new SessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
+            var sessionManager = new TcpSessionManager(((IPEndPoint)listener.LocalEndpoint).Port, options);
             var serializer = new FakeEventSerializer();
 
             await using var manager = new InboundConnectionManager(sessionManager, serializer);
@@ -585,7 +587,7 @@ public class InboundConnectionManagerTests
 
             var session = initialization.Session!;
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-            while (!session.InboundConnection.IsPastTimeout)
+            while (!(session as IResilientTcpSession).InboundConnection.IsPastTimeout)
             {
                 if (DateTime.UtcNow >= deadline)
                 {
