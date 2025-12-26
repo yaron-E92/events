@@ -24,6 +24,7 @@
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-android'">
     <PackageReference Include="Grpc.Core" Version="2.46.6" />
+    <PackageReference Include="SIPSorcery.Net" Version="1.4.3" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
