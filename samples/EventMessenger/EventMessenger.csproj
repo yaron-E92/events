@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <!--<TargetFrameworks>net8.0-android;net8.0-windows10.0.19041.0</TargetFrameworks>-->
-    <TargetFrameworks>net8.0-windows10.0.19041.0</TargetFrameworks>
+    <TargetFrameworks>net8.0-android;net8.0-windows10.0.19041.0</TargetFrameworks>
+    <!--<TargetFrameworks>net8.0-windows10.0.19041.0</TargetFrameworks>-->
     <OutputType>Exe</OutputType>
     <RootNamespace>EventMessenger</RootNamespace>
     <UseMaui>true</UseMaui>
@@ -9,13 +9,17 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <DefaultLanguage>en</DefaultLanguage>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Yaref92.Events\Yaref92.Events.csproj" />
+    <ProjectReference Include="..\..\src\Yaref92.Events.Transport.Grpc\Yaref92.Events.Transport.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
+    <MauiIcon Include="Resources/AppIcon/appicon.svg" />
+    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
   </ItemGroup>
 </Project>

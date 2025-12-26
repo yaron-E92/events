@@ -34,7 +34,6 @@
         Square44x44Logo="dotnet_bot.png"
         BackgroundColor="transparent">
         <uap:DefaultTile Square71x71Logo="dotnet_bot.png" Wide310x150Logo="dotnet_bot.png" Square310x310Logo="dotnet_bot.png" />
-        <uap:SplashScreen Image="dotnet_bot.png" />
       </uap:VisualElements>
     </Application>
   </Applications>

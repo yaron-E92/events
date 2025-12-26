@@ -3,6 +3,7 @@ using EventMessenger.ViewModels;
 
 using Yaref92.Events;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Grpc;
 using Yaref92.Events.Transports;
 
 namespace EventMessenger;

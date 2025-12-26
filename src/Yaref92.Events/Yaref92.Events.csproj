@@ -26,21 +26,12 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.6" />
-    <PackageReference Include="Grpc.AspNetCore" Version="2.65.0" />
-    <PackageReference Include="Grpc.Net.Client" Version="2.65.0" />
-    <PackageReference Include="Grpc.Tools" Version="2.65.0">
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Yaref92.Events.UnitTests" />
     <InternalsVisibleTo Include="Yaref92.Events.IntegrationTests" />
-    <InternalsVisibleTo Include="DynamicProxyGenAssembly2"/>
-  </ItemGroup>
-
-  <ItemGroup>
-    <Protobuf Include="Transports/Grpc/event_transport.proto" GrpcServices="Server,Client" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
 </Project>

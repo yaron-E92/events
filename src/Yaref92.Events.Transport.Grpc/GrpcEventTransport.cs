@@ -4,19 +4,13 @@ using System.Net;
 using Grpc.Core;
 using Grpc.Net.Client;
 
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-
 using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Transport.Grpc;
 
-public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
+public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposable
 {
     private readonly int _listenPort;
     private readonly IEventSerializer _serializer;
@@ -24,7 +18,6 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
     private readonly ConcurrentBag<GrpcChannel> _channels = new();
     private Task? _disposeTask;
     private int _disposeState;
-    private IHost? _host;
 
     internal ISessionManager SessionManager { get; }
 
@@ -45,43 +38,12 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
         _serializer = serializer ?? new JsonEventSerializer();
         AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
     }
-
+#if !ANDROID && !NOT_ANDROID
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
     {
-        if (_host is not null)
-        {
-            return Task.CompletedTask;
-        }
-
-        _host = Host.CreateDefaultBuilder()
-            .ConfigureWebHostDefaults(webBuilder =>
-            {
-                webBuilder.ConfigureKestrel(options =>
-                {
-                    options.ListenAnyIP(_listenPort, listenOptions =>
-                    {
-                        listenOptions.Protocols = HttpProtocols.Http2;
-                    });
-                });
-                webBuilder.ConfigureServices(services =>
-                {
-                    services.AddGrpc();
-                    services.AddSingleton(this);
-                    services.AddSingleton<EventStreamService>();
-                });
-                webBuilder.Configure(app =>
-                {
-                    app.UseRouting();
-                    app.UseEndpoints(endpoints =>
-                    {
-                        endpoints.MapGrpcService<EventStreamService>();
-                    });
-                });
-            })
-            .Build();
-
-        return _host.StartAsync(cancellationToken);
+        throw new InvalidOperationException("StartListeningAsync is only supported on Android and non-Android platforms. If somehow this is accessed something went wrong in configuration");
     }
+#endif
 
     public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken = default)
     {
@@ -107,7 +69,7 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
         var channel = GrpcChannel.ForAddress($"http://{host}:{port}");
         _channels.Add(channel);
 
-        var client = new global::EventStream.EventStreamClient(channel);
+        var client = new EventStream.EventStreamClient(channel);
         var call = client.Connect(cancellationToken: cancellationToken);
         var registration = RegisterStream(call.RequestStream);
         _ = ProcessIncomingStreamAsync(call.ResponseStream, registration, cancellationToken)
@@ -139,22 +101,12 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
 
         return _disposeTask is null ? ValueTask.CompletedTask : new ValueTask(_disposeTask);
     }
-
-    private async Task DisposeAsyncCore()
+#if !ANDROID && !NOT_ANDROID
+    private Task DisposeAsyncCore()
     {
-        if (_host is not null)
-        {
-            await _host.StopAsync().ConfigureAwait(false);
-            _host.Dispose();
-            _host = null;
-        }
-
-        foreach (var channel in _channels)
-        {
-            channel.Dispose();
-        }
+        return Task.CompletedTask;
     }
-
+#endif
     private StreamRegistration RegisterStream(IAsyncStreamWriter<TransportFrame> writer)
     {
         var registration = new StreamRegistration(Guid.NewGuid(), writer);
@@ -239,7 +191,7 @@ public sealed class GrpcEventTransport : IEventTransport, IAsyncDisposable
         };
     }
 
-    private sealed class EventStreamService : global::EventStream.EventStreamBase
+    private sealed class EventStreamService : EventStream.EventStreamBase
     {
         private readonly GrpcEventTransport _transport;
 

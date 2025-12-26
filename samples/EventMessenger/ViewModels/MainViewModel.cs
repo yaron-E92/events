@@ -8,7 +8,7 @@ using EventMessenger.Events;
 
 using Yaref92.Events;
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Transports;
+using Yaref92.Events.Transport.Grpc;
 
 namespace EventMessenger.ViewModels;
 
