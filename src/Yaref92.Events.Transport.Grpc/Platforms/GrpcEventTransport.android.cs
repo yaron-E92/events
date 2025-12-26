@@ -15,6 +15,7 @@ namespace Yaref92.Events.Transport.Grpc;
 public sealed partial class GrpcEventTransport
 {
     private const int SignalMessageBufferSize = 4;
+    private const int MaxSignalMessageSize = 64 * 1024;
     private static readonly JsonSerializerOptions SignalMessageOptions = new(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<Guid, WebRtcSession> _webRtcSessions = new();
     private TcpListener? _signalingListener;
@@ -106,7 +107,7 @@ public sealed partial class GrpcEventTransport
         byte[] lengthBuffer = new byte[SignalMessageBufferSize];
         await stream.ReadExactlyAsync(lengthBuffer, cancellationToken).ConfigureAwait(false);
         int length = BinaryPrimitives.ReadInt32BigEndian(lengthBuffer);
-        if (length <= 0)
+        if (length <= 0 || length > MaxSignalMessageSize)
         {
             return null;
         }
