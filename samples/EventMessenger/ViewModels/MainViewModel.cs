@@ -135,8 +135,13 @@ public class MainViewModel : INotifyPropertyChanged
         {
             string hostName = Dns.GetHostName();
             var entry = Dns.GetHostEntry(hostName);
-            var address = entry.AddressList.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
-            return address?.ToString() ?? hostName;
+            var address = entry.AddressList.FirstOrDefault(IsRoutableIpv4Address);
+            if (address is not null)
+            {
+                return address.ToString();
+            }
+
+            return string.Equals(hostName, "localhost", StringComparison.OrdinalIgnoreCase) ? "localhost" : hostName;
         }
         catch
         {
