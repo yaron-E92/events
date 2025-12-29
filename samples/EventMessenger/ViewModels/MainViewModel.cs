@@ -5,6 +5,9 @@ using System.Net;
 using System.Runtime.CompilerServices;
 
 using EventMessenger.Events;
+#if ANDROID
+using EventMessenger.Platforms.Android;
+#endif
 
 using Yaref92.Events;
 using Yaref92.Events.Abstractions;
@@ -29,7 +32,7 @@ public class MainViewModel : INotifyPropertyChanged
         _transport = transport;
         _settings = settings;
         Messages = new ObservableCollection<string>();
-        HostHint = ResolveLocalHost();
+        HostHint = ResolveHostHint();
 
         _aggregator.SubscribeToEventType(new AsyncMessageEventHandler(this));
         _myPort = _settings.ListenPort.ToString(CultureInfo.InvariantCulture);
@@ -135,6 +138,22 @@ public class MainViewModel : INotifyPropertyChanged
         {
             return "localhost";
         }
+    }
+
+    private static string ResolveHostHint()
+    {
+#if ANDROID
+        var deviceId = DeviceIdentity.GetDeviceId();
+        var localHost = ResolveLocalHost();
+        if (!string.Equals(localHost, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{deviceId}@{localHost}";
+        }
+
+        return deviceId;
+#else
+        return ResolveLocalHost();
+#endif
     }
 
     private static Task ShowToastAsync(string message)
