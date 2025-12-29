@@ -2,6 +2,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Runtime.CompilerServices;
 
 using EventMessenger.Events;
@@ -126,6 +127,12 @@ public class MainViewModel : INotifyPropertyChanged
     {
         try
         {
+            var localIp = GetActiveIpv4Address();
+            if (localIp is not null)
+            {
+                return localIp;
+            }
+
             string hostName = Dns.GetHostName();
             var entry = Dns.GetHostEntry(hostName);
             var address = entry.AddressList.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
@@ -135,6 +142,18 @@ public class MainViewModel : INotifyPropertyChanged
         {
             return "localhost";
         }
+    }
+
+    private static string? GetActiveIpv4Address()
+    {
+        return NetworkInterface.GetAllNetworkInterfaces()
+            .Where(networkInterface => networkInterface.OperationalStatus == OperationalStatus.Up)
+            .SelectMany(networkInterface => networkInterface.GetIPProperties().UnicastAddresses)
+            .Select(addressInfo => addressInfo.Address)
+            .FirstOrDefault(address =>
+                address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                && !IPAddress.IsLoopback(address))
+            ?.ToString();
     }
 
     private static Task ShowToastAsync(string message)
