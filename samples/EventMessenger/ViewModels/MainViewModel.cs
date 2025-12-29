@@ -2,6 +2,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Runtime.CompilerServices;
 
 using EventMessenger.Events;
@@ -124,17 +125,77 @@ public class MainViewModel : INotifyPropertyChanged
 
     private static string ResolveLocalHost()
     {
+        var localIp = GetActiveIpv4Address();
+        if (localIp is not null)
+        {
+            return localIp;
+        }
+
         try
         {
             string hostName = Dns.GetHostName();
             var entry = Dns.GetHostEntry(hostName);
-            var address = entry.AddressList.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
-            return address?.ToString() ?? hostName;
+            var address = entry.AddressList.FirstOrDefault(IsRoutableIpv4Address);
+            if (address is not null)
+            {
+                return address.ToString();
+            }
+
+            return string.Equals(hostName, "localhost", StringComparison.OrdinalIgnoreCase) ? "localhost" : hostName;
         }
         catch
         {
             return "localhost";
         }
+    }
+
+    private static string? GetActiveIpv4Address()
+    {
+        try
+        {
+            var activeInterfaces = NetworkInterface.GetAllNetworkInterfaces()
+                .Where(networkInterface =>
+                    networkInterface.OperationalStatus == OperationalStatus.Up
+                    && networkInterface.NetworkInterfaceType != NetworkInterfaceType.Loopback
+                    && networkInterface.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
+                .ToArray();
+
+            var address = activeInterfaces
+                .Where(networkInterface => networkInterface.GetIPProperties().GatewayAddresses.Any(gateway =>
+                    gateway.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                    && !IPAddress.IsLoopback(gateway.Address)
+                    && gateway.Address != IPAddress.Any
+                    && gateway.Address != IPAddress.None))
+                .SelectMany(networkInterface => networkInterface.GetIPProperties().UnicastAddresses)
+                .Select(addressInfo => addressInfo.Address)
+                .FirstOrDefault(IsRoutableIpv4Address)
+                ?? activeInterfaces
+                    .SelectMany(networkInterface => networkInterface.GetIPProperties().UnicastAddresses)
+                    .Select(addressInfo => addressInfo.Address)
+                    .FirstOrDefault(IsRoutableIpv4Address);
+
+            return address?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsRoutableIpv4Address(IPAddress address)
+    {
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        if (IPAddress.IsLoopback(address) || address == IPAddress.Any || address == IPAddress.None)
+        {
+            return false;
+        }
+
+        var bytes = address.GetAddressBytes();
+        return bytes is [169, 254, ..] ? false : true;
     }
 
     private static Task ShowToastAsync(string message)
