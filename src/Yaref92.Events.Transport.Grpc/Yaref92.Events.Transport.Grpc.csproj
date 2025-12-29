@@ -4,6 +4,8 @@
     <TargetFrameworks>net8.0;net8.0-android</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <RepositoryUrl>https://github.com/yaron-E92/events</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/yaron-E92/events</PackageProjectUrl>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-android'">
@@ -43,5 +45,4 @@
   <ItemGroup>
     <Protobuf Include="Protos/event_transport.proto" GrpcServices="Server,Client" />
   </ItemGroup>
-
 </Project>
