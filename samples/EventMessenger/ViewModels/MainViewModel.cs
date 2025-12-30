@@ -23,6 +23,7 @@ public class MainViewModel : INotifyPropertyChanged
     private bool _isListening;
     private string _peerHost = "localhost";
     private string _peerPort = "5050";
+    private string _selectedPeerPlatform = "Windows";
     private string _myPort = "5050";
     private string _messageText = string.Empty;
 
@@ -54,6 +55,14 @@ public class MainViewModel : INotifyPropertyChanged
     {
         get => _peerPort;
         set => SetProperty(ref _peerPort, value);
+    }
+
+    public IReadOnlyList<string> PeerPlatforms { get; } = new[] { "Android", "Windows" };
+
+    public string SelectedPeerPlatform
+    {
+        get => _selectedPeerPlatform;
+        set => SetProperty(ref _selectedPeerPlatform, value);
     }
 
     public string MyPort
@@ -93,6 +102,7 @@ public class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        _transport.TargetPlatform = SelectedPeerPlatform;
         await _transport.ConnectToPeerAsync(PeerHost, port);
         await ShowToastAsync($"Connected to {PeerHost}:{PeerPort}");
     }

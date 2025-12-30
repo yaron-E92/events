@@ -17,6 +17,9 @@
             <Label Text="Peer Host" />
             <Entry Text="{Binding PeerHost}" Placeholder="Hostname or IP" />
 
+            <Label Text="Peer Platform" />
+            <Picker ItemsSource="{Binding PeerPlatforms}" SelectedItem="{Binding SelectedPeerPlatform}" />
+
             <Label Text="Peer Port" />
             <HorizontalStackLayout Spacing="8">
                 <Entry Text="{Binding PeerPort}" Keyboard="Numeric" HorizontalOptions="FillAndExpand" />

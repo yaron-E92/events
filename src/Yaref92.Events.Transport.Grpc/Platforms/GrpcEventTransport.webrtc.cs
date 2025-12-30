@@ -1,4 +1,4 @@
-#if NOT_ANDROID
+﻿#if NOT_ANDROID
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -244,7 +244,7 @@ public sealed partial class GrpcEventTransport
 
         public async Task<bool> InitializeOfferAsync(TimeSpan timeout, CancellationToken cancellationToken)
         {
-            _dataChannel = _peerConnection.createDataChannel("events", new RTCDataChannelInit());
+            _dataChannel = await _peerConnection.createDataChannel("events", new RTCDataChannelInit());
             HookDataChannel(_dataChannel);
 
             var offer = _peerConnection.createOffer(null);

@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Google.Protobuf;
 using Yaref92.Events.Transport.Grpc;
 
@@ -23,7 +23,7 @@ public class DataChannelProtocolTests
         decoded.Should().NotBeNull();
         decoded!.Type.Should().Be(envelope.Type);
         decoded.CorrelationId.Should().Be(envelope.CorrelationId);
-        decoded.Payload.Should().Be(envelope.Payload);
+        decoded.Payload.Should().BeEquivalentTo(envelope.Payload);
     }
 
     [Test]
