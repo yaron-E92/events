@@ -62,7 +62,7 @@ public sealed partial class GrpcEventTransport
             SignalMessage? message;
             try
             {
-                message = await ReadSignalMessageAsync(stream, cancellationToken).ConfigureAwait(false);
+                message = await WebRtcSignaling.ReadMessageAsync(stream, cancellationToken).ConfigureAwait(false);
             }
             catch (EndOfStreamException)
             {
@@ -79,7 +79,7 @@ public sealed partial class GrpcEventTransport
                 case SignalMessage.OfferType:
                     session = new WebRtcSession(this, stream);
                     _webRtcSessions.TryAdd(session.Id, session);
-                    await session.HandleOfferAsync(message, cancellationToken).ConfigureAwait(false);
+                    await session.ConnectAsync(message, timeout: null, cancellationToken).ConfigureAwait(false);
                     break;
                 case SignalMessage.CandidateType when session is not null:
                     session.HandleCandidate(message);
@@ -133,7 +133,7 @@ public sealed partial class GrpcEventTransport
         }
     }
 
-    private sealed class WebRtcSession : IAsyncDisposable
+    private sealed class WebRtcSession : IDataChannelSession
     {
         private readonly GrpcEventTransport _transport;
         private readonly NetworkStream _stream;
@@ -178,6 +178,17 @@ public sealed partial class GrpcEventTransport
         }
 
         public Guid Id { get; } = Guid.NewGuid();
+
+        public async Task<bool> ConnectAsync(SignalMessage? offer, TimeSpan? timeout, CancellationToken cancellationToken)
+        {
+            if (offer is null)
+            {
+                return false;
+            }
+
+            await HandleOfferAsync(offer, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
 
         public async Task HandleOfferAsync(SignalMessage offer, CancellationToken cancellationToken)
         {
@@ -270,12 +281,22 @@ public sealed partial class GrpcEventTransport
             return SendMessageAsync(message, cancellationToken);
         }
 
+        Task IDataChannelSession.SendAsync(SignalMessage message, CancellationToken cancellationToken)
+        {
+            return SendAsync(message, cancellationToken);
+        }
+
+        void IDataChannelSession.HookInboundFrames(RTCDataChannel channel)
+        {
+            HookDataChannel(channel);
+        }
+
         private async Task SendMessageAsync(SignalMessage message, CancellationToken cancellationToken)
         {
             await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await WriteSignalMessageAsync(_stream, message, cancellationToken).ConfigureAwait(false);
+                await WebRtcSignaling.WriteMessageAsync(_stream, message, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
