@@ -228,11 +228,8 @@ public sealed partial class GrpcEventTransport
 
         public async ValueTask DisposeAsync()
         {
-            if (_registration is not null)
-            {
-                _transport.UnregisterStream(_registration);
-                _registration = null;
-            }
+            _transport.UnregisterDataChannelSession(_registration, "session disposed");
+            _registration = null;
 
             _dataChannel?.close();
             _peerConnection.close();
@@ -243,8 +240,12 @@ public sealed partial class GrpcEventTransport
         {
             channel.onopen += () =>
             {
-                var writer = new WebRtcStreamWriter(channel);
-                _registration = _transport.RegisterStream(writer);
+                if (_registration is not null)
+                {
+                    _transport.UnregisterDataChannelSession(_registration, "replaced by new data channel open");
+                }
+
+                _registration = _transport.RegisterDataChannelSession(channel);
             };
 
             channel.onmessage += async (_, protocol, data) =>
@@ -266,12 +267,7 @@ public sealed partial class GrpcEventTransport
 
             channel.onclose += () =>
             {
-                if (_registration is null)
-                {
-                    return;
-                }
-
-                _transport.UnregisterStream(_registration);
+                _transport.UnregisterDataChannelSession(_registration, "data channel closed");
                 _registration = null;
             };
         }
