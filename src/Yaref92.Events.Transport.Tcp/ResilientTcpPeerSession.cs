@@ -2,6 +2,7 @@
 using Yaref92.Events.Transport.Tcp.Abstractions;
 using Yaref92.Events.Transport.Tcp.Connections;
 
+using static Yaref92.Events.Sessions.ResilientPeerSession;
 using static Yaref92.Events.Transport.Tcp.Abstractions.IInboundResilientConnection;
 
 namespace Yaref92.Events.Transport.Tcp;
@@ -91,6 +92,4 @@ internal sealed partial class ResilientTcpPeerSession : IResilientTcpSession
     {
         _state.RegisterAuthentication();
     }
-
-    internal partial class SessionState { }
 }

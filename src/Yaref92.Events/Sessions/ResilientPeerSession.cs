@@ -2,7 +2,7 @@
 
 namespace Yaref92.Events.Sessions;
 
-internal sealed partial class ResilientPeerSession : IResilientPeerSession
+public sealed partial class ResilientPeerSession : IResilientPeerSession
 {
     private readonly SessionState _state;
     private Action<ResilientPeerSession>? _disposed;
@@ -61,5 +61,5 @@ internal sealed partial class ResilientPeerSession : IResilientPeerSession
         _state.RegisterAuthentication();
     }
 
-    internal partial class SessionState { }
+    public partial class SessionState { }
 }

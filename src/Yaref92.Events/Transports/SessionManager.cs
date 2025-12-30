@@ -8,10 +8,10 @@ namespace Yaref92.Events.Transports;
 
 public class SessionManager : ISessionManager
 {
-    private readonly ResilientSessionOptions _options;
-    private readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
-    private readonly ConcurrentDictionary<string, Guid> _anonymousSessionIds = new();
-    private readonly int _listenerPort;
+    protected readonly ResilientSessionOptions _options;
+    protected readonly ConcurrentDictionary<SessionKey, IResilientPeerSession> _sessions = new();
+    protected readonly ConcurrentDictionary<string, Guid> _anonymousSessionIds = new();
+    protected readonly int _listenerPort;
 
     public SessionManager(int listenPort, ResilientSessionOptions options)
     {
@@ -54,7 +54,7 @@ public class SessionManager : ISessionManager
     /// <returns></returns>
     /// <exception cref="System.Security.Authentication.AuthenticationException"></exception>
     /// <remarks>The Session will be generated if necessary</remarks>
-    internal IResilientPeerSession ResolveSession(EndPoint? remoteEndPoint, SessionFrame authFrame)
+    public IResilientPeerSession ResolveSession(EndPoint? remoteEndPoint, SessionFrame authFrame)
     {
         if (!SessionFrameContract.TryValidateAuthentication(
                 authFrame,
@@ -77,7 +77,7 @@ public class SessionManager : ISessionManager
         return session;
     }
 
-    internal IResilientPeerSession ResolveFallbackSession(EndPoint? remoteEndPoint)
+    public IResilientPeerSession ResolveFallbackSession(EndPoint? remoteEndPoint)
     {
         SessionKey sessionKey = CreateFallbackSessionKey(remoteEndPoint);
         HydrateAnonymousSessionId(sessionKey, remoteEndPoint);
@@ -88,7 +88,7 @@ public class SessionManager : ISessionManager
         return session;
     }
 
-    public IResilientPeerSession GetOrGenerate(SessionKey sessionKey, bool isAnonymous = false)
+    public virtual IResilientPeerSession GetOrGenerate(SessionKey sessionKey, bool isAnonymous = false)
     {
         IResilientPeerSession session =
             _sessions.GetOrAdd(sessionKey,
@@ -107,7 +107,7 @@ public class SessionManager : ISessionManager
         sessionKey.HydrateAnonymouseId(identifier);
     }
 
-    private static string FallbackHost(EndPoint remoteEndPoint)
+    protected static string FallbackHost(EndPoint remoteEndPoint)
     {
         return remoteEndPoint switch
         {
@@ -116,7 +116,7 @@ public class SessionManager : ISessionManager
         };
     }
 
-    private static string ResolveAnonymousIdentityKey(EndPoint remoteEndPoint)
+    protected static string ResolveAnonymousIdentityKey(EndPoint remoteEndPoint)
     {
         if (remoteEndPoint is DnsEndPoint dnsEndPoint)
         {
@@ -127,12 +127,12 @@ public class SessionManager : ISessionManager
         return NormalizeHostKey(fallbackHost);
     }
 
-    private static string ResolveAnonymousIdentityKey(SessionKey sessionKey)
+    protected static string ResolveAnonymousIdentityKey(SessionKey sessionKey)
     {
         return NormalizeHostKey(sessionKey.Host);
     }
 
-    private static string NormalizeHostKey(string? host)
+    protected static string NormalizeHostKey(string? host)
     {
         if (string.IsNullOrWhiteSpace(host))
         {
@@ -142,13 +142,13 @@ public class SessionManager : ISessionManager
         return host.ToLowerInvariant();
     }
 
-    internal void TouchSession(SessionKey sessionKey)
+    public void TouchSession(SessionKey sessionKey)
     {
         IResilientPeerSession session = GetOrGenerate(sessionKey, sessionKey.IsAnonymousKey);
         session.Touch();
     }
 
-    private SessionKey NormalizeSessionKeyWithRemoteEndpoint(SessionKey sessionKey, EndPoint? remoteEndPoint, int? advertisedCallbackPort)
+    protected SessionKey NormalizeSessionKeyWithRemoteEndpoint(SessionKey sessionKey, EndPoint? remoteEndPoint, int? advertisedCallbackPort)
     {
         if (remoteEndPoint is null)
         {
@@ -175,7 +175,7 @@ public class SessionManager : ISessionManager
         return ApplyAdvertisedPort(normalizedKey, advertisedCallbackPort);
     }
 
-    private static SessionKey ApplyAdvertisedPort(SessionKey sessionKey, int? advertisedCallbackPort)
+    protected static SessionKey ApplyAdvertisedPort(SessionKey sessionKey, int? advertisedCallbackPort)
     {
         if (advertisedCallbackPort is not int callbackPort || callbackPort <= 0 || sessionKey.Port == callbackPort)
         {
@@ -188,7 +188,7 @@ public class SessionManager : ISessionManager
         };
     }
 
-    private SessionKey CreateFallbackSessionKey(EndPoint? remoteEndPoint)
+    protected SessionKey CreateFallbackSessionKey(EndPoint? remoteEndPoint)
     {
         if (remoteEndPoint is DnsEndPoint dns)
         {
@@ -213,7 +213,7 @@ public class SessionManager : ISessionManager
         };
     }
 
-    private static string FormatIpAddress(IPAddress address)
+    protected static string FormatIpAddress(IPAddress address)
     {
         if (address.IsIPv4MappedToIPv6)
         {
