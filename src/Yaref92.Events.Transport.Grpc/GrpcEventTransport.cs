@@ -12,12 +12,22 @@ namespace Yaref92.Events.Transport.Grpc;
 
 public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposable
 {
+    private const string PlatformAndroid = "android";
+    private const string PlatformWindows = "windows";
+
+    internal enum TransportMode
+    {
+        Grpc,
+        WebRtcDataChannel,
+    }
+
     private readonly int _listenPort;
     private readonly IEventSerializer _serializer;
     private readonly ConcurrentDictionary<Guid, StreamRegistration> _activeStreams = new();
     private readonly ConcurrentBag<GrpcChannel> _channels = new();
     private Task? _disposeTask;
     private int _disposeState;
+    private string? _targetPlatform;
 
     internal ISessionManager SessionManager { get; }
 
@@ -31,12 +41,23 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
 
     public event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
 
+    public string? TargetPlatform
+    {
+        get => _targetPlatform;
+        set
+        {
+            _targetPlatform = value;
+            SessionManager.Options.TargetPlatform = value;
+        }
+    }
+
     public GrpcEventTransport(int listenPort, ISessionManager sessionManager, IEventSerializer? serializer = null)
     {
         _listenPort = listenPort;
         SessionManager = sessionManager;
         _serializer = serializer ?? new JsonEventSerializer();
         AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+        EnsureLocalPlatform();
     }
 #if !ANDROID && !NOT_ANDROID
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
@@ -66,12 +87,75 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
             SessionManager.HydrateAnonymousSessionId(sessionKey, new DnsEndPoint(host, port));
         }
 
-#if NOT_ANDROID
-        if (await TryConnectToPeerViaWebRtcAsync(host, port, cancellationToken).ConfigureAwait(false))
+        var transportMode = ResolveTransportMode(sessionKey);
+
+        if (transportMode == TransportMode.WebRtcDataChannel
+            && await TryConnectToPeerViaWebRtcAsync(host, port, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
+
+        await ConnectToPeerViaGrpcAsync(host, port, cancellationToken).ConfigureAwait(false);
+    }
+
+    private TransportMode ResolveTransportMode(SessionKey sessionKey)
+    {
+        if (RequiresServerBasedConnection(sessionKey))
+        {
+            return TransportMode.Grpc;
+        }
+
+        return ShouldUseWebRtcForTarget() ? TransportMode.WebRtcDataChannel : TransportMode.Grpc;
+    }
+
+    private bool RequiresServerBasedConnection(SessionKey sessionKey)
+    {
+        var options = SessionManager.Options;
+        if (!options.RequireAuthentication)
+        {
+            return false;
+        }
+
+        if (!sessionKey.IsAnonymousKey)
+        {
+            return true;
+        }
+
+        return options.DoAnonymousSessionsRequireAuthentication;
+    }
+
+    private bool ShouldUseWebRtcForTarget()
+    {
+        var targetPlatform = _targetPlatform ?? SessionManager.Options.TargetPlatform;
+        return IsPlatform(targetPlatform, PlatformAndroid);
+    }
+
+    private void EnsureLocalPlatform()
+    {
+        if (!string.IsNullOrWhiteSpace(SessionManager.Options.LocalPlatform))
+        {
+            return;
+        }
+
+        SessionManager.Options.LocalPlatform = ResolveLocalPlatform();
+    }
+
+    private static string? ResolveLocalPlatform()
+    {
+#if ANDROID
+        return PlatformAndroid;
+#else
+        return OperatingSystem.IsWindows() ? PlatformWindows : null;
 #endif
+    }
+
+    private static bool IsPlatform(string? platform, string expected)
+    {
+        return string.Equals(platform, expected, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private Task ConnectToPeerViaGrpcAsync(string host, int port, CancellationToken cancellationToken)
+    {
         var channel = GrpcChannel.ForAddress($"http://{host}:{port}");
         _channels.Add(channel);
 
@@ -80,6 +164,8 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         var registration = RegisterStream(call.RequestStream);
         _ = ProcessIncomingStreamAsync(call.ResponseStream, registration, cancellationToken)
             .ContinueWith(_ => UnregisterStream(registration), TaskScheduler.Default);
+
+        return Task.CompletedTask;
     }
 
     public async Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent

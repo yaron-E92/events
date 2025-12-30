@@ -9,6 +9,7 @@ namespace Yaref92.Events.Transport.Grpc;
 
 public sealed partial class GrpcEventTransport
 {
+    private const int WebRtcAnswerTimeoutSeconds = 5;
     private readonly ConcurrentDictionary<Guid, WebRtcSession> _webRtcSessions = new();
     private TcpListener? _signalingListener;
     private CancellationTokenSource? _signalingCts;
@@ -77,7 +78,7 @@ public sealed partial class GrpcEventTransport
             switch (message.Type)
             {
                 case SignalMessage.OfferType:
-                    session = new WebRtcSession(this, stream);
+                    session = new WebRtcSession(this, stream, ownsStream: false);
                     _webRtcSessions.TryAdd(session.Id, session);
                     await session.ConnectAsync(message, timeout: null, cancellationToken).ConfigureAwait(false);
                     break;
@@ -133,19 +134,70 @@ public sealed partial class GrpcEventTransport
         }
     }
 
+    private async Task<bool> TryConnectToPeerViaWebRtcAsync(string host, int port, CancellationToken cancellationToken)
+    {
+        TcpClient? client = null;
+        WebRtcSession? session = null;
+        var connected = false;
+
+        try
+        {
+            client = new TcpClient();
+            await client.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
+            NetworkStream stream = client.GetStream();
+            session = new WebRtcSession(this, stream, ownsStream: true, client);
+            _webRtcSessions.TryAdd(session.Id, session);
+            _ = Task.Run(() => session.ReceiveSignalingMessagesAsync(cancellationToken), cancellationToken);
+
+            var timeout = TimeSpan.FromSeconds(WebRtcAnswerTimeoutSeconds);
+            connected = await session.ConnectAsync(offer: null, timeout, cancellationToken).ConfigureAwait(false);
+            if (!connected)
+            {
+                return false;
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+        finally
+        {
+            if (session is null)
+            {
+                client?.Dispose();
+            }
+            else if (!connected || !session.IsActive)
+            {
+                _webRtcSessions.TryRemove(session.Id, out var _);
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
     private sealed class WebRtcSession : IDataChannelSession
     {
         private readonly GrpcEventTransport _transport;
         private readonly NetworkStream _stream;
         private readonly RTCPeerConnection _peerConnection;
         private readonly SemaphoreSlim _sendLock = new(1, 1);
+        private readonly bool _ownsStream;
+        private readonly TcpClient? _client;
+        private readonly TaskCompletionSource<bool> _answerReceived = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private RTCDataChannel? _dataChannel;
         private StreamRegistration? _registration;
 
-        public WebRtcSession(GrpcEventTransport transport, NetworkStream stream)
+        public WebRtcSession(GrpcEventTransport transport, NetworkStream stream, bool ownsStream, TcpClient? client = null)
         {
             _transport = transport;
             _stream = stream;
+            _ownsStream = ownsStream;
+            _client = client;
             _peerConnection = new RTCPeerConnection(new RTCConfiguration
             {
                 iceServers = new List<RTCIceServer>
@@ -179,15 +231,65 @@ public sealed partial class GrpcEventTransport
 
         public Guid Id { get; } = Guid.NewGuid();
 
-        public async Task<bool> ConnectAsync(SignalMessage? offer, TimeSpan? timeout, CancellationToken cancellationToken)
+        public bool IsActive { get; private set; } = true;
+
+        public Task<bool> ConnectAsync(SignalMessage? offer, TimeSpan? timeout, CancellationToken cancellationToken)
         {
             if (offer is null)
             {
-                return false;
+                var connectTimeout = timeout ?? TimeSpan.FromSeconds(WebRtcAnswerTimeoutSeconds);
+                return InitializeOfferAsync(connectTimeout, cancellationToken);
             }
 
-            await HandleOfferAsync(offer, cancellationToken).ConfigureAwait(false);
-            return true;
+            return ConnectAsAnswererAsync(offer, cancellationToken);
+        }
+
+        public async Task<bool> InitializeOfferAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            _dataChannel = _peerConnection.createDataChannel("events", new RTCDataChannelInit());
+            HookDataChannel(_dataChannel);
+
+            var offer = _peerConnection.createOffer(null);
+            await _peerConnection.setLocalDescription(offer).ConfigureAwait(false);
+
+            await SendAsync(new SignalMessage
+            {
+                Type = SignalMessage.OfferType,
+                Sdp = offer.sdp,
+            }, cancellationToken).ConfigureAwait(false);
+
+            return await WaitForAnswerAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task ReceiveSignalingMessagesAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                SignalMessage? message;
+                try
+                {
+                    message = await WebRtcSignaling.ReadMessageAsync(_stream, cancellationToken).ConfigureAwait(false);
+                }
+                catch (EndOfStreamException)
+                {
+                    break;
+                }
+
+                if (message is null)
+                {
+                    break;
+                }
+
+                switch (message.Type)
+                {
+                    case SignalMessage.AnswerType:
+                        await HandleAnswerAsync(message, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case SignalMessage.CandidateType:
+                        HandleCandidate(message);
+                        break;
+                }
+            }
         }
 
         public async Task HandleOfferAsync(SignalMessage offer, CancellationToken cancellationToken)
@@ -209,6 +311,24 @@ public sealed partial class GrpcEventTransport
             }, cancellationToken).ConfigureAwait(false);
         }
 
+        public async Task HandleAnswerAsync(SignalMessage answer, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(answer.Sdp))
+            {
+                return;
+            }
+
+            var answerDescription = new RTCSessionDescriptionInit
+            {
+                type = RTCSdpType.answer,
+                sdp = answer.Sdp,
+            };
+
+            _peerConnection.setRemoteDescription(answerDescription);
+            _answerReceived.TrySetResult(true);
+            await Task.CompletedTask.ConfigureAwait(false);
+        }
+
         public void HandleCandidate(SignalMessage candidate)
         {
             if (string.IsNullOrWhiteSpace(candidate.Candidate))
@@ -228,12 +348,19 @@ public sealed partial class GrpcEventTransport
 
         public async ValueTask DisposeAsync()
         {
+            IsActive = false;
             _transport.UnregisterDataChannelSession(_registration, "session disposed");
             _registration = null;
 
             _dataChannel?.close();
             _peerConnection.close();
             _sendLock.Dispose();
+
+            if (_ownsStream)
+            {
+                await _stream.DisposeAsync().ConfigureAwait(false);
+                _client?.Dispose();
+            }
         }
 
         private void HookDataChannel(RTCDataChannel channel)
@@ -298,6 +425,29 @@ public sealed partial class GrpcEventTransport
             {
                 _sendLock.Release();
             }
+        }
+
+        private async Task<bool> WaitForAnswerAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeout);
+
+            try
+            {
+                await _answerReceived.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _answerReceived.TrySetResult(false);
+                return false;
+            }
+        }
+
+        private async Task<bool> ConnectAsAnswererAsync(SignalMessage offer, CancellationToken cancellationToken)
+        {
+            await HandleOfferAsync(offer, cancellationToken).ConfigureAwait(false);
+            return true;
         }
     }
 

@@ -39,7 +39,9 @@ public static class SessionFrameContract
         var payload = new SessionAuthenticationPayload(
             options.RequireAuthentication ? ResolveSecret(authenticationSecret, options) : null,
             options.CallbackHost,
-            options.CallbackPort > 0 ? options.CallbackPort : null);
+            options.CallbackPort > 0 ? options.CallbackPort : null,
+            options.LocalPlatform,
+            options.TargetPlatform);
 
         var payloadJson = JsonSerializer.Serialize(payload, AuthPayloadSerializerOptions);
         return SessionFrame.CreateAuth(sessionToken, payloadJson);
@@ -230,9 +232,14 @@ public static class SessionFrameContract
         }
         catch (JsonException)
         {
-            return new SessionAuthenticationPayload(payload, null, null);
+            return new SessionAuthenticationPayload(payload, null, null, null, null);
         }
     }
 }
 
-public sealed record SessionAuthenticationPayload(string? Secret, string? CallbackHost, int? CallbackPort);
+public sealed record SessionAuthenticationPayload(
+    string? Secret,
+    string? CallbackHost,
+    int? CallbackPort,
+    string? LocalPlatform,
+    string? TargetPlatform);
