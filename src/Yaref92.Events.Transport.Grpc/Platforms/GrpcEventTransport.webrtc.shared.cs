@@ -1,4 +1,6 @@
 #if ANDROID || NOT_ANDROID
+using System.Diagnostics;
+
 using Google.Protobuf;
 using Grpc.Core;
 using SIPSorcery.Net;
@@ -47,6 +49,23 @@ public sealed partial class GrpcEventTransport
         {
             return new TransportFrame();
         }
+    }
+
+    private StreamRegistration RegisterDataChannelSession(RTCDataChannel channel)
+    {
+        var writer = new WebRtcStreamWriter(channel);
+        return RegisterStream(writer);
+    }
+
+    private void UnregisterDataChannelSession(StreamRegistration? registration, string reason)
+    {
+        if (registration is null)
+        {
+            return;
+        }
+
+        UnregisterStream(registration);
+        Trace.TraceInformation("Data channel session {0} closed: {1}", registration.Id, reason);
     }
 }
 #endif
