@@ -11,11 +11,12 @@ public sealed partial class GrpcEventTransport
 {
     private IHost? _host;
 
-    public Task StartListeningAsync(CancellationToken cancellationToken = default)
+    public async Task StartListeningAsync(CancellationToken cancellationToken = default)
     {
         if (_host is not null)
         {
-            return Task.CompletedTask;
+            await StartWebRtcListenerAsync(cancellationToken).ConfigureAwait(false);
+            return;
         }
 
         _host = Host.CreateDefaultBuilder()
@@ -45,11 +46,13 @@ public sealed partial class GrpcEventTransport
             })
             .Build();
 
-        return _host.StartAsync(cancellationToken);
+        await _host.StartAsync(cancellationToken).ConfigureAwait(false);
+        await StartWebRtcListenerAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task DisposeAsyncCore()
     {
+        await StopWebRtcListenerAsync().ConfigureAwait(false);
         if (_host is not null)
         {
             await _host.StopAsync().ConfigureAwait(false);

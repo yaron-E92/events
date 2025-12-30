@@ -50,7 +50,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         return ConnectToPeerAsync(Guid.Empty, host, port, cancellationToken);
     }
 
-    public Task ConnectToPeerAsync(Guid userId, string host, int port, CancellationToken cancellationToken = default)
+    public async Task ConnectToPeerAsync(Guid userId, string host, int port, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(host))
         {
@@ -66,6 +66,12 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
             SessionManager.HydrateAnonymousSessionId(sessionKey, new DnsEndPoint(host, port));
         }
 
+#if NOT_ANDROID
+        if (await TryConnectToPeerViaWebRtcAsync(host, port, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+#endif
         var channel = GrpcChannel.ForAddress($"http://{host}:{port}");
         _channels.Add(channel);
 
@@ -74,7 +80,6 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         var registration = RegisterStream(call.RequestStream);
         _ = ProcessIncomingStreamAsync(call.ResponseStream, registration, cancellationToken)
             .ContinueWith(_ => UnregisterStream(registration), TaskScheduler.Default);
-        return Task.CompletedTask;
     }
 
     public async Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent

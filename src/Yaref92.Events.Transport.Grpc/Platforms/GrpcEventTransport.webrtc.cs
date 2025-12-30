@@ -1,4 +1,4 @@
-﻿#if ANDROID
+#if NOT_ANDROID
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -9,23 +9,59 @@ namespace Yaref92.Events.Transport.Grpc;
 
 public sealed partial class GrpcEventTransport
 {
+    private const int WebRtcSignalingPortOffset = 1;
+    private const int WebRtcAnswerTimeoutSeconds = 5;
     private readonly ConcurrentDictionary<Guid, WebRtcSession> _webRtcSessions = new();
     private TcpListener? _signalingListener;
     private CancellationTokenSource? _signalingCts;
     private Task? _signalingLoop;
 
-    public Task StartListeningAsync(CancellationToken cancellationToken = default)
+    private async Task StartWebRtcListenerAsync(CancellationToken cancellationToken)
     {
         if (_signalingListener is not null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         _signalingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _signalingListener = new TcpListener(IPAddress.Any, _listenPort);
+        _signalingListener = new TcpListener(IPAddress.Any, _listenPort + WebRtcSignalingPortOffset);
         _signalingListener.Start();
         _signalingLoop = Task.Run(() => AcceptSignalingConnectionsAsync(_signalingCts.Token), _signalingCts.Token);
-        return Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
+    }
+
+    private async Task StopWebRtcListenerAsync()
+    {
+        if (_signalingCts is not null)
+        {
+            _signalingCts.Cancel();
+            _signalingCts.Dispose();
+            _signalingCts = null;
+        }
+
+        if (_signalingListener is not null)
+        {
+            _signalingListener.Stop();
+            _signalingListener = null;
+        }
+
+        if (_signalingLoop is not null)
+        {
+            try
+            {
+                await _signalingLoop.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            _signalingLoop = null;
+        }
+
+        foreach (var session in _webRtcSessions.Values)
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private async Task AcceptSignalingConnectionsAsync(CancellationToken cancellationToken)
@@ -77,9 +113,12 @@ public sealed partial class GrpcEventTransport
             switch (message.Type)
             {
                 case SignalMessage.OfferType:
-                    session = new WebRtcSession(this, stream);
+                    session = new WebRtcSession(this, stream, ownsStream: false);
                     _webRtcSessions.TryAdd(session.Id, session);
                     await session.HandleOfferAsync(message, cancellationToken).ConfigureAwait(false);
+                    break;
+                case SignalMessage.AnswerType when session is not null:
+                    await session.HandleAnswerAsync(message, cancellationToken).ConfigureAwait(false);
                     break;
                 case SignalMessage.CandidateType when session is not null:
                     session.HandleCandidate(message);
@@ -94,42 +133,48 @@ public sealed partial class GrpcEventTransport
         }
     }
 
-    private async Task DisposeAsyncCore()
+    private async Task<bool> TryConnectToPeerViaWebRtcAsync(string host, int port, CancellationToken cancellationToken)
     {
-        if (_signalingCts is not null)
-        {
-            _signalingCts.Cancel();
-            _signalingCts.Dispose();
-            _signalingCts = null;
-        }
+        TcpClient? client = null;
+        WebRtcSession? session = null;
+        var connected = false;
 
-        if (_signalingListener is not null)
+        try
         {
-            _signalingListener.Stop();
-            _signalingListener = null;
-        }
+            client = new TcpClient();
+            await client.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
+            NetworkStream stream = client.GetStream();
+            session = new WebRtcSession(this, stream, ownsStream: true, client);
+            _webRtcSessions.TryAdd(session.Id, session);
+            _ = Task.Run(() => session.ReceiveSignalingMessagesAsync(cancellationToken), cancellationToken);
 
-        if (_signalingLoop is not null)
-        {
-            try
+            var timeout = TimeSpan.FromSeconds(WebRtcAnswerTimeoutSeconds);
+            connected = await session.InitializeOfferAsync(timeout, cancellationToken).ConfigureAwait(false);
+            if (!connected)
             {
-                await _signalingLoop.ConfigureAwait(false);
+                return false;
             }
-            catch (OperationCanceledException)
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+        finally
+        {
+            if (session is null)
             {
+                client?.Dispose();
             }
-
-            _signalingLoop = null;
-        }
-
-        foreach (var session in _webRtcSessions.Values)
-        {
-            await session.DisposeAsync().ConfigureAwait(false);
-        }
-
-        foreach (var channel in _channels)
-        {
-            channel.Dispose();
+            else if (!connected || !session.IsActive)
+            {
+                _webRtcSessions.TryRemove(session.Id, out var _);
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -139,13 +184,18 @@ public sealed partial class GrpcEventTransport
         private readonly NetworkStream _stream;
         private readonly RTCPeerConnection _peerConnection;
         private readonly SemaphoreSlim _sendLock = new(1, 1);
+        private readonly bool _ownsStream;
+        private readonly TcpClient? _client;
+        private readonly TaskCompletionSource<bool> _answerReceived = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private RTCDataChannel? _dataChannel;
         private StreamRegistration? _registration;
 
-        public WebRtcSession(GrpcEventTransport transport, NetworkStream stream)
+        public WebRtcSession(GrpcEventTransport transport, NetworkStream stream, bool ownsStream, TcpClient? client = null)
         {
             _transport = transport;
             _stream = stream;
+            _ownsStream = ownsStream;
+            _client = client;
             _peerConnection = new RTCPeerConnection(new RTCConfiguration
             {
                 iceServers = new List<RTCIceServer>
@@ -179,6 +229,56 @@ public sealed partial class GrpcEventTransport
 
         public Guid Id { get; } = Guid.NewGuid();
 
+        public bool IsActive { get; private set; } = true;
+
+        public async Task<bool> InitializeOfferAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            _dataChannel = _peerConnection.createDataChannel("events", new RTCDataChannelInit());
+            HookDataChannel(_dataChannel);
+
+            var offer = _peerConnection.createOffer(null);
+            await _peerConnection.setLocalDescription(offer).ConfigureAwait(false);
+
+            await SendAsync(new SignalMessage
+            {
+                Type = SignalMessage.OfferType,
+                Sdp = offer.sdp,
+            }, cancellationToken).ConfigureAwait(false);
+
+            return await WaitForAnswerAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task ReceiveSignalingMessagesAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                SignalMessage? message;
+                try
+                {
+                    message = await ReadSignalMessageAsync(_stream, cancellationToken).ConfigureAwait(false);
+                }
+                catch (EndOfStreamException)
+                {
+                    break;
+                }
+
+                if (message is null)
+                {
+                    break;
+                }
+
+                switch (message.Type)
+                {
+                    case SignalMessage.AnswerType:
+                        await HandleAnswerAsync(message, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case SignalMessage.CandidateType:
+                        HandleCandidate(message);
+                        break;
+                }
+            }
+        }
+
         public async Task HandleOfferAsync(SignalMessage offer, CancellationToken cancellationToken)
         {
             var offerDescription = new RTCSessionDescriptionInit
@@ -198,6 +298,24 @@ public sealed partial class GrpcEventTransport
             }, cancellationToken).ConfigureAwait(false);
         }
 
+        public async Task HandleAnswerAsync(SignalMessage answer, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(answer.Sdp))
+            {
+                return;
+            }
+
+            var answerDescription = new RTCSessionDescriptionInit
+            {
+                type = RTCSdpType.answer,
+                sdp = answer.Sdp,
+            };
+
+            _peerConnection.setRemoteDescription(answerDescription);
+            _answerReceived.TrySetResult(true);
+            await Task.CompletedTask.ConfigureAwait(false);
+        }
+
         public void HandleCandidate(SignalMessage candidate)
         {
             if (string.IsNullOrWhiteSpace(candidate.Candidate))
@@ -209,7 +327,7 @@ public sealed partial class GrpcEventTransport
             {
                 candidate = candidate.Candidate,
                 sdpMid = candidate.SdpMid,
-                sdpMLineIndex = (ushort) (candidate.SdpMLineIndex ?? 0),
+                sdpMLineIndex = (ushort)(candidate.SdpMLineIndex ?? 0),
             };
 
             _peerConnection.addIceCandidate(iceCandidate);
@@ -217,6 +335,7 @@ public sealed partial class GrpcEventTransport
 
         public async ValueTask DisposeAsync()
         {
+            IsActive = false;
             if (_registration is not null)
             {
                 _transport.UnregisterStream(_registration);
@@ -226,6 +345,12 @@ public sealed partial class GrpcEventTransport
             _dataChannel?.close();
             _peerConnection.close();
             _sendLock.Dispose();
+
+            if (_ownsStream)
+            {
+                await _stream.DisposeAsync().ConfigureAwait(false);
+                _client?.Dispose();
+            }
         }
 
         private void HookDataChannel(RTCDataChannel channel)
@@ -249,7 +374,6 @@ public sealed partial class GrpcEventTransport
                 }
 
                 TransportFrame frame = EnvelopeToFrame(envelope);
-
                 await _transport.HandleIncomingFrameAsync(frame, _registration).ConfigureAwait(false);
             };
 
@@ -282,7 +406,23 @@ public sealed partial class GrpcEventTransport
                 _sendLock.Release();
             }
         }
-    }
 
+        private async Task<bool> WaitForAnswerAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeout);
+
+            try
+            {
+                await _answerReceived.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _answerReceived.TrySetResult(false);
+                return false;
+            }
+        }
+    }
 }
 #endif
