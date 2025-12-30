@@ -275,15 +275,12 @@ public sealed partial class GrpcEventTransport
                     return;
                 }
 
-                TransportFrame frame;
-                try
-                {
-                    frame = TransportFrame.Parser.ParseFrom(data);
-                }
-                catch (InvalidProtocolBufferException)
+                if (!DataChannelProtocol.TryDecode(data, out var envelope))
                 {
                     return;
                 }
+
+                TransportFrame frame = EnvelopeToFrame(envelope);
 
                 await _transport.HandleIncomingFrameAsync(frame, _registration).ConfigureAwait(false);
             };
@@ -332,9 +329,32 @@ public sealed partial class GrpcEventTransport
 
         public Task WriteAsync(TransportFrame message)
         {
-            byte[] payload = message.ToByteArray();
+            DataChannelEnvelope envelope = FrameToEnvelope(message);
+            byte[] payload = DataChannelProtocol.Encode(envelope);
             _channel.send(payload);
             return Task.CompletedTask;
+        }
+    }
+
+    private static DataChannelEnvelope FrameToEnvelope(TransportFrame frame)
+    {
+        return new DataChannelEnvelope
+        {
+            Type = "transport_frame",
+            CorrelationId = frame.EventId ?? string.Empty,
+            Payload = frame.ToByteString(),
+        };
+    }
+
+    private static TransportFrame EnvelopeToFrame(DataChannelEnvelope envelope)
+    {
+        try
+        {
+            return TransportFrame.Parser.ParseFrom(envelope.Payload);
+        }
+        catch (InvalidProtocolBufferException)
+        {
+            return new TransportFrame();
         }
     }
 

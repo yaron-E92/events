@@ -44,5 +44,6 @@
 
   <ItemGroup>
     <Protobuf Include="Protos/event_transport.proto" GrpcServices="Server,Client" />
+    <Protobuf Include="Protos/data_channel.proto" />
   </ItemGroup>
 </Project>
