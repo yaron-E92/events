@@ -14,6 +14,8 @@ using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transport.Grpc;
 
+using Platform = Yaref92.Events.Sessions.Platform;
+
 namespace EventMessenger.ViewModels;
 
 public class MainViewModel : INotifyPropertyChanged

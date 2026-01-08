@@ -12,4 +12,5 @@ public interface ISessionManager
 
     IResilientPeerSession GetOrGenerate(SessionKey sessionKey, bool isAnonymous = false);
     void HydrateAnonymousSessionId(SessionKey sessionKey, EndPoint? remoteEndPoint);
+    IResilientPeerSession ResolveSession(EndPoint? remoteEndPoint, SessionFrame authFrame);
 }
