@@ -13,7 +13,6 @@ namespace Yaref92.Events.Transport.Grpc;
 public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposable
 {
     private const string PlatformAndroid = "android";
-    private const string PlatformWindows = "windows";
 
     internal enum TransportMode
     {
@@ -25,6 +24,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
     private readonly IEventSerializer _serializer;
     private readonly ConcurrentDictionary<Guid, StreamRegistration> _activeStreams = new();
     private readonly ConcurrentBag<GrpcChannel> _channels = new();
+    private readonly string? _authenticationSecret;
     private Task? _disposeTask;
     private int _disposeState;
     private string? _targetPlatform;
@@ -51,13 +51,28 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         }
     }
 
-    public GrpcEventTransport(int listenPort, ISessionManager sessionManager, IEventSerializer? serializer = null)
+    public GrpcEventTransport(
+        int listenPort,
+        ISessionManager sessionManager,
+        IEventSerializer? serializer = null,
+        string? authenticationSecret = null,
+        string? localPlatform = null,
+        string? targetPlatform = null)
     {
         _listenPort = listenPort;
         SessionManager = sessionManager;
         _serializer = serializer ?? new JsonEventSerializer();
+        _authenticationSecret = authenticationSecret;
         AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-        EnsureLocalPlatform();
+        if (!string.IsNullOrWhiteSpace(localPlatform))
+        {
+            SessionManager.Options.LocalPlatform = localPlatform;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetPlatform))
+        {
+            TargetPlatform = targetPlatform;
+        }
     }
 #if !ANDROID && !NOT_ANDROID
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
@@ -130,23 +145,10 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         return IsPlatform(targetPlatform, PlatformAndroid);
     }
 
-    private void EnsureLocalPlatform()
+    private SessionFrame CreateAuthFrame(SessionKey sessionKey)
     {
-        if (!string.IsNullOrWhiteSpace(SessionManager.Options.LocalPlatform))
-        {
-            return;
-        }
-
-        SessionManager.Options.LocalPlatform = ResolveLocalPlatform();
-    }
-
-    private static string? ResolveLocalPlatform()
-    {
-#if ANDROID
-        return PlatformAndroid;
-#else
-        return OperatingSystem.IsWindows() ? PlatformWindows : null;
-#endif
+        var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, SessionManager.Options, _authenticationSecret);
+        return SessionFrameContract.CreateAuthFrame(sessionToken, SessionManager.Options, _authenticationSecret);
     }
 
     private static bool IsPlatform(string? platform, string expected)
