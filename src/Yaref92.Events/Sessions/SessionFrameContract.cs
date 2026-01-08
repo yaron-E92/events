@@ -8,6 +8,7 @@ public static class SessionFrameContract
     private static readonly JsonSerializerOptions AuthPayloadSerializerOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     public const string TokenSecretDelimiter = "||";
@@ -241,5 +242,5 @@ public sealed record SessionAuthenticationPayload(
     string? Secret,
     string? CallbackHost,
     int? CallbackPort,
-    string? LocalPlatform,
-    string? TargetPlatform);
+    Platform? LocalPlatform,
+    Platform? TargetPlatform);

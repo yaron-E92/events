@@ -11,6 +11,7 @@ using EventMessenger.Platforms.Android;
 
 using Yaref92.Events;
 using Yaref92.Events.Abstractions;
+using Yaref92.Events.Sessions;
 using Yaref92.Events.Transport.Grpc;
 
 namespace EventMessenger.ViewModels;
@@ -23,7 +24,7 @@ public class MainViewModel : INotifyPropertyChanged
     private bool _isListening;
     private string _peerHost = "localhost";
     private string _peerPort = "5050";
-    private string _selectedPeerPlatform = "Windows";
+    private Platform _selectedPeerPlatform = Platform.Windows;
     private string _myPort = "5050";
     private string _messageText = string.Empty;
 
@@ -57,9 +58,9 @@ public class MainViewModel : INotifyPropertyChanged
         set => SetProperty(ref _peerPort, value);
     }
 
-    public IReadOnlyList<string> PeerPlatforms { get; } = new[] { "Android", "Windows" };
+    public IReadOnlyList<Platform> PeerPlatforms { get; } = new[] { Platform.Android, Platform.Windows };
 
-    public string SelectedPeerPlatform
+    public Platform SelectedPeerPlatform
     {
         get => _selectedPeerPlatform;
         set => SetProperty(ref _selectedPeerPlatform, value);

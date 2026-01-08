@@ -5,6 +5,8 @@ using System.Net.Sockets;
 
 using SIPSorcery.Net;
 
+using Yaref92.Events.Sessions;
+
 namespace Yaref92.Events.Transport.Grpc;
 
 public sealed partial class GrpcEventTransport
@@ -134,7 +136,7 @@ public sealed partial class GrpcEventTransport
         }
     }
 
-    private async Task<bool> TryConnectToPeerViaWebRtcAsync(string host, int port, CancellationToken cancellationToken)
+    private async Task<bool> TryConnectToPeerViaWebRtcAsync(SessionKey sessionKey, string host, int port, CancellationToken cancellationToken)
     {
         TcpClient? client = null;
         WebRtcSession? session = null;
@@ -145,7 +147,7 @@ public sealed partial class GrpcEventTransport
             client = new TcpClient();
             await client.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
             NetworkStream stream = client.GetStream();
-            session = new WebRtcSession(this, stream, ownsStream: true, client);
+            session = new WebRtcSession(this, stream, ownsStream: true, client, sessionKey);
             _webRtcSessions.TryAdd(session.Id, session);
             _ = Task.Run(() => session.ReceiveSignalingMessagesAsync(cancellationToken), cancellationToken);
 
@@ -189,15 +191,17 @@ public sealed partial class GrpcEventTransport
         private readonly bool _ownsStream;
         private readonly TcpClient? _client;
         private readonly TaskCompletionSource<bool> _answerReceived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly SessionKey? _sessionKey;
         private RTCDataChannel? _dataChannel;
         private StreamRegistration? _registration;
 
-        public WebRtcSession(GrpcEventTransport transport, NetworkStream stream, bool ownsStream, TcpClient? client = null)
+        public WebRtcSession(GrpcEventTransport transport, NetworkStream stream, bool ownsStream, TcpClient? client = null, SessionKey? sessionKey = null)
         {
             _transport = transport;
             _stream = stream;
             _ownsStream = ownsStream;
             _client = client;
+            _sessionKey = sessionKey;
             _peerConnection = new RTCPeerConnection(new RTCConfiguration
             {
                 iceServers = new List<RTCIceServer>
@@ -373,6 +377,10 @@ public sealed partial class GrpcEventTransport
                 }
 
                 _registration = _transport.RegisterDataChannelSession(channel);
+                if (_sessionKey is not null)
+                {
+                    _ = _transport.SendAuthFrameAsync(_registration, _sessionKey);
+                }
             };
 
             channel.onmessage += async (_, protocol, data) =>
