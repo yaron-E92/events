@@ -12,9 +12,6 @@ namespace Yaref92.Events.Transport.Grpc;
 
 public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposable
 {
-    private const string PlatformAndroid = "android";
-    private const string PlatformWindows = "windows";
-
     internal enum TransportMode
     {
         Grpc,
@@ -25,9 +22,10 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
     private readonly IEventSerializer _serializer;
     private readonly ConcurrentDictionary<Guid, StreamRegistration> _activeStreams = new();
     private readonly ConcurrentBag<GrpcChannel> _channels = new();
+    private readonly string? _authenticationSecret;
     private Task? _disposeTask;
     private int _disposeState;
-    private string? _targetPlatform;
+    private Platform? _targetPlatform;
 
     internal ISessionManager SessionManager { get; }
 
@@ -41,7 +39,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
 
     public event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
 
-    public string? TargetPlatform
+    public Platform? TargetPlatform
     {
         get => _targetPlatform;
         set
@@ -51,13 +49,28 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         }
     }
 
-    public GrpcEventTransport(int listenPort, ISessionManager sessionManager, IEventSerializer? serializer = null)
+    public GrpcEventTransport(
+        int listenPort,
+        ISessionManager sessionManager,
+        IEventSerializer? serializer = null,
+        string? authenticationSecret = null,
+        Platform? localPlatform = null,
+        Platform? targetPlatform = null)
     {
         _listenPort = listenPort;
         SessionManager = sessionManager;
         _serializer = serializer ?? new JsonEventSerializer();
+        _authenticationSecret = authenticationSecret;
         AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-        EnsureLocalPlatform();
+        if (localPlatform.HasValue)
+        {
+            SessionManager.Options.LocalPlatform = localPlatform;
+        }
+
+        if (targetPlatform.HasValue)
+        {
+            TargetPlatform = targetPlatform;
+        }
     }
 #if !ANDROID && !NOT_ANDROID
     public Task StartListeningAsync(CancellationToken cancellationToken = default)
@@ -90,12 +103,12 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         var transportMode = ResolveTransportMode(sessionKey);
 
         if (transportMode == TransportMode.WebRtcDataChannel
-            && await TryConnectToPeerViaWebRtcAsync(host, port, cancellationToken).ConfigureAwait(false))
+            && await TryConnectToPeerViaWebRtcAsync(sessionKey, host, port, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
 
-        await ConnectToPeerViaGrpcAsync(host, port, cancellationToken).ConfigureAwait(false);
+        await ConnectToPeerViaGrpcAsync(sessionKey, host, port, cancellationToken).ConfigureAwait(false);
     }
 
     private TransportMode ResolveTransportMode(SessionKey sessionKey)
@@ -127,34 +140,22 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
     private bool ShouldUseWebRtcForTarget()
     {
         var targetPlatform = _targetPlatform ?? SessionManager.Options.TargetPlatform;
-        return IsPlatform(targetPlatform, PlatformAndroid);
+        return targetPlatform == Platform.Android;
     }
 
-    private void EnsureLocalPlatform()
+    private TransportFrame CreateAuthFrame(SessionKey sessionKey)
     {
-        if (!string.IsNullOrWhiteSpace(SessionManager.Options.LocalPlatform))
+        var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, SessionManager.Options, _authenticationSecret);
+        var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, SessionManager.Options, _authenticationSecret);
+        return new TransportFrame
         {
-            return;
-        }
-
-        SessionManager.Options.LocalPlatform = ResolveLocalPlatform();
+            EventId = authFrame.Token ?? string.Empty,
+            EventJson = authFrame.Payload,
+            Kind = FrameKind.Auth,
+        };
     }
 
-    private static string? ResolveLocalPlatform()
-    {
-#if ANDROID
-        return PlatformAndroid;
-#else
-        return OperatingSystem.IsWindows() ? PlatformWindows : null;
-#endif
-    }
-
-    private static bool IsPlatform(string? platform, string expected)
-    {
-        return string.Equals(platform, expected, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private Task ConnectToPeerViaGrpcAsync(string host, int port, CancellationToken cancellationToken)
+    private async Task ConnectToPeerViaGrpcAsync(SessionKey sessionKey, string host, int port, CancellationToken cancellationToken)
     {
         var channel = GrpcChannel.ForAddress($"http://{host}:{port}");
         _channels.Add(channel);
@@ -162,10 +163,9 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         var client = new EventStream.EventStreamClient(channel);
         var call = client.Connect(cancellationToken: cancellationToken);
         var registration = RegisterStream(call.RequestStream);
+        await SendAuthFrameAsync(registration, sessionKey).ConfigureAwait(false);
         _ = ProcessIncomingStreamAsync(call.ResponseStream, registration, cancellationToken)
             .ContinueWith(_ => UnregisterStream(registration), TaskScheduler.Default);
-
-        return Task.CompletedTask;
     }
 
     public async Task PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default) where T : class, IDomainEvent
@@ -230,7 +230,18 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
 
     private async Task HandleIncomingFrameAsync(TransportFrame frame, StreamRegistration registration)
     {
+        if (frame.Kind == FrameKind.Auth)
+        {
+            HandleAuthFrame(frame, registration);
+            return;
+        }
+
         if (frame.Kind != FrameKind.Event)
+        {
+            return;
+        }
+
+        if (!registration.IsAuthenticated && SessionManager.Options.RequireAuthentication)
         {
             return;
         }
@@ -268,6 +279,25 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         finally
         {
             registration.WriteLock.Release();
+        }
+    }
+
+    private Task SendAuthFrameAsync(StreamRegistration registration, SessionKey sessionKey)
+    {
+        return WriteFrameAsync(registration, CreateAuthFrame(sessionKey));
+    }
+
+    private void HandleAuthFrame(TransportFrame frame, StreamRegistration registration)
+    {
+        var authFrame = SessionFrame.CreateAuth(frame.EventId ?? string.Empty, frame.EventJson);
+        try
+        {
+            SessionManager.ResolveSession(null, authFrame);
+            registration.IsAuthenticated = true;
+        }
+        catch (System.Security.Authentication.AuthenticationException)
+        {
+            registration.IsAuthenticated = false;
         }
     }
 
@@ -323,6 +353,8 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         public IAsyncStreamWriter<TransportFrame> Writer { get; }
 
         public SemaphoreSlim WriteLock { get; }
+
+        public bool IsAuthenticated { get; set; }
 
         public void Dispose()
         {

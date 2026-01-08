@@ -37,14 +37,14 @@ public sealed class ResilientSessionOptions
     public int CallbackPort { get; set; }
 
     /// <summary>
-    /// Local platform name advertised to peers during authentication.
+    /// Local platform advertised to peers during authentication.
     /// </summary>
-    public string? LocalPlatform { get; set; }
+    public Platform? LocalPlatform { get; set; }
 
     /// <summary>
     /// Target platform selection advertised to peers during authentication.
     /// </summary>
-    public string? TargetPlatform { get; set; }
+    public Platform? TargetPlatform { get; set; }
 
     /// <summary>
     /// Checks that all options are valid, returning false if not.
