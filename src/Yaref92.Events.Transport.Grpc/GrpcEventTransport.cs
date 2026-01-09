@@ -142,10 +142,20 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         return options.DoAnonymousSessionsRequireAuthentication;
     }
 
-    private bool ShouldUseWebRtcForTarget()
+    private bool ShouldUseWebRtcForTarget(Platform? targetPlatform = null)
     {
-        var targetPlatform = _targetPlatform ?? SessionManager.Options.TargetPlatform;
-        return targetPlatform == Platform.Android;
+        var resolvedTarget = targetPlatform ?? _targetPlatform ?? SessionManager.Options.TargetPlatform;
+        return resolvedTarget == Platform.Android;
+    }
+
+    private TransportMode ResolveTransportMode(SessionKey sessionKey, Platform? targetPlatform)
+    {
+        if (RequiresServerBasedConnection(sessionKey))
+        {
+            return TransportMode.Grpc;
+        }
+
+        return ShouldUseWebRtcForTarget(targetPlatform) ? TransportMode.WebRtcDataChannel : TransportMode.Grpc;
     }
 
     private TransportFrame CreateAuthFrame(SessionKey sessionKey)
@@ -251,7 +261,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
     {
         if (frame.Kind == FrameKind.Auth)
         {
-            return HandleAuthFrame(frame, registration);
+            return await HandleAuthFrameAsync(frame, registration).ConfigureAwait(false);
         }
 
         if (frame.Kind != FrameKind.Event)
@@ -307,13 +317,21 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         return WriteFrameAsync(registration, CreateAuthFrame(sessionKey));
     }
 
-    private bool HandleAuthFrame(TransportFrame frame, StreamRegistration registration)
+    private async Task<bool> HandleAuthFrameAsync(TransportFrame frame, StreamRegistration registration)
     {
         var authFrame = SessionFrame.CreateAuth(frame.EventId ?? string.Empty, frame.EventJson);
         try
         {
-            SessionManager.ResolveSession(null, authFrame);
+            var session = SessionManager.ResolveSession(null, authFrame);
             registration.IsAuthenticated = true;
+            try
+            {
+                await InitiateReverseConnectionAsync(session, authFrame).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Reverse dial is best-effort; keep inbound stream alive even if it fails.
+            }
             return true;
         }
         catch (System.Security.Authentication.AuthenticationException)
@@ -321,6 +339,31 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
             registration.IsAuthenticated = false;
             return false;
         }
+    }
+
+    private async Task InitiateReverseConnectionAsync(IResilientPeerSession session, SessionFrame authFrame)
+    {
+        if (!SessionFrameContract.TryValidateAuthentication(authFrame, SessionManager.Options, out _, out var payload))
+        {
+            return;
+        }
+
+        var sessionKey = session.Key;
+        var callbackHost = string.IsNullOrWhiteSpace(payload?.CallbackHost) ? sessionKey.Host : payload.CallbackHost;
+        var callbackPort = payload?.CallbackPort ?? sessionKey.Port;
+        if (string.IsNullOrWhiteSpace(callbackHost) || callbackPort <= 0)
+        {
+            return;
+        }
+
+        var transportMode = ResolveTransportMode(sessionKey, payload?.LocalPlatform ?? payload?.TargetPlatform);
+        if (transportMode == TransportMode.WebRtcDataChannel
+            && await TryConnectToPeerViaWebRtcAsync(sessionKey, callbackHost, callbackPort, CancellationToken.None).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await ConnectToPeerViaGrpcAsync(sessionKey, callbackHost, callbackPort, CancellationToken.None).ConfigureAwait(false);
     }
 
     private static TransportFrame CreateEventFrame<T>(T domainEvent, string eventEnvelopeJson) where T : class, IDomainEvent
