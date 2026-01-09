@@ -324,7 +324,14 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         {
             var session = SessionManager.ResolveSession(null, authFrame);
             registration.IsAuthenticated = true;
-            await InitiateReverseConnectionAsync(session, authFrame).ConfigureAwait(false);
+            try
+            {
+                await InitiateReverseConnectionAsync(session, authFrame).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Reverse dial is best-effort; keep inbound stream alive even if it fails.
+            }
             return true;
         }
         catch (System.Security.Authentication.AuthenticationException)
