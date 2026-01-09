@@ -25,6 +25,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
     private readonly string? _authenticationSecret;
     private Task? _disposeTask;
     private int _disposeState;
+    private Platform? _localPlatform;
     private Platform? _targetPlatform;
 
     internal ISessionManager SessionManager { get; }
@@ -39,9 +40,19 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
 
     public event IEventTransport.SessionInboundConnectionDroppedHandler? SessionInboundConnectionDropped;
 
+    public Platform? LocalPlatform
+    {
+        get => _localPlatform ?? SessionManager.Options.LocalPlatform;
+        set
+        {
+            _localPlatform = value;
+            SessionManager.Options.LocalPlatform = value;
+        }
+    }
+
     public Platform? TargetPlatform
     {
-        get => _targetPlatform;
+        get => _targetPlatform ?? SessionManager.Options.TargetPlatform;
         set
         {
             _targetPlatform = value;
@@ -69,7 +80,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         }
         if (localPlatform.HasValue)
         {
-            SessionManager.Options.LocalPlatform = localPlatform;
+            LocalPlatform = localPlatform;
         }
 
         if (targetPlatform.HasValue)
@@ -158,8 +169,22 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         return ShouldUseWebRtcForTarget(targetPlatform) ? TransportMode.WebRtcDataChannel : TransportMode.Grpc;
     }
 
+    private void SyncPlatformOptions()
+    {
+        if (_localPlatform.HasValue)
+        {
+            SessionManager.Options.LocalPlatform = _localPlatform;
+        }
+
+        if (_targetPlatform.HasValue)
+        {
+            SessionManager.Options.TargetPlatform = _targetPlatform;
+        }
+    }
+
     private TransportFrame CreateAuthFrame(SessionKey sessionKey)
     {
+        SyncPlatformOptions();
         var sessionToken = SessionFrameContract.CreateSessionToken(sessionKey, SessionManager.Options, _authenticationSecret);
         var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, SessionManager.Options, _authenticationSecret);
         return new TransportFrame
