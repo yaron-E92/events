@@ -62,6 +62,11 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         _serializer = serializer ?? new JsonEventSerializer();
         _authenticationSecret = authenticationSecret;
         AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+        if (!string.IsNullOrWhiteSpace(authenticationSecret)
+            && string.IsNullOrWhiteSpace(SessionManager.Options.AuthenticationToken))
+        {
+            SessionManager.Options.AuthenticationToken = authenticationSecret;
+        }
         if (localPlatform.HasValue)
         {
             SessionManager.Options.LocalPlatform = localPlatform;

@@ -12,7 +12,7 @@ public sealed class ResilientSessionOptions
     public bool RequireAuthentication { get; init; }
     public bool DoAnonymousSessionsRequireAuthentication { get; init; }
 
-    public string? AuthenticationToken { get; init; }
+    public string? AuthenticationToken { get; set; }
 
     public TimeSpan HeartbeatInterval { get; init; } = DefaultHeartbeatInterval;
 
