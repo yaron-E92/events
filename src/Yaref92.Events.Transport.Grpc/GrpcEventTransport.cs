@@ -177,7 +177,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
 
         var client = new EventStream.EventStreamClient(channel);
         var call = client.Connect(cancellationToken: cancellationToken);
-        var registration = RegisterStream(call.RequestStream);
+        var registration = RegisterStream(call.RequestStream, null);
         await SendAuthFrameAsync(registration, sessionKey).ConfigureAwait(false);
         _ = ProcessIncomingStreamAsync(call.ResponseStream, registration, cancellationToken)
             .ContinueWith(_ => UnregisterStream(registration), TaskScheduler.Default);
@@ -213,9 +213,9 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         return Task.CompletedTask;
     }
 #endif
-    private StreamRegistration RegisterStream(IAsyncStreamWriter<TransportFrame> writer)
+    private StreamRegistration RegisterStream(IAsyncStreamWriter<TransportFrame> writer, EndPoint? remoteEndPoint)
     {
-        var registration = new StreamRegistration(Guid.NewGuid(), writer);
+        var registration = new StreamRegistration(Guid.NewGuid(), writer, remoteEndPoint);
         _activeStreams.TryAdd(registration.Id, registration);
         return registration;
     }
@@ -322,7 +322,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         var authFrame = SessionFrame.CreateAuth(frame.EventId ?? string.Empty, frame.EventJson);
         try
         {
-            var session = SessionManager.ResolveSession(null, authFrame);
+            var session = SessionManager.ResolveSession(registration.RemoteEndPoint, authFrame);
             registration.IsAuthenticated = true;
             try
             {
@@ -391,7 +391,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
             IServerStreamWriter<TransportFrame> responseStream,
             ServerCallContext context)
         {
-            var registration = _transport.RegisterStream(responseStream);
+            var registration = _transport.RegisterStream(responseStream, TryParseRemoteEndPoint(context.Peer));
             try
             {
                 await _transport.ProcessIncomingStreamAsync(requestStream, registration, context.CancellationToken)
@@ -404,13 +404,86 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         }
     }
 
+    private static EndPoint? TryParseRemoteEndPoint(string? peer)
+    {
+        if (string.IsNullOrWhiteSpace(peer))
+        {
+            return null;
+        }
+
+        var schemeSeparator = peer.IndexOf(':');
+        if (schemeSeparator <= 0 || schemeSeparator == peer.Length - 1)
+        {
+            return null;
+        }
+
+        var scheme = peer[..schemeSeparator];
+        var address = peer[(schemeSeparator + 1)..];
+
+        if (!TrySplitHostPort(address, out var host, out var port))
+        {
+            return null;
+        }
+
+        if (scheme.Equals("dns", StringComparison.OrdinalIgnoreCase))
+        {
+            return new DnsEndPoint(host, port);
+        }
+
+        if (!IPAddress.TryParse(host, out var ipAddress))
+        {
+            return null;
+        }
+
+        if (scheme.Equals("ipv4", StringComparison.OrdinalIgnoreCase)
+            || scheme.Equals("ipv6", StringComparison.OrdinalIgnoreCase))
+        {
+            return new IPEndPoint(ipAddress, port);
+        }
+
+        return null;
+    }
+
+    private static bool TrySplitHostPort(string address, out string host, out int port)
+    {
+        host = string.Empty;
+        port = 0;
+
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return false;
+        }
+
+        if (address[0] == '[')
+        {
+            var closingBracket = address.IndexOf(']');
+            if (closingBracket <= 0 || closingBracket >= address.Length - 2 || address[closingBracket + 1] != ':')
+            {
+                return false;
+            }
+
+            host = address[1..closingBracket];
+            return int.TryParse(address[(closingBracket + 2)..], out port);
+        }
+
+        var lastColon = address.LastIndexOf(':');
+        if (lastColon <= 0 || lastColon >= address.Length - 1)
+        {
+            return false;
+        }
+
+        host = address[..lastColon];
+        return int.TryParse(address[(lastColon + 1)..], out port);
+    }
+
     private sealed class StreamRegistration : IDisposable
     {
-        public StreamRegistration(Guid id, IAsyncStreamWriter<TransportFrame> writer)
+        public StreamRegistration(Guid id, IAsyncStreamWriter<TransportFrame> writer, EndPoint? remoteEndPoint)
         {
             Id = id;
             Writer = writer;
             WriteLock = new SemaphoreSlim(1, 1);
+            RemoteEndPoint = remoteEndPoint;
         }
 
         public Guid Id { get; }
@@ -418,6 +491,8 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         public IAsyncStreamWriter<TransportFrame> Writer { get; }
 
         public SemaphoreSlim WriteLock { get; }
+
+        public EndPoint? RemoteEndPoint { get; }
 
         public bool IsAuthenticated { get; set; }
 
