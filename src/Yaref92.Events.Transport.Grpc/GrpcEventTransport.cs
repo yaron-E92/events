@@ -212,8 +212,10 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
 
     private void UnregisterStream(StreamRegistration registration)
     {
-        _activeStreams.TryRemove(registration.Id, out _);
-        registration.Dispose();
+        if (_activeStreams.TryRemove(registration.Id, out _))
+        {
+            registration.Dispose();
+        }
     }
 
     private async Task ProcessIncomingStreamAsync(
@@ -221,46 +223,57 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         StreamRegistration registration,
         CancellationToken cancellationToken)
     {
+        var authFailed = false;
         try
         {
             while (await reader.MoveNext(cancellationToken).ConfigureAwait(false))
             {
-                await HandleIncomingFrameAsync(reader.Current, registration).ConfigureAwait(false);
+                if (!await HandleIncomingFrameAsync(reader.Current, registration).ConfigureAwait(false))
+                {
+                    authFailed = true;
+                    break;
+                }
             }
         }
         catch (OperationCanceledException)
         {
         }
+        finally
+        {
+            if (authFailed)
+            {
+                UnregisterStream(registration);
+            }
+        }
     }
 
-    private async Task HandleIncomingFrameAsync(TransportFrame frame, StreamRegistration registration)
+    private async Task<bool> HandleIncomingFrameAsync(TransportFrame frame, StreamRegistration registration)
     {
         if (frame.Kind == FrameKind.Auth)
         {
-            HandleAuthFrame(frame, registration);
-            return;
+            return HandleAuthFrame(frame, registration);
         }
 
         if (frame.Kind != FrameKind.Event)
         {
-            return;
+            return true;
         }
 
         if (!registration.IsAuthenticated && SessionManager.Options.RequireAuthentication)
         {
-            return;
+            return true;
         }
 
         var (_, domainEvent) = _serializer.Deserialize(frame.EventJson);
         if (domainEvent is null)
         {
-            return;
+            return true;
         }
 
         var handler = EventReceived;
         if (handler is null)
         {
-            return;
+            return true;
         }
 
         bool eventReceivedSuccessfully = await handler(domainEvent).ConfigureAwait(false);
@@ -272,6 +285,8 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
                 Kind = FrameKind.Ack,
             }).ConfigureAwait(false);
         }
+
+        return true;
     }
 
     private static async Task WriteFrameAsync(StreamRegistration registration, TransportFrame frame)
@@ -292,17 +307,19 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         return WriteFrameAsync(registration, CreateAuthFrame(sessionKey));
     }
 
-    private void HandleAuthFrame(TransportFrame frame, StreamRegistration registration)
+    private bool HandleAuthFrame(TransportFrame frame, StreamRegistration registration)
     {
         var authFrame = SessionFrame.CreateAuth(frame.EventId ?? string.Empty, frame.EventJson);
         try
         {
             SessionManager.ResolveSession(null, authFrame);
             registration.IsAuthenticated = true;
+            return true;
         }
         catch (System.Security.Authentication.AuthenticationException)
         {
             registration.IsAuthenticated = false;
+            return false;
         }
     }
 
