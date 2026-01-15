@@ -3,11 +3,12 @@ using System.Text.Json.Serialization;
 
 namespace Yaref92.Events.Sessions;
 
-internal static class SessionFrameContract
+public static class SessionFrameContract
 {
     private static readonly JsonSerializerOptions AuthPayloadSerializerOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     public const string TokenSecretDelimiter = "||";
@@ -39,7 +40,9 @@ internal static class SessionFrameContract
         var payload = new SessionAuthenticationPayload(
             options.RequireAuthentication ? ResolveSecret(authenticationSecret, options) : null,
             options.CallbackHost,
-            options.CallbackPort > 0 ? options.CallbackPort : null);
+            options.CallbackPort > 0 ? options.CallbackPort : null,
+            options.LocalPlatform,
+            options.TargetPlatform);
 
         var payloadJson = JsonSerializer.Serialize(payload, AuthPayloadSerializerOptions);
         return SessionFrame.CreateAuth(sessionToken, payloadJson);
@@ -230,9 +233,14 @@ internal static class SessionFrameContract
         }
         catch (JsonException)
         {
-            return new SessionAuthenticationPayload(payload, null, null);
+            return new SessionAuthenticationPayload(payload, null, null, null, null);
         }
     }
 }
 
-internal sealed record SessionAuthenticationPayload(string? Secret, string? CallbackHost, int? CallbackPort);
+public sealed record SessionAuthenticationPayload(
+    string? Secret,
+    string? CallbackHost,
+    int? CallbackPort,
+    Platform? LocalPlatform,
+    Platform? TargetPlatform);

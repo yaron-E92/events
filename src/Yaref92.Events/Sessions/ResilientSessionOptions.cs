@@ -12,7 +12,7 @@ public sealed class ResilientSessionOptions
     public bool RequireAuthentication { get; init; }
     public bool DoAnonymousSessionsRequireAuthentication { get; init; }
 
-    public string? AuthenticationToken { get; init; }
+    public string? AuthenticationToken { get; set; }
 
     public TimeSpan HeartbeatInterval { get; init; } = DefaultHeartbeatInterval;
 
@@ -37,9 +37,19 @@ public sealed class ResilientSessionOptions
     public int CallbackPort { get; set; }
 
     /// <summary>
+    /// Local platform advertised to peers during authentication.
+    /// </summary>
+    public Platform? LocalPlatform { get; set; }
+
+    /// <summary>
+    /// Target platform selection advertised to peers during authentication.
+    /// </summary>
+    public Platform? TargetPlatform { get; set; }
+
+    /// <summary>
     /// Checks that all options are valid, returning false if not.
     /// </summary>
-    internal bool Validate()
+    public bool Validate()
     {
         if (HeartbeatInterval <= TimeSpan.Zero)
         {

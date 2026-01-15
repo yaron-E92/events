@@ -1,5 +1,5 @@
 ﻿#if DEBUG
-namespace Yaref92.Events.Sessions;
+namespace Yaref92.Events.Transport.Tcp.Connections;
 
 public sealed partial class ResilientOutboundConnection
 {

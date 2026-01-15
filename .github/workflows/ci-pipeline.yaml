@@ -85,11 +85,51 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+        
+    - name: Remove .NET 10 SDKs on Ubuntu
+      shell: bash
+      run: |
+        DOTNET_DIR="/usr/share/dotnet"
+    
+        echo "Removing .NET 10 SDKs and runtimes from: $DOTNET_DIR"
+    
+        # Remove SDKs
+        SDK_PATH="$DOTNET_DIR/sdk"
+        if [ -d "$SDK_PATH" ]; then
+          find "$SDK_PATH" -maxdepth 1 -type d -name "10.*" -print -exec sudo rm -rf {} \;
+        fi
+    
+        # Remove runtimes
+        SHARED_PATH="$DOTNET_DIR/shared"
+        if [ -d "$SHARED_PATH" ]; then
+          find "$SHARED_PATH" -mindepth 2 -maxdepth 2 -type d -name "10.*" -print -exec sudo rm -rf {} \;
+        fi
+    
+        # Remove .NET 10 packs (Android / MAUI / workloads)
+        PACKS_PATH="$DOTNET_DIR/packs"
+        if [ -d "$PACKS_PATH" ]; then
+          find "$PACKS_PATH" -maxdepth 1 -type d -name "*10.*" -print -exec sudo rm -rf {} \;
+        fi
+    
+        echo "Finished removing .NET 10 components."
+
     - name: Setup .NET
       id: setupDotnet
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 8.0.x
+
+    - name: Install workload
+      shell: pwsh
+      run: |
+        $workloads = @('android', 'wasm-tools-net8')
+
+        dotnet workload install $workloads --skip-manifest-update
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Failed to install workloads"
+          exit 1
+        }
+
     - name: Build
       id: build
       run: dotnet build Yaref92.Events.ci.slnf /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }} /p:Version=${{ needs.gitVersion.outputs.semVer }} /p:PackageVersion=${{ needs.gitVersion.outputs.nugetVersion }}
@@ -107,13 +147,51 @@ jobs:
   tagAndRelease:
     needs: [gitVersion, buildAndTest]
     runs-on: ubuntu-latest
-    if: contains(needs.gitVersion.outputs.branchName, 'main') || (github.event_name == 'workflow_dispatch' && inputs.snapshot == 'true')
+    if: contains(needs.gitVersion.outputs.branchName, 'main') || inputs.snapshot
     permissions:
       contents: write
       packages: write
 
     steps:
     - uses: actions/checkout@v4
+        
+    - name: Remove .NET 10 SDKs on Ubuntu
+      shell: bash
+      run: |
+        DOTNET_DIR="/usr/share/dotnet"
+    
+        echo "Removing .NET 10 SDKs and runtimes from: $DOTNET_DIR"
+    
+        # Remove SDKs
+        SDK_PATH="$DOTNET_DIR/sdk"
+        if [ -d "$SDK_PATH" ]; then
+          find "$SDK_PATH" -maxdepth 1 -type d -name "10.*" -print -exec sudo rm -rf {} \;
+        fi
+    
+        # Remove runtimes
+        SHARED_PATH="$DOTNET_DIR/shared"
+        if [ -d "$SHARED_PATH" ]; then
+          find "$SHARED_PATH" -mindepth 2 -maxdepth 2 -type d -name "10.*" -print -exec sudo rm -rf {} \;
+        fi
+    
+        # Remove .NET 10 packs (Android / MAUI / workloads)
+        PACKS_PATH="$DOTNET_DIR/packs"
+        if [ -d "$PACKS_PATH" ]; then
+          find "$PACKS_PATH" -maxdepth 1 -type d -name "*10.*" -print -exec sudo rm -rf {} \;
+        fi
+    
+        echo "Finished removing .NET 10 components."
+
+    - name: Install workload
+      shell: pwsh
+      run: |
+        $workloads = @('android', 'wasm-tools-net8')
+
+        dotnet workload install $workloads --skip-manifest-update
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Failed to install workloads"
+          exit 1
+        }
     - name: Fetch all tags
       run: git fetch --tags --force
     - name: Tag on main

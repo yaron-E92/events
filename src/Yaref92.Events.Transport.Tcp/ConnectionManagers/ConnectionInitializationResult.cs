@@ -1,6 +1,6 @@
 ﻿using Yaref92.Events.Abstractions;
 
-namespace Yaref92.Events.Transports.ConnectionManagers;
+namespace Yaref92.Events.Transport.Tcp.ConnectionManagers;
 
 internal readonly record struct ConnectionInitializationResult(
         IResilientPeerSession? Session,

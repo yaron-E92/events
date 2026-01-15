@@ -1,17 +1,15 @@
-﻿using System.Collections.Generic;
-using System.Linq;
-using System.Net;
+﻿using System.Net;
 
-using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
-namespace Yaref92.Events.Transports.ConnectionManagers;
+namespace Yaref92.Events.Transport.Tcp.ConnectionManagers;
 
-internal sealed class OutboundConnectionManager(SessionManager sessionManager) : IOutboundConnectionManager
+internal sealed class OutboundConnectionManager(TcpSessionManager sessionManager) : IOutboundConnectionManager
 {
     private readonly CancellationTokenSource _cts = new();
 
-    public SessionManager SessionManager { get; } = sessionManager;
+    public TcpSessionManager SessionManager { get; } = sessionManager;
 
     public void QueueEventBroadcast(Guid eventId, string eventEnvelopeJson)
     {
@@ -40,7 +38,7 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
         SessionManager.AuthenticatedSessions
             .Concat(SessionManager.ValidAnonymousSessions)
             .DistinctBy(session => session.Key)
-            .Select(session => session.OutboundConnection);
+            .Select(session => (session as IResilientTcpSession).OutboundConnection);
 
     public async ValueTask DisposeAsync()
     {
@@ -74,32 +72,32 @@ internal sealed class OutboundConnectionManager(SessionManager sessionManager) :
 
     public Task ConnectAsync(SessionKey sessionKey, CancellationToken cancellationToken)
     {
-        var outboundConnection = SessionManager.GetOrGenerate(sessionKey).OutboundConnection;
+        var outboundConnection = (SessionManager.GetOrGenerate(sessionKey) as IResilientTcpSession).OutboundConnection;
         return outboundConnection.InitAsync(cancellationToken);
     }
 
     public async Task<bool> TryReconnectAsync(SessionKey sessionKey, CancellationToken token)
     {
-        var outboundConnection = SessionManager.GetOrGenerate(sessionKey).OutboundConnection;
+        var outboundConnection = (SessionManager.GetOrGenerate(sessionKey) as IResilientTcpSession).OutboundConnection;
         return await outboundConnection.RefreshConnectionAsync(token).ConfigureAwait(false);
     }
 
     public void SendAck(Guid eventId, SessionKey sessionKey)
     {
-        SessionManager.GetOrGenerate(sessionKey)
+        (SessionManager.GetOrGenerate(sessionKey) as IResilientTcpSession)
             .OutboundConnection
             .EnqueueFrame(SessionFrame.CreateAck(eventId));
     }
 
     public Task OnAckReceived(Guid eventId, SessionKey sessionKey)
     {
-        SessionManager.GetOrGenerate(sessionKey).OutboundConnection.OnAckReceived(eventId);
+        (SessionManager.GetOrGenerate(sessionKey) as IResilientTcpSession).OutboundConnection.OnAckReceived(eventId);
         return Task.CompletedTask;
     }
 
     public void SendPong(SessionKey sessionKey)
     {
-        SessionManager.GetOrGenerate(sessionKey)
+        (SessionManager.GetOrGenerate(sessionKey) as IResilientTcpSession)
             .OutboundConnection
             .EnqueueFrame(SessionFrame.CreatePong());
     }

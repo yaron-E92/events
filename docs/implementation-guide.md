@@ -47,13 +47,13 @@ The `NetworkedEventAggregator` subscribes to `IEventTransport.EventReceived`, so
 
 ## 3. Observe the Session Pipeline
 
-`TCPEventTransport` exposes its building blocks via `IEventTransport.PersistentPortListener` and `IEventTransport.PersistentFramePublisher`. Both hold references to the same `SessionManager`, which coordinates:
+`TCPEventTransport` wires a resilient listener and publisher around a shared `SessionManager`, which coordinates:
 
 - Session creation and deduplication based on `SessionKey`.
 - Long-running `ResilientInboundConnection` instances owned by `PersistentPortListener`.
 - `ResilientCompositSessionConnection` objects that persist outbound envelopes and maintain the durable outbox.
 
-If you need visibility into inbound frames—for example, to add metrics or filtering—attach diagnostics inside the transport by observing `IInboundConnectionManager.EventReceived`. `PersistentPortListener` raises this event whenever a `ResilientInboundConnection` produces a domain event; `TCPEventTransport` subscribes to it and forwards the callback through `IEventTransport.EventReceived`, which is what `NetworkedEventAggregator` consumes. Because the same delegate chain controls acknowledgements, completing the handler successfully indicates that the event was processed and allows `PersistentEventPublisher.AcknowledgeEventReceipt` to trim the outbox for that session.
+`PersistentPortListener` raises `IInboundConnectionManager.EventReceived` whenever a `ResilientInboundConnection` produces a domain event; `TCPEventTransport` subscribes to it and forwards the callback through `IEventTransport.EventReceived`, which is what `NetworkedEventAggregator` consumes. Because the same delegate chain controls acknowledgements, completing the handler successfully indicates that the event was processed and allows `PersistentEventPublisher.AcknowledgeEventReceipt` to trim the outbox for that session.
 
 ## 4. Start Listening and Join Peers
 

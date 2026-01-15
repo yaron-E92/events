@@ -1,12 +1,12 @@
 ﻿using System.Net;
 using System.Net.Sockets;
 
-using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
-using static Yaref92.Events.Abstractions.IInboundResilientConnection;
+using static Yaref92.Events.Transport.Tcp.Abstractions.IInboundResilientConnection;
 
-namespace Yaref92.Events.Connections;
+namespace Yaref92.Events.Transport.Tcp.Connections;
 
 public class ResilientInboundConnection : IInboundResilientConnection
 {

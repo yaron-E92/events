@@ -50,7 +50,7 @@ public class SessionKey(Guid userId, string host, int port)
         return new DnsEndPoint(Host, Port);
     }
 
-    internal void HydrateAnonymouseId(Guid identifier)
+    public void HydrateAnonymouseId(Guid identifier)
     {
         if (UserId != Guid.Empty)
         {

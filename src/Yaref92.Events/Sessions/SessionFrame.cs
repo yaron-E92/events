@@ -67,7 +67,7 @@ public sealed class SessionFrame
     }
 }
 
-internal static class SessionFrameSerializer
+public static class SessionFrameSerializer
 {
     public static readonly JsonSerializerOptions Options = CreateOptions();
 

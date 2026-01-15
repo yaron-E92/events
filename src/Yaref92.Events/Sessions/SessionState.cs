@@ -1,9 +1,9 @@
 ﻿namespace Yaref92.Events.Sessions;
 
-internal partial class ResilientPeerSession
+public partial class ResilientPeerSession
 {
 
-    internal partial class SessionState(SessionKey key)
+    public partial class SessionState(SessionKey key)
     {
         private long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
 

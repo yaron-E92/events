@@ -1,8 +1,9 @@
 ﻿using System.Net.Sockets;
 
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 
-namespace Yaref92.Events.Abstractions;
+namespace Yaref92.Events.Transport.Tcp.Abstractions;
 
 internal interface IPersistentPortListener : IAsyncDisposable
 {

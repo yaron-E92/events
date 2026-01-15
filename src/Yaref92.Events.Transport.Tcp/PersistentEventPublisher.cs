@@ -1,12 +1,10 @@
-﻿using System;
-using System.Threading;
-using Yaref92.Events.Abstractions;
-using Yaref92.Events.Sessions;
-using Yaref92.Events.Transports.ConnectionManagers;
+﻿using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Abstractions;
+using Yaref92.Events.Transport.Tcp.ConnectionManagers;
 
-namespace Yaref92.Events.Transports;
+namespace Yaref92.Events.Transport.Tcp;
 
-internal class PersistentEventPublisher(SessionManager sessionManager) : IPersistentFramePublisher
+internal class PersistentEventPublisher(TcpSessionManager sessionManager) : IPersistentFramePublisher
 {
     private Task? _disposeTask;
     private int _disposeState;

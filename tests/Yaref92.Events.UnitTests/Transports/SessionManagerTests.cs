@@ -1,7 +1,9 @@
-using System.Net;
+﻿using System.Net;
 using FluentAssertions;
 using NUnit.Framework;
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.UnitTests.Transports;
@@ -20,7 +22,7 @@ public class SessionManagerTests
             CallbackPort = advertisedCallbackPort,
         };
 
-        var sessionManager = new SessionManager(listenPort: 5050, options);
+        var sessionManager = new TcpSessionManager(listenPort: 5050, options);
         var originalKey = new SessionKey(Guid.NewGuid(), "listener-host", 5050);
         var sessionToken = SessionFrameContract.CreateSessionToken(originalKey, options, authenticationSecret: null);
         var authFrame = SessionFrameContract.CreateAuthFrame(sessionToken, options, authenticationSecret: null);
@@ -43,7 +45,7 @@ public class SessionManagerTests
             CallbackPort = callbackPort,
         };
 
-        var sessionManager = new SessionManager(listenPort: 5050, options);
+        var sessionManager = new TcpSessionManager(listenPort: 5050, options);
         var anonymousKey = new SessionKey(Guid.Empty, "ignored-host", callbackPort)
         {
             IsAnonymousKey = true,
@@ -71,7 +73,7 @@ public class SessionManagerTests
             RequireAuthentication = false,
             DoAnonymousSessionsRequireAuthentication = false,
         };
-        var sessionManager = new SessionManager(listenPort: 5050, options);
+        var sessionManager = new TcpSessionManager(listenPort: 5050, options);
         var remoteHost = IPAddress.Parse("203.0.113.10").ToString();
         const int clientListenerPort = 62000;
         var initialKey = new SessionKey(Guid.Empty, remoteHost, clientListenerPort)
@@ -84,7 +86,7 @@ public class SessionManagerTests
 
         var ackedEventId = Guid.NewGuid();
         firstSession.OutboundBuffer.EnqueueFrame(SessionFrame.CreateEventFrame(Guid.NewGuid(), "{}"));
-        firstSession.OutboundConnection.AcknowledgedEventIds[ackedEventId] = AcknowledgementState.Acknowledged;
+        (firstSession as IResilientTcpSession).OutboundConnection.AcknowledgedEventIds[ackedEventId] = AcknowledgementState.Acknowledged;
 
         var reconnectKey = new SessionKey(Guid.Empty, remoteHost, clientListenerPort)
         {
@@ -98,6 +100,6 @@ public class SessionManagerTests
         var secondSession = sessionManager.GetOrGenerate(reconnectKey, isAnonymous: true);
         secondSession.Should().BeSameAs(firstSession);
         secondSession.OutboundBuffer.Should().BeSameAs(firstSession.OutboundBuffer);
-        secondSession.OutboundConnection.AcknowledgedEventIds.Should().ContainKey(ackedEventId);
+        (secondSession as IResilientTcpSession).OutboundConnection.AcknowledgedEventIds.Should().ContainKey(ackedEventId);
     }
 }

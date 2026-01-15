@@ -5,31 +5,38 @@ using System.Net;
 using System.Runtime.CompilerServices;
 
 using EventMessenger.Events;
+#if ANDROID
+using EventMessenger.Platforms.Android;
+#endif
 
 using Yaref92.Events;
 using Yaref92.Events.Abstractions;
-using Yaref92.Events.Transports;
+using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Grpc;
+
+using Platform = Yaref92.Events.Sessions.Platform;
 
 namespace EventMessenger.ViewModels;
 
 public class MainViewModel : INotifyPropertyChanged
 {
     private readonly NetworkedEventAggregator _aggregator;
-    private readonly TCPEventTransport _transport;
+    private readonly GrpcEventTransport _transport;
     private readonly MessengerSettings _settings;
     private bool _isListening;
     private string _peerHost = "localhost";
     private string _peerPort = "5050";
+    private Platform _selectedPeerPlatform = Platform.Windows;
     private string _myPort = "5050";
     private string _messageText = string.Empty;
 
-    public MainViewModel(NetworkedEventAggregator aggregator, TCPEventTransport transport, MessengerSettings settings)
+    public MainViewModel(NetworkedEventAggregator aggregator, GrpcEventTransport transport, MessengerSettings settings)
     {
         _aggregator = aggregator;
         _transport = transport;
         _settings = settings;
         Messages = new ObservableCollection<string>();
-        HostHint = ResolveLocalHost();
+        HostHint = ResolveHostHint();
 
         _aggregator.SubscribeToEventType(new AsyncMessageEventHandler(this));
         _myPort = _settings.ListenPort.ToString(CultureInfo.InvariantCulture);
@@ -51,6 +58,14 @@ public class MainViewModel : INotifyPropertyChanged
     {
         get => _peerPort;
         set => SetProperty(ref _peerPort, value);
+    }
+
+    public IReadOnlyList<Platform> PeerPlatforms { get; } = new[] { Platform.Android, Platform.Windows };
+
+    public Platform SelectedPeerPlatform
+    {
+        get => _selectedPeerPlatform;
+        set => SetProperty(ref _selectedPeerPlatform, value);
     }
 
     public string MyPort
@@ -90,6 +105,7 @@ public class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        _transport.TargetPlatform = SelectedPeerPlatform;
         await _transport.ConnectToPeerAsync(PeerHost, port);
         await ShowToastAsync($"Connected to {PeerHost}:{PeerPort}");
     }
@@ -135,6 +151,22 @@ public class MainViewModel : INotifyPropertyChanged
         {
             return "localhost";
         }
+    }
+
+    private static string ResolveHostHint()
+    {
+#if ANDROID
+        var deviceId = DeviceIdentity.GetDeviceId();
+        var localHost = ResolveLocalHost();
+        if (!string.Equals(localHost, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{deviceId}@{localHost}";
+        }
+
+        return deviceId;
+#else
+        return ResolveLocalHost();
+#endif
     }
 
     private static Task ShowToastAsync(string message)

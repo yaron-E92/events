@@ -1,4 +1,4 @@
-﻿namespace Yaref92.Events.Connections;
+﻿namespace Yaref92.Events.Transport.Tcp.Connections;
 
 [Serializable]
 public class TcpConnectionDisconnectedException : Exception

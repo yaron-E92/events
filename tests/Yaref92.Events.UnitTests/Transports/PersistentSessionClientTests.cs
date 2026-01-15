@@ -1,14 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using FluentAssertions;
 
-using FluentAssertions;
-
-using NUnit.Framework;
-
-using Yaref92.Events.Connections;
+using Yaref92.Events.Transport.Tcp.Connections;
 using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.UnitTests.Transports;

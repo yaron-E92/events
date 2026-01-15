@@ -2,9 +2,9 @@
 
 using Yaref92.Events.Sessions;
 
-namespace Yaref92.Events.Abstractions;
+namespace Yaref92.Events.Transport.Tcp.Abstractions;
 
-internal interface IInboundResilientConnection : IResilientConnection
+public interface IInboundResilientConnection : IResilientConnection
 {
     /// <summary>
     /// Triggered when a frame is received from the remote endpoint through a transient connection

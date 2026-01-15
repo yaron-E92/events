@@ -2,7 +2,7 @@
 
 using Yaref92.Events.Sessions;
 
-namespace Yaref92.Events.Connections;
+namespace Yaref92.Events.Transport.Tcp.Connections;
 
 internal sealed partial class ResilientCompositSessionConnection : IAsyncDisposable
 {

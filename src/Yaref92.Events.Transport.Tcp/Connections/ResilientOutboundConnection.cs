@@ -3,11 +3,11 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 
-using Yaref92.Events.Abstractions;
 using Yaref92.Events.Caching;
-using Yaref92.Events.Connections;
+using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp.Abstractions;
 
-namespace Yaref92.Events.Sessions;
+namespace Yaref92.Events.Transport.Tcp.Connections;
 
 public sealed partial class ResilientOutboundConnection : IOutboundResilientConnection, IAsyncDisposable
 {
