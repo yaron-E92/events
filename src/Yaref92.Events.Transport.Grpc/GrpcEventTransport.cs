@@ -137,6 +137,16 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         return ShouldUseWebRtcForTarget() ? TransportMode.WebRtcDataChannel : TransportMode.Grpc;
     }
 
+    private TransportMode ResolveTransportMode(SessionKey sessionKey, Platform? targetPlatform)
+    {
+        if (RequiresServerBasedConnection(sessionKey))
+        {
+            return TransportMode.Grpc;
+        }
+
+        return ShouldUseWebRtcForTarget(targetPlatform) ? TransportMode.WebRtcDataChannel : TransportMode.Grpc;
+    }
+
     private bool RequiresServerBasedConnection(SessionKey sessionKey)
     {
         var options = SessionManager.Options;
@@ -157,16 +167,6 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
     {
         var resolvedTarget = targetPlatform ?? _targetPlatform ?? SessionManager.Options.TargetPlatform;
         return resolvedTarget == Platform.Android;
-    }
-
-    private TransportMode ResolveTransportMode(SessionKey sessionKey, Platform? targetPlatform)
-    {
-        if (RequiresServerBasedConnection(sessionKey))
-        {
-            return TransportMode.Grpc;
-        }
-
-        return ShouldUseWebRtcForTarget(targetPlatform) ? TransportMode.WebRtcDataChannel : TransportMode.Grpc;
     }
 
     private void SyncPlatformOptions()
@@ -272,6 +272,7 @@ public sealed partial class GrpcEventTransport : IEventTransport, IAsyncDisposab
         }
         catch (OperationCanceledException)
         {
+            UnregisterStream(registration);
         }
         finally
         {

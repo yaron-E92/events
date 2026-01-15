@@ -46,7 +46,6 @@ public sealed partial class ResilientPeerSession : IResilientPeerSession
     {
         try
         {
-            //await OutboundConnection.DumpBuffer().ConfigureAwait(false);
             OutboundBuffer.Dispose();
         }
         finally
