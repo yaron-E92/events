@@ -54,7 +54,7 @@ public sealed partial class GrpcEventTransport
     private StreamRegistration RegisterDataChannelSession(RTCDataChannel channel)
     {
         var writer = new WebRtcStreamWriter(channel);
-        return RegisterStream(writer);
+        return RegisterStream(writer, null);
     }
 
     private void UnregisterDataChannelSession(StreamRegistration? registration, string reason)
