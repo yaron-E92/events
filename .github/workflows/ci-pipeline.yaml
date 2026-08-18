@@ -85,48 +85,19 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-        
-    - name: Remove .NET 10 SDKs on Ubuntu
-      shell: bash
-      run: |
-        DOTNET_DIR="/usr/share/dotnet"
-    
-        echo "Removing .NET 10 SDKs and runtimes from: $DOTNET_DIR"
-    
-        # Remove SDKs
-        SDK_PATH="$DOTNET_DIR/sdk"
-        if [ -d "$SDK_PATH" ]; then
-          find "$SDK_PATH" -maxdepth 1 -type d -name "10.*" -print -exec sudo rm -rf {} \;
-        fi
-    
-        # Remove runtimes
-        SHARED_PATH="$DOTNET_DIR/shared"
-        if [ -d "$SHARED_PATH" ]; then
-          find "$SHARED_PATH" -mindepth 2 -maxdepth 2 -type d -name "10.*" -print -exec sudo rm -rf {} \;
-        fi
-    
-        # Remove .NET 10 packs (Android / MAUI / workloads)
-        PACKS_PATH="$DOTNET_DIR/packs"
-        if [ -d "$PACKS_PATH" ]; then
-          find "$PACKS_PATH" -maxdepth 1 -type d -name "*10.*" -print -exec sudo rm -rf {} \;
-        fi
-    
-        echo "Finished removing .NET 10 components."
 
     - name: Setup .NET
       id: setupDotnet
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 8.0.x
+        dotnet-version: '10.0.2xx'
 
-    - name: Install workload
+    - name: Install Android workload
       shell: pwsh
       run: |
-        $workloads = @('android', 'wasm-tools-net8')
-
-        dotnet workload install $workloads --skip-manifest-update
+        dotnet workload install android --skip-manifest-update
         if ($LASTEXITCODE -ne 0) {
-          Write-Error "Failed to install workloads"
+          Write-Error "Failed to install Android workload"
           exit 1
         }
 
@@ -154,44 +125,21 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-        
-    - name: Remove .NET 10 SDKs on Ubuntu
-      shell: bash
-      run: |
-        DOTNET_DIR="/usr/share/dotnet"
-    
-        echo "Removing .NET 10 SDKs and runtimes from: $DOTNET_DIR"
-    
-        # Remove SDKs
-        SDK_PATH="$DOTNET_DIR/sdk"
-        if [ -d "$SDK_PATH" ]; then
-          find "$SDK_PATH" -maxdepth 1 -type d -name "10.*" -print -exec sudo rm -rf {} \;
-        fi
-    
-        # Remove runtimes
-        SHARED_PATH="$DOTNET_DIR/shared"
-        if [ -d "$SHARED_PATH" ]; then
-          find "$SHARED_PATH" -mindepth 2 -maxdepth 2 -type d -name "10.*" -print -exec sudo rm -rf {} \;
-        fi
-    
-        # Remove .NET 10 packs (Android / MAUI / workloads)
-        PACKS_PATH="$DOTNET_DIR/packs"
-        if [ -d "$PACKS_PATH" ]; then
-          find "$PACKS_PATH" -maxdepth 1 -type d -name "*10.*" -print -exec sudo rm -rf {} \;
-        fi
-    
-        echo "Finished removing .NET 10 components."
 
-    - name: Install workload
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.2xx'
+
+    - name: Install Android workload
       shell: pwsh
       run: |
-        $workloads = @('android', 'wasm-tools-net8')
-
-        dotnet workload install $workloads --skip-manifest-update
+        dotnet workload install android --skip-manifest-update
         if ($LASTEXITCODE -ne 0) {
-          Write-Error "Failed to install workloads"
+          Write-Error "Failed to install Android workload"
           exit 1
         }
+
     - name: Fetch all tags
       run: git fetch --tags --force
     - name: Tag on main
@@ -211,13 +159,13 @@ jobs:
       run: |
         VERSION="${{ needs.gitVersion.outputs.semVer }}"
         echo "Checking for version $VERSION of $PACKAGE_NAME"
-    
+
         RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
           "https://api.github.com/users/yaron-E92/packages/nuget/Yaref92.Events/versions")
-    
+
         EXISTS=$(echo "$RESPONSE" | jq -r --arg VERSION "$VERSION" '.[] | select(.name == $VERSION) | .name')
-    
+
         if [[ "$EXISTS" == "$VERSION" ]]; then
           echo "skip=true" >> $GITHUB_OUTPUT
           echo "Version $VERSION already exists. Skipping push."
