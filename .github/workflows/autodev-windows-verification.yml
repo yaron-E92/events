@@ -1,0 +1,68 @@
+name: AutoDev Windows verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact commit pushed by AutoDev
+        required: true
+        type: string
+      source_identity:
+        description: AutoDev verified source identity
+        required: true
+        type: string
+      commands_json:
+        description: JSON array of named Windows verification commands
+        required: true
+        type: string
+      autodev_ref:
+        description: Exact AutoDev revision whose Windows worker must be used
+        required: true
+        type: string
+
+jobs:
+  windows:
+    name: Windows / exact source
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Reject a stale dispatch ref
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          if ($env:DISPATCH_SHA -ne $env:EXPECTED_SHA) {
+            throw "AutoDev Windows verification ref mismatch: expected $env:EXPECTED_SHA, workflow is running for $env:DISPATCH_SHA"
+          }
+
+      - name: Check out exact target commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: target
+          persist-credentials: false
+
+      - name: Check out exact AutoDev worker
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: yaron-E92/AutoDev
+          ref: ${{ inputs.autodev_ref }}
+          path: autodev-tooling
+          persist-credentials: false
+
+
+
+      - name: Execute Windows verification
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          SOURCE_IDENTITY: ${{ inputs.source_identity }}
+          COMMANDS_JSON: ${{ inputs.commands_json }}
+        run: |
+          & "$env:GITHUB_WORKSPACE\autodev-tooling\windows\scripts\windows-verification-worker.ps1" `
+            -RepositoryPath "$env:GITHUB_WORKSPACE\target" `
+            -ExpectedSha $env:EXPECTED_SHA `
+            -SourceIdentity $env:SOURCE_IDENTITY `
+            -CommandsJson $env:COMMANDS_JSON
