@@ -74,7 +74,9 @@ public interface IRxSubscriber
 /// </example>
 public interface IRxSubscriber<in T> : IRxSubscriber, IEventHandler<T>, IObserver<T> where T : class, IDomainEvent
 {
+    new void OnNext(T domainEvent);
 }
+
 public interface IAsyncRxSubscriber<in T> : IRxSubscriber, IAsyncEventHandler<T>, IObserver<T> where T : class, IDomainEvent
 {
 }

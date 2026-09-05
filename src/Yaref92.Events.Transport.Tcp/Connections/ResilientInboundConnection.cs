@@ -24,7 +24,7 @@ public class ResilientInboundConnection : IInboundResilientConnection
 
     public ResilientInboundConnection(ResilientSessionOptions options, SessionKey sessionKey, ResilientOutboundConnection outboundConnection)
     {
-        _options = options!; // The SessionManager ensures options are valid
+        _options = options; // The SessionManager ensures options are valid
         SessionKey = sessionKey;
         OutboundConnection = outboundConnection;
         SessionKey = sessionKey;
@@ -247,7 +247,7 @@ public class ResilientInboundConnection : IInboundResilientConnection
     {
         lock (_runLock)
         {
-            _runInboundTask ??= Task.Run(() => RunInboundAsync(_cts.Token));
+            _runInboundTask ??= Task.Run(() => RunInboundAsync(_cts.Token), _cts.Token);
         }
     }
 }

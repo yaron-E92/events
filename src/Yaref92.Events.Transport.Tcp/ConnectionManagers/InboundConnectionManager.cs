@@ -289,7 +289,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
     {
         try
         {
-            await StopAsync().ConfigureAwait(false);
+            await StopAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
