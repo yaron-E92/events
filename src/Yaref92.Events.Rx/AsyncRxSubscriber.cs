@@ -13,6 +13,9 @@ public abstract class AsyncRxSubscriber<T> : IAsyncRxSubscriber<T> where T : cla
 
     public abstract Task OnNextAsync(T value, CancellationToken cancellationToken = default);
 
+    Task IAsyncEventHandler<T>.OnNextAsync(T domainEvent, CancellationToken cancellationToken)
+        => OnNextAsync(domainEvent, cancellationToken);
+
     public virtual void OnError(Exception error) { }
     public virtual void OnCompleted() { }
 }

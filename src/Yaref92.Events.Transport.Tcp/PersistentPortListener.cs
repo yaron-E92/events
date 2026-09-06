@@ -58,10 +58,11 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
                 CreateAndStartTcpListener();
             }
 
+            TcpListener listener = _listener ?? throw new InvalidOperationException("Listener could not be started.");
             TcpClient? incomingTransientConnection = null;
             try
             {
-                incomingTransientConnection = await _listener!.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                incomingTransientConnection = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -87,9 +88,10 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
             _ = task.ContinueWith(finishedTask =>
             {
                 if (DidAcceptConnectionTaskCompleteSuccessfullyAndHasValidInitializationResult(finishedTask, out ConnectionInitializationResult connectionResult)
-                    && connectionResult.IsSuccess && connectionResult.Session!.Key is not null)
+                    && connectionResult.IsSuccess
+                    && connectionResult.Session is { Key: not null } session)
                 {
-                    _ = SessionConnectionAccepted?.Invoke(connectionResult.Session.Key, cancellationToken);
+                    _ = SessionConnectionAccepted?.Invoke(session.Key, cancellationToken);
                 }
                 _acceptConnectionTasks.TryRemove(incomingTransientConnection, out _);
             }, TaskContinuationOptions.ExecuteSynchronously);
@@ -109,14 +111,14 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
         _listener?.Stop();
 
         Task acceptLoopTask = _acceptLoop ?? Task.CompletedTask;
-        await acceptLoopTask.ConfigureAwait(false);
+        await acceptLoopTask.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
     {
         try
         {
-            await StopAsync().ConfigureAwait(false);
+            await StopAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException)
         {

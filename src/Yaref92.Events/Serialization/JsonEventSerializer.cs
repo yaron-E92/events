@@ -22,6 +22,9 @@ public class JsonEventSerializer : IEventSerializer
     public string Serialize<T>(T domainEvent) where T : class, IDomainEvent
         => SerializeToEventEnvelope(domainEvent);
 
+    string IEventSerializer.Serialize<T>(T evt)
+        => Serialize(evt);
+
     public (Type? type, IDomainEvent? domainEvent) Deserialize(string data)
         => DeserializeFromEventEnvelope(data);
 

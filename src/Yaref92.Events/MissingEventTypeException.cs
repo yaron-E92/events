@@ -34,6 +34,6 @@
 /// aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 /// </code>
 /// </example>
-internal class MissingEventTypeException(string? message) : Exception(message)
+public class MissingEventTypeException(string? message) : Exception(message)
 {
 }
