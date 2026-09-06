@@ -304,7 +304,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             {
                 ClearAcknowledgementState(eventId, AcknowledgementState.Acknowledged);
             }
-        }, _cts.Token);
+        }, CancellationToken.None);
     }
 
     public void EnqueueFrame(SessionFrame frame)
@@ -863,7 +863,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             if (_runOutboundTask is null)
             {
                 _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                _runOutboundTask = Task.Run(() => RunOutboundAsync(cancellationToken), cancellationToken);
+                _runOutboundTask = Task.Run(() => RunOutboundAsync(cancellationToken), CancellationToken.None);
                 return;
             }
 
