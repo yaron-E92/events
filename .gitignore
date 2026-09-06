@@ -396,3 +396,13 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+
+# AutoDev repository policy is versioned; runtime/checkpoint state stays local.
+.autodev-run/
+.autodev/*
+!.autodev/
+!.autodev/repo.json
+!.autodev/queue.json
+!.autodev/roadmap.yaml
+!.autodev/privacy.json
