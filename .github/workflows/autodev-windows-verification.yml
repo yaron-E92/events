@@ -20,6 +20,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   windows:
     name: Windows / exact source
@@ -51,8 +54,6 @@ jobs:
           ref: ${{ inputs.autodev_ref }}
           path: autodev-tooling
           persist-credentials: false
-
-
 
       - name: Execute Windows verification
         shell: pwsh
