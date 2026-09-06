@@ -19,19 +19,22 @@ public class JsonEventSerializer : IEventSerializer
         _options = options ?? new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, IncludeFields = true };
     }
 
-    public string Serialize<T>(T evt) where T : class, IDomainEvent
-        => SerializeToEventEnvelope(evt);
+    public string Serialize<T>(T domainEvent) where T : class, IDomainEvent
+        => SerializeToEventEnvelope(domainEvent);
+
+    string IEventSerializer.Serialize<T>(T evt)
+        => Serialize(evt);
 
     public (Type? type, IDomainEvent? domainEvent) Deserialize(string data)
         => DeserializeFromEventEnvelope(data);
 
-    private string SerializeToEventEnvelope<T>(T evt) where T : class, IDomainEvent
+    private string SerializeToEventEnvelope<T>(T domainEvent) where T : class, IDomainEvent
     {
-        ArgumentNullException.ThrowIfNull(evt);
+        ArgumentNullException.ThrowIfNull(domainEvent);
 
-        string eventJson = JsonSerializer.Serialize(evt, _options);
+        string eventJson = JsonSerializer.Serialize(domainEvent, _options);
         string? typeName = typeof(T).AssemblyQualifiedName;
-        Guid eventId = evt.EventId;
+        Guid eventId = domainEvent.EventId;
         return JsonSerializer.Serialize(new EventEnvelope(eventId, typeName!, eventJson), _options);
     }
 
