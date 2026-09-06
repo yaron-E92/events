@@ -5,13 +5,16 @@ namespace Yaref92.Events.Rx;
 
 public abstract class AsyncRxSubscriber<T> : IAsyncRxSubscriber<T> where T : class, IDomainEvent
 {
-    public void OnNext(T domainEvent)
+    public void OnNext(T value)
     {
         // Fire-and-forget async handling
-        _ = OnNextAsync(domainEvent, CancellationToken.None);
+        _ = OnNextAsync(value, CancellationToken.None);
     }
 
-    public abstract Task OnNextAsync(T domainEvent, CancellationToken cancellationToken = default);
+    public abstract Task OnNextAsync(T value, CancellationToken cancellationToken = default);
+
+    Task IAsyncEventHandler<T>.OnNextAsync(T domainEvent, CancellationToken cancellationToken)
+        => OnNextAsync(domainEvent, cancellationToken);
 
     public virtual void OnError(Exception error) { }
     public virtual void OnCompleted() { }
