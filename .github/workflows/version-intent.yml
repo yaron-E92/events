@@ -1,0 +1,28 @@
+name: Version intent
+
+on:
+  pull_request:
+    branches: [ "develop", "main" ]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: version-intent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate version intent
+    uses: yaron-E92/AutoDev/.github/workflows/version-intent.yml@a17ce2d7a72d27c898dd0f1ae4d3fdfb0279b98e
+    with:
+      pr_body: ${{ github.event.pull_request.body }}
+      pr_number: ${{ github.event.pull_request.number }}
+      pr_base: ${{ github.event.pull_request.base.ref }}
+      pr_head: ${{ github.event.pull_request.head.ref }}
+      head: ${{ github.event.pull_request.head.sha }}
+    permissions:
+      contents: read
+      pull-requests: read

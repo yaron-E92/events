@@ -1,0 +1,25 @@
+name: Trusted version tag
+
+on:
+  workflow_run:
+    workflows: ["Continous integration pipeline"]
+    branches: ["main"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: Allocate trusted version tag
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    uses: yaron-E92/AutoDev/.github/workflows/version-tag.yml@a17ce2d7a72d27c898dd0f1ae4d3fdfb0279b98e
+    with:
+      head: ${{ github.event.workflow_run.head_sha }}
+      branch: main
+    permissions:
+      contents: write
+      pull-requests: read
