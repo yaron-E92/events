@@ -1,6 +1,6 @@
 # Yaref92.Events
 
-A lightweight, extensible, and type-safe event aggregator for .NET, supporting both synchronous event publishing and subscription with optional Reactive Extensions (Rx) integration.  
+A lightweight, extensible, and type-safe event aggregator for .NET, supporting both synchronous event publishing and subscription with optional Reactive Extensions (Rx) integration.
 Designed for decoupled communication in modern applications.
 
 ---
@@ -58,6 +58,7 @@ Designed for decoupled communication in modern applications.
   - [Logging](#logging)
     - [Logged Events](#logged-events)
   - [Extensibility](#extensibility)
+  - [Generated Output Layout](#generated-output-layout)
   - [Documentation & Testing Readiness](#documentation--testing-readiness)
   - [Versioning \& Breaking Changes](#versioning--breaking-changes)
   - [Changelog](#changelog)
@@ -271,16 +272,16 @@ aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 
 ### Core Interfaces
 
-- `IDomainEvent`  
+- `IDomainEvent`
   Marker interface for events. Requires `DateTime DateTimeOccurredUtc` and `Guid EventId` (via `DomainEventBase`).
 
-- `IEventSubscriber<T>`  
+- `IEventSubscriber<T>`
   Synchronous event subscriber. Implements `void OnNext(T @event)`.
 
-- `IAsyncEventSubscriber<T>`  
+- `IAsyncEventSubscriber<T>`
   Asynchronous event subscriber. Implements `Task OnNextAsync(T @event, CancellationToken cancellationToken = default)`.
 
-- `IEventAggregator`  
+- `IEventAggregator`
   Main interface for registering event types, subscribing, unsubscribing, and publishing events.
 
 ### Main Methods
@@ -459,7 +460,7 @@ public class AsyncAuditLogger : AsyncRxSubscriber<UserRegisteredEvent>
 The EventAggregator is designed to be thread-safe:
 
 - **Concurrent Registration**: Multiple threads can register event types simultaneously
-- **Concurrent Subscription**: Multiple threads can subscribe/unsubscribe simultaneously  
+- **Concurrent Subscription**: Multiple threads can subscribe/unsubscribe simultaneously
 - **Concurrent Publishing**: Multiple threads can publish events simultaneously
 - **Safe Iteration**: Subscriber collections are safely iterated during event publishing
 
@@ -495,7 +496,7 @@ var aggregator = new EventAggregator(logger);
 ### Logged Events
 
 - **Warning**: Duplicate event type registration
-- **Warning**: Duplicate subscriber subscription  
+- **Warning**: Duplicate subscriber subscription
 - **Error**: Attempting to publish null events
 - **Error**: Attempting to unsubscribe null subscribers
 
@@ -507,6 +508,19 @@ var aggregator = new EventAggregator(logger);
   Rx (Reactive Extensions) support is available via the optional `Yaref92.Events.Rx` package.
 - **Other Integrations:**
   You can build adapters for MediatR, ASP.NET, or other frameworks as needed.
+
+---
+
+## Generated Output Layout
+
+The .NET SDK writes generated files beneath the repository's ignored `artifacts/` directory:
+
+- `artifacts/bin/` contains build outputs.
+- `artifacts/obj/` contains intermediate and restore outputs.
+- `artifacts/package/` contains NuGet package outputs.
+- `artifacts/release/<version>/` is reserved as the handoff root for future signing and release work.
+
+The entire `artifacts/` directory is generated-only and disposable. It is safe to delete; normal restore, build, test, and pack commands regenerate the required development outputs. Signing and release behavior remains owned by the later release issues and is not defined by this directory convention.
 
 ---
 

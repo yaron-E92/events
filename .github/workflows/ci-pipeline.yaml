@@ -175,11 +175,11 @@ jobs:
         fi
     - name: Pack Nuget
       if: steps.check-package.outputs.skip == 'false'
-      run: dotnet pack Yaref92.Events.ci.slnf -c Release -o out /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }} /p:Version=${{ needs.gitVersion.outputs.semVer }} /p:PackageVersion=${{ needs.gitVersion.outputs.nugetVersion }}
+      run: dotnet pack Yaref92.Events.ci.slnf -c Release /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }} /p:Version=${{ needs.gitVersion.outputs.semVer }} /p:PackageVersion=${{ needs.gitVersion.outputs.nugetVersion }}
     - name: Release NuGet package
       if: steps.check-package.outputs.skip == 'false'
       run: |
-        for file in ./out/*.nupkg; do
+        for file in ./artifacts/package/*/*.nupkg; do
           echo "Pushing $file..."
           dotnet nuget push "$file" \
             --api-key ${GITHUB_TOKEN} \
