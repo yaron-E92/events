@@ -60,6 +60,7 @@ Designed for decoupled communication in modern applications.
   - [Extensibility](#extensibility)
   - [Generated Output Layout](#generated-output-layout)
   - [Documentation & Testing Readiness](#documentation--testing-readiness)
+  - [Git-Flow Versioning](#git-flow-versioning)
   - [Versioning \& Breaking Changes](#versioning--breaking-changes)
   - [Changelog](#changelog)
   - [License](#license)
@@ -538,6 +539,21 @@ The v2.0.0 release includes refreshed documentation and a reviewed test suite so
   - `tests/Yaref92.Events.Rx.UnitTests` exercises the optional Reactive Extensions surface to ensure async push-based consumers stay compliant with aggregator internals.
   - `tests/Yaref92.Events.IntegrationTests` runs the resilient TCP transport through authentication, heartbeat, reconnection, and ACK/replay flows over real sockets.
   - Execute the full suite with `dotnet test Yaref92.Events.sln` to validate the combined surface before packaging or deployment.
+
+---
+
+## Git-Flow Versioning
+
+Events uses `develop` as its integration branch and `main` as its release branch. The shared AutoDev version policy validates pull-request intent and is the only authority that allocates canonical `vMAJOR.MINOR.PATCH` tags.
+
+- Ordinary pull requests into `develop` must contain exactly one `+semver: major`, `minor`, `patch`, or `none` directive. Their intent accumulates on `develop`; merging them does not create a public tag.
+- A `develop` to `main` promotion derives the highest intent from the contributing pull requests merged into `develop` since the latest canonical release tag. A promotion directive is optional and cannot override contributing intent. If all contributors use `none`, no tag is created.
+- Only a promotion with no contributing integration pull-request intent must include exactly one directive as an explicit fallback release decision.
+- Direct hotfix pull requests into `main` must include exactly one directive. After releasing a hotfix, synchronize `main` back into `develop` before the next promotion; stale ancestry is rejected.
+
+After the existing `main` build and test workflow succeeds, the trusted tag workflow verifies that the tested SHA is still current and then creates at most one annotated canonical tag. Tagging is idempotent and stops without packing, signing, publishing packages, creating a GitHub Release, deploying, or otherwise performing the release transaction. Package publication consumes an existing trusted tag through the separate explicit release process.
+
+Do not add a blanket pull-request template directive: promotion pull requests normally derive their intent and should not be forced to restate it.
 
 ---
 
