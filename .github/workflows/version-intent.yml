@@ -16,7 +16,7 @@ concurrency:
 jobs:
   validate:
     name: Validate version intent
-    uses: yaron-E92/AutoDev/.github/workflows/version-intent.yml@a17ce2d7a72d27c898dd0f1ae4d3fdfb0279b98e
+    uses: yaron-E92/AutoDev/.github/workflows/version-intent.yml@296eddb54f01168a798eafe1bcc81a02e8330242
     with:
       pr_body: ${{ github.event.pull_request.body }}
       pr_number: ${{ github.event.pull_request.number }}
