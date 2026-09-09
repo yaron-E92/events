@@ -35,14 +35,14 @@ jobs:
       global_json_file: global.json
       setup_command: dotnet workload install android --skip-manifest-update
       restore_command: dotnet restore Yaref92.Events.ci.slnf
-      build_command: dotnet build Yaref92.Events.ci.slnf --configuration Release --no-restore
-      test_command: dotnet test Yaref92.Events.ci.slnf --configuration Release --no-build --no-restore --logger trx --results-directory artifacts/test-results
+      build_command: dotnet build Yaref92.Events.ci.slnf --configuration Debug --no-restore
+      test_command: dotnet test Yaref92.Events.ci.slnf --configuration Debug --no-build --no-restore --logger trx --results-directory artifacts/test-results
       lint_command: |
         rm -rf artifacts/package/release
-        dotnet pack src/Yaref92.Events/Yaref92.Events.csproj --configuration Release --no-build --no-restore
-        dotnet pack src/Yaref92.Events.Rx/Yaref92.Events.Rx.csproj --configuration Release --no-build --no-restore
-        dotnet pack src/Yaref92.Events.Transport.Tcp/Yaref92.Events.Transport.Tcp.csproj --configuration Release --no-build --no-restore
-        dotnet pack src/Yaref92.Events.Transport.Grpc/Yaref92.Events.Transport.Grpc.csproj --configuration Release --no-build --no-restore
+        dotnet pack src/Yaref92.Events/Yaref92.Events.csproj --configuration Release --no-restore
+        dotnet pack src/Yaref92.Events.Rx/Yaref92.Events.Rx.csproj --configuration Release --no-restore
+        dotnet pack src/Yaref92.Events.Transport.Tcp/Yaref92.Events.Transport.Tcp.csproj --configuration Release --no-restore
+        dotnet pack src/Yaref92.Events.Transport.Grpc/Yaref92.Events.Transport.Grpc.csproj --configuration Release --no-restore
         for package in Yaref92.Events Yaref92.Events.Rx Yaref92.Events.Transport.Tcp Yaref92.Events.Transport.Grpc; do
           compgen -G "artifacts/package/release/${package}.[0-9]*.nupkg" > /dev/null || { echo "Missing package for ${package}" >&2; exit 1; }
         done
