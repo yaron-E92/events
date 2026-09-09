@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: trusted-version-tag-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
 jobs:
   tag:
     name: Allocate trusted version tag
