@@ -279,7 +279,7 @@ aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 - `IEventSubscriber<T>`
   Synchronous event subscriber. Implements `void OnNext(T @event)`.
 
-- `IAsyncEventSubscriber<T>`
+- `IAsyncEventHandler<T>`
   Asynchronous event subscriber. Implements `Task OnNextAsync(T @event, CancellationToken cancellationToken = default)`.
 
 - `IEventAggregator`
@@ -291,9 +291,9 @@ aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 |----------------------------------------------|---------------------------------------------|
 | `RegisterEventType<T>()`                     | Register an event type                      |
 | `SubscribeToEventType<T>(IEventSubscriber<T>)` | Subscribe a synchronous handler        |
-| `SubscribeToEventType<T>(IAsyncEventSubscriber<T>)` | Subscribe an asynchronous handler   |
+| `SubscribeToEventType<T>(IAsyncEventHandler<T>)` | Subscribe an asynchronous handler   |
 | `UnsubscribeFromEventType<T>(IEventSubscriber<T>)` | Unsubscribe a synchronous handler    |
-| `UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T>)` | Unsubscribe an asynchronous handler |
+| `UnsubscribeFromEventType<T>(IAsyncEventHandler<T>)` | Unsubscribe an asynchronous handler |
 | `PublishEvent<T>(T domainEvent)`             | Publish event synchronously                 |
 | `PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default)` | Publish event asynchronously |
 
@@ -366,10 +366,10 @@ Yaref92.Events supports both synchronous and asynchronous event handling, with f
 
 ### Async Subscribers
 
-Implement `IAsyncEventSubscriber<T>` for asynchronous event handling:
+Implement `IAsyncEventHandler<T>` for asynchronous event handling:
 
 ```csharp
-public class EmailService : IAsyncEventSubscriber<UserRegisteredEvent>
+public class EmailService : IAsyncEventHandler<UserRegisteredEvent>
 {
     public async Task OnNextAsync(UserRegisteredEvent @event, CancellationToken cancellationToken = default)
     {
@@ -383,6 +383,8 @@ public class EmailService : IAsyncEventSubscriber<UserRegisteredEvent>
 ### Async Event Publishing
 
 Use `PublishEventAsync` for asynchronous event publishing:
+
+Each synchronous handler runs inline once. Asynchronous handlers are started while subscribers are traversed, then awaited concurrently as a group. Synchronous exceptions escape inline, while asynchronous faults and cancellation propagate to the publisher when the group is awaited.
 
 ```csharp
 var aggregator = new EventAggregator();
@@ -428,7 +430,7 @@ aggregator.SubscribeToEventType(logger);
 var emailService = new EmailService();
 aggregator.SubscribeToEventType(emailService);
 
-// Both will receive the event
+// Both receive the event exactly once
 await aggregator.PublishEventAsync(new UserRegisteredEvent("user-123"));
 ```
 
@@ -449,9 +451,9 @@ public class AsyncAuditLogger : AsyncRxSubscriber<UserRegisteredEvent>
 
 ### Performance Benefits
 
-- **Parallel execution**: Async subscribers are executed in parallel using `Task.WhenAll`
-- **Non-blocking**: Sync subscribers are called directly, async subscribers are awaited
-- **Cancellation**: Full support for cancelling long-running async operations
+- **Concurrent execution**: Async handlers run concurrently and are awaited as a group using `Task.WhenAll`
+- **Inline sync delivery**: Sync handlers are called directly exactly once; async handlers are also invoked exactly once
+- **Error propagation**: Handler faults and cancellation are propagated to the publisher
 - **Memory efficient**: No additional allocations for cancellation tokens (default parameter)
 
 ---
