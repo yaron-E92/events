@@ -19,8 +19,8 @@ jobs:
       global_json_file: global.json
       setup_command: dotnet workload install android --skip-manifest-update
       restore_command: dotnet restore Yaref92.Events.ci.slnf
-      build_command: dotnet build Yaref92.Events.ci.slnf --configuration Release --no-restore
-      test_command: dotnet test tests/Yaref92.Events.IntegrationTests --configuration Release --no-build --no-restore --filter TestCategory=Integration --logger "trx;LogFileName=integration.trx" --results-directory artifacts/test-results/manual-integration
+      build_command: dotnet build Yaref92.Events.ci.slnf --configuration Debug --no-restore
+      test_command: dotnet test tests/Yaref92.Events.IntegrationTests --configuration Debug --no-build --no-restore --filter TestCategory=Integration --logger "trx;LogFileName=integration.trx" --results-directory artifacts/test-results/manual-integration
       test_results_path: artifacts/test-results/manual-integration/*.trx
       artifact_name: events-manual-integration-results
     permissions:
