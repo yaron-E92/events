@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -23,6 +24,7 @@ jobs:
       require_concurrency: true
     permissions:
       contents: read
+      packages: read
 
   build-and-test:
     name: Build, test, and validate packages
@@ -48,3 +50,4 @@ jobs:
       artifact_name: events-test-results
     permissions:
       contents: read
+      packages: read
