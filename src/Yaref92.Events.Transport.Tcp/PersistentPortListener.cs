@@ -8,8 +8,27 @@ using Yaref92.Events.Transport.Tcp.ConnectionManagers;
 using Yaref92.Events.Transports;
 
 namespace Yaref92.Events.Transport.Tcp;
-internal class PersistentPortListener(int listenPort, IEventSerializer eventSerializer, TcpSessionManager sessionManager) : IPersistentPortListener
+internal class PersistentPortListener : IPersistentPortListener
 {
+    private readonly CancellationTokenSource _cts = new();
+    private readonly ConcurrentDictionary<TcpClient, Task> _acceptConnectionTasks = [];
+    private readonly SemaphoreSlim _inboundCapacity;
+    private readonly IngressDiagnostics _diagnostics;
+    private TcpListener? _listener;
+    private Task? _acceptLoop;
+
+    public PersistentPortListener(
+        int listenPort,
+        IEventSerializer eventSerializer,
+        TcpSessionManager sessionManager,
+        Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        Port = listenPort;
+        _inboundCapacity = new SemaphoreSlim(sessionManager.Options.MaxInboundConnections, sessionManager.Options.MaxInboundConnections);
+        _diagnostics = new IngressDiagnostics(logger);
+        var limiter = new PeerIngressLimiter(sessionManager.Options);
+        ConnectionManager = new InboundConnectionManager(sessionManager, eventSerializer, limiter, _diagnostics);
+    }
 
     public event Func<SessionKey, CancellationToken, Task>? SessionConnectionAccepted;
 
@@ -19,14 +38,9 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
         remove => ConnectionManager.SessionInboundConnectionDropped -= value;
     }
 
-    private TcpListener? _listener;
-    private Task? _acceptLoop;
-    private readonly CancellationTokenSource _cts = new();
-    private readonly ConcurrentDictionary<TcpClient, Task> _acceptConnectionTasks = [];
+    public IInboundConnectionManager ConnectionManager { get; }
 
-    public IInboundConnectionManager ConnectionManager { get; } = new InboundConnectionManager(sessionManager, eventSerializer);
-
-    public int Port { get; } = listenPort;
+    public int Port { get; }
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -37,9 +51,7 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
 
         cancellationToken.ThrowIfCancellationRequested();
         CreateAndStartTcpListener();
-
         _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token), _cts.Token);
-
         return Task.CompletedTask;
     }
 
@@ -59,7 +71,7 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
             }
 
             TcpListener listener = _listener ?? throw new InvalidOperationException("Listener could not be started.");
-            TcpClient? incomingTransientConnection = null;
+            TcpClient? incomingTransientConnection;
             try
             {
                 incomingTransientConnection = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
@@ -74,35 +86,75 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
             }
             catch (Exception ex)
             {
-                await Console.Error.WriteLineAsync($"{nameof(AcceptLoopAsync)} failed: {ex}").ConfigureAwait(false);
+                _diagnostics.Rejected("accept-error", "unknown", exception: ex);
                 continue;
             }
 
-            if (incomingTransientConnection is null)
+            string peer = incomingTransientConnection.Client.RemoteEndPoint is System.Net.IPEndPoint remoteEndPoint
+                ? remoteEndPoint.Address.ToString()
+                : "unknown";
+            if (!_inboundCapacity.Wait(0))
             {
+                _diagnostics.Rejected("connection-limit", peer);
+                incomingTransientConnection.Dispose();
                 continue;
             }
 
-            Task<ConnectionInitializationResult> task = Task.Run(() => ConnectionManager.HandleIncomingTransientConnectionAsync(incomingTransientConnection, cancellationToken), cancellationToken);
-            _acceptConnectionTasks[incomingTransientConnection] = task;
-            _ = task.ContinueWith(finishedTask =>
-            {
-                if (DidAcceptConnectionTaskCompleteSuccessfullyAndHasValidInitializationResult(finishedTask, out ConnectionInitializationResult connectionResult)
-                    && connectionResult.IsSuccess
-                    && connectionResult.Session is { Key: not null } session)
-                {
-                    _ = SessionConnectionAccepted?.Invoke(session.Key, cancellationToken);
-                }
-                _acceptConnectionTasks.TryRemove(incomingTransientConnection, out _);
-            }, TaskContinuationOptions.ExecuteSynchronously);
+            var lease = new CapacityLease(_inboundCapacity);
+            Task<ConnectionInitializationResult> initializationTask =
+                ConnectionManager.HandleIncomingTransientConnectionAsync(incomingTransientConnection, cancellationToken);
+            _acceptConnectionTasks[incomingTransientConnection] = initializationTask;
+            _ = ObserveAcceptedConnectionAsync(incomingTransientConnection, initializationTask, lease, cancellationToken);
         }
     }
 
-    private static bool DidAcceptConnectionTaskCompleteSuccessfullyAndHasValidInitializationResult(Task<ConnectionInitializationResult> finishedTask, out ConnectionInitializationResult connectionResult)
+    private async Task ObserveAcceptedConnectionAsync(
+        TcpClient client,
+        Task<ConnectionInitializationResult> initializationTask,
+        CapacityLease lease,
+        CancellationToken cancellationToken)
     {
-        bool didItCompleteSuccessfullyWithValidResult = finishedTask.IsCompletedSuccessfully && finishedTask.Result is ConnectionInitializationResult { };
-        connectionResult = didItCompleteSuccessfullyWithValidResult ? finishedTask.Result : default!;
-        return didItCompleteSuccessfullyWithValidResult;
+        var leaseTransferred = false;
+        try
+        {
+            ConnectionInitializationResult result = await initializationTask.ConfigureAwait(false);
+            if (!result.IsSuccess || result.Session is not { Key: not null } session || result.ConnectionCancellation is null)
+            {
+                return;
+            }
+
+            try
+            {
+                _ = result.ConnectionCancellation.Token.Register(lease.Release);
+                leaseTransferred = true;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            Func<SessionKey, CancellationToken, Task>? handler = SessionConnectionAccepted;
+            if (handler is not null)
+            {
+                await handler(session.Key, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Listener is stopping.
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.Rejected("connection-initialization-error", "unknown", exception: ex);
+        }
+        finally
+        {
+            _acceptConnectionTasks.TryRemove(client, out _);
+            if (!leaseTransferred)
+            {
+                lease.Release();
+            }
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
@@ -112,6 +164,7 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
 
         Task acceptLoopTask = _acceptLoop ?? Task.CompletedTask;
         await acceptLoopTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await Task.WhenAll(_acceptConnectionTasks.Values).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
@@ -122,7 +175,7 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
         }
         catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException)
         {
-            await Console.Error.WriteLineAsync($"{nameof(PersistentPortListener)} stop failed: {ex}").ConfigureAwait(false);
+            _diagnostics.Rejected("listener-stop-error", "unknown", exception: ex);
         }
 
         try
@@ -131,12 +184,33 @@ internal class PersistentPortListener(int listenPort, IEventSerializer eventSeri
         }
         catch (Exception ex)
         {
-            await Console.Error.WriteLineAsync($"{nameof(PersistentPortListener)} disposal failed: {ex}").ConfigureAwait(false);
+            _diagnostics.Rejected("listener-disposal-error", "unknown", exception: ex);
         }
         finally
         {
             await _cts.CancelAsync().ConfigureAwait(false);
             _cts.Dispose();
+            _inboundCapacity.Dispose();
+        }
+    }
+
+    private sealed class CapacityLease(SemaphoreSlim semaphore)
+    {
+        private int _released;
+
+        public void Release()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+            {
+                try
+                {
+                    semaphore.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The listener completed disposal before the connection callback ran.
+                }
+            }
         }
     }
 }

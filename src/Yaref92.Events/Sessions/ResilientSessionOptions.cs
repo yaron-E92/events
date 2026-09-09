@@ -8,6 +8,10 @@ public sealed class ResilientSessionOptions
     public static readonly TimeSpan DefaultBackoffInitialDelay = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan DefaultBackoffMaxDelay = TimeSpan.FromSeconds(30);
     public const int DefaultMaximalReconnectAttempts = 5;
+    public const int DefaultMaxFrameBytes = 1024 * 1024;
+    public const int DefaultMaxInboundConnections = 128;
+    public const int DefaultMaxFramesPerSecondPerPeer = 100;
+    public const int DefaultFrameRateBurstAllowance = 20;
 
     public bool RequireAuthentication { get; init; }
     public bool DoAnonymousSessionsRequireAuthentication { get; init; }
@@ -25,6 +29,18 @@ public sealed class ResilientSessionOptions
     public TimeSpan BackoffMaxDelay { get; init; } = DefaultBackoffMaxDelay;
 
     public int MaximalReconnectAttempts { get; init; } = DefaultMaximalReconnectAttempts;
+
+    /// <summary>Maximum accepted length-prefixed session frame payload, in bytes.</summary>
+    public int MaxFrameBytes { get; init; } = DefaultMaxFrameBytes;
+
+    /// <summary>Maximum simultaneous inbound handshakes and active transient inbound connections.</summary>
+    public int MaxInboundConnections { get; init; } = DefaultMaxInboundConnections;
+
+    /// <summary>Maximum sustained frame rate accepted from one remote IP address.</summary>
+    public int MaxFramesPerSecondPerPeer { get; init; } = DefaultMaxFramesPerSecondPerPeer;
+
+    /// <summary>Additional frames one remote IP address may send during a one-second rate window.</summary>
+    public int FrameRateBurstAllowance { get; init; } = DefaultFrameRateBurstAllowance;
 
     /// <summary>
     /// Host name advertised to peers when establishing a session. Used by remote endpoints to dial back the sender.
@@ -59,19 +75,27 @@ public sealed class ResilientSessionOptions
         {
             return false;
         }
-        if (SessionBufferWindow < TimeSpan.Zero) 
+        if (SessionBufferWindow < TimeSpan.Zero)
         {
             return false;
         }
-        if (BackoffInitialDelay <= TimeSpan.Zero) 
+        if (BackoffInitialDelay <= TimeSpan.Zero)
         {
             return false;
         }
-        if (BackoffMaxDelay < BackoffInitialDelay) 
+        if (BackoffMaxDelay < BackoffInitialDelay)
         {
             return false;
         }
         if (MaximalReconnectAttempts < 0)
+        {
+            return false;
+        }
+        if (MaxFrameBytes <= 0 || MaxInboundConnections <= 0 || MaxFramesPerSecondPerPeer <= 0 || FrameRateBurstAllowance < 0)
+        {
+            return false;
+        }
+        if ((long)MaxFramesPerSecondPerPeer + FrameRateBurstAllowance > int.MaxValue)
         {
             return false;
         }

@@ -68,6 +68,40 @@ public class SessionFrameIOTests
         negativeResult.IsSuccess.Should().BeFalse();
     }
 
+    [Test]
+    public async Task ReadFrameAsync_RejectsOversizedLengthBeforeReadingPayload()
+    {
+        using var context = NetworkStreamTestContext.FromBytes(BitConverter.GetBytes(4096));
+
+        var result = await SessionFrameIO.ReadFrameAsync(
+            context.Stream,
+            new byte[4],
+            CancellationToken.None,
+            maxFrameBytes: 128);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Failure.Should().Be(SessionFrameIO.FrameReadFailure.FrameTooLarge);
+    }
+
+    [TestCase("not-json", SessionFrameIO.FrameReadFailure.MalformedPayload)]
+    [TestCase("{\"kind\":\"UNKNOWN\"}", SessionFrameIO.FrameReadFailure.MalformedPayload)]
+    [TestCase("{\"kind\":\"MSG\"}", SessionFrameIO.FrameReadFailure.InvalidFrame)]
+    [TestCase("{\"kind\":\"PING\",\"token\":\"unexpected\"}", SessionFrameIO.FrameReadFailure.InvalidFrame)]
+    [TestCase("{\"kind\":\"MSG\",\"id\":\"f47ac10b-58cc-4372-a567-0e02b2c3d479\",\"token\":\"unexpected\",\"payload\":\"{}\"}", SessionFrameIO.FrameReadFailure.InvalidFrame)]
+    public async Task ReadFrameAsync_ControlsMalformedAndUnsupportedFrames(
+        string payload,
+        SessionFrameIO.FrameReadFailure expectedFailure)
+    {
+        byte[] payloadBytes = System.Text.Encoding.UTF8.GetBytes(payload);
+        byte[] bytes = [.. BitConverter.GetBytes(payloadBytes.Length), .. payloadBytes];
+        using var context = NetworkStreamTestContext.FromBytes(bytes);
+
+        var result = await SessionFrameIO.ReadFrameAsync(context.Stream, new byte[4], CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Failure.Should().Be(expectedFailure);
+    }
+
     private static byte[] BuildLengthPrefixedPayload(SessionFrame frame)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(frame, SessionFrameSerializer.Options);

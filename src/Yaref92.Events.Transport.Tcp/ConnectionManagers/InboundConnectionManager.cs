@@ -31,11 +31,19 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
     private readonly IEventSerializer _serializer; // To deserialize incoming event frames
     private readonly Task? _monitorConnectionsLoop;
+    private readonly PeerIngressLimiter _ingressLimiter;
+    private readonly IngressDiagnostics _diagnostics;
 
-    public InboundConnectionManager(TcpSessionManager sessionManager, IEventSerializer serializer)
+    public InboundConnectionManager(
+        TcpSessionManager sessionManager,
+        IEventSerializer serializer,
+        PeerIngressLimiter? ingressLimiter = null,
+        IngressDiagnostics? diagnostics = null)
     {
         SessionManager = sessionManager;
         _serializer = serializer;
+        _ingressLimiter = ingressLimiter ?? new PeerIngressLimiter(sessionManager.Options);
+        _diagnostics = diagnostics ?? new IngressDiagnostics(null);
         _monitorConnectionsLoop = Task.Run(() => MonitorConnectionsAsync(_cts.Token), _cts.Token);
     }
 
@@ -67,8 +75,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         {
             // Connection could not be re-established
             // React to stale connection, e.g., notify session manager or log
-            await Console.Error.WriteLineAsync($"Session {sessionKey} connection is stale and could not be re-established.")
-                .ConfigureAwait(false);
+            _diagnostics.Rejected("stale-session", sessionKey.Host);
         }
         // If connection was re-established, react accordingly...
         // ... but, technically nothing to do here since the session's InboundConnection would have been updated
@@ -97,9 +104,9 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         {
             // shutting down
         }
-        catch (Exception ex) when (ex is IOException or SocketException or JsonException)
+        catch (Exception ex) when (ex is IOException or SocketException or JsonException or NotSupportedException)
         {
-            await Console.Error.WriteLineAsync($"{nameof(HandleIncomingTransientConnectionAsync)} error: {ex}").ConfigureAwait(false);
+            _diagnostics.Rejected("connection-error", GetPeer(incomingTransientConnection), exception: ex);
         }
         finally
         {
@@ -118,14 +125,25 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         CancellationToken serverToken)
     {
         NetworkStream stream = transientIncomingConnection.GetStream();
-        var authFrameResult = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, serverToken).ConfigureAwait(false);
+        var remoteEndPoint = transientIncomingConnection.Client.RemoteEndPoint;
+        var peer = GetPeer(transientIncomingConnection);
+        var authFrameResult = await SessionFrameIO.ReadFrameAsync(
+            stream,
+            lengthBuffer,
+            serverToken,
+            SessionManager.Options.MaxFrameBytes).ConfigureAwait(false);
         if (!authFrameResult.IsSuccess)
         {
+            _diagnostics.Rejected("invalid-initial-frame", peer, authFrameResult.Failure.ToString());
+            return ConnectionInitializationResult.Failed();
+        }
+        if (!_ingressLimiter.TryAcquire(remoteEndPoint, out peer))
+        {
+            _diagnostics.Rejected("peer-rate-limit", peer);
             return ConnectionInitializationResult.Failed();
         }
 
         var initialFrame = authFrameResult.Frame!;
-        var remoteEndPoint = transientIncomingConnection.Client.RemoteEndPoint;
         var shouldReplayInitialFrame = false;
         IResilientPeerSession session;
         try
@@ -141,20 +159,19 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             }
             else
             {
+                _diagnostics.Rejected("authentication-required", peer);
                 return ConnectionInitializationResult.Failed();
             }
         }
-        catch (System.Security.Authentication.AuthenticationException)
+        catch (System.Security.Authentication.AuthenticationException ex)
         {
-            await Console.Error.WriteLineAsync($"Authentication failed for incoming connection from {remoteEndPoint}.")
-                .ConfigureAwait(false);
+            _diagnostics.Rejected("authentication-failed", peer, exception: ex);
             return ConnectionInitializationResult.Failed();
         }
 
         if (session is null)
         {
-            await Console.Error.WriteLineAsync($"Could not resolve session for incoming connection from {remoteEndPoint}.")
-                .ConfigureAwait(false);
+            _diagnostics.Rejected("session-resolution-failed", peer);
             return ConnectionInitializationResult.Failed();
         }
 
@@ -164,7 +181,12 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         await EnsureInboundConnectionInitializedAsync(session, serverToken).ConfigureAwait(false);
 
         var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-        await (session as IResilientTcpSession).InboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
+        IInboundResilientConnection inboundConnection = (session as IResilientTcpSession).InboundConnection;
+        if (inboundConnection is Connections.ResilientInboundConnection resilientInboundConnection)
+        {
+            resilientInboundConnection.ConfigureIngress(remoteEndPoint, _ingressLimiter, _diagnostics);
+        }
+        await inboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
 
         if (shouldReplayInitialFrame)
         {
@@ -172,6 +194,13 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         }
 
         return ConnectionInitializationResult.Success(session, connectionCts);
+    }
+
+    private static string GetPeer(TcpClient client)
+    {
+        return client.Client.RemoteEndPoint is System.Net.IPEndPoint remoteEndPoint
+            ? remoteEndPoint.Address.ToString()
+            : "unknown";
     }
 
     private void EnsureFrameHandlerSubscribed(IResilientPeerSession session)
@@ -259,12 +288,20 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
                       .FirstOrDefault(session => session.Key == sessionKey);
         if (sessionWithValidAuthentication == null)
         {
-            await Console.Error.WriteLineAsync($"Received event frame for unauthenticated or invalid anonymous session {sessionKey}. Ignoring.")
-                .ConfigureAwait(false);
+            _diagnostics.Rejected("invalid-session", sessionKey.Host);
             return;
         }
         sessionWithValidAuthentication.Touch();
-        IDomainEvent? domainEvent = _serializer.Deserialize(frame.Payload!).domainEvent;
+
+        IDomainEvent? domainEvent;
+        try
+        {
+            domainEvent = _serializer.Deserialize(frame.Payload!).domainEvent;
+        }
+        catch (Exception ex)
+        {
+            throw new IngressProtocolException("event-deserialization", ex);
+        }
 
         if (domainEvent is not null)
         {
@@ -281,8 +318,14 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         await _cts.CancelAsync().ConfigureAwait(false);
 
         Task[] tasks = [.._receiveFramesTasks.Values.Cast<Task>(), _monitorConnectionsLoop ?? Task.CompletedTask];
-        await Task.WhenAll(tasks)
-            .WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await Task.WhenAll(tasks).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // Internal loops are expected to observe manager shutdown.
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -293,8 +336,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         }
         catch (Exception ex)
         {
-            await Console.Error.WriteLineAsync($"{nameof(InboundConnectionManager)} disposal failed: {ex}")
-                .ConfigureAwait(false);
+            _diagnostics.Rejected("manager-disposal-error", "unknown", exception: ex);
         }
         finally
         {

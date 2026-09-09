@@ -1,4 +1,6 @@
-﻿using Yaref92.Events.Abstractions;
+﻿using Microsoft.Extensions.Logging;
+
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transport.Tcp.Abstractions;
@@ -37,8 +39,10 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         int listenPort,
         IEventSerializer? serializer = null,
         TimeSpan? heartbeatInterval = null,
-        string? authenticationToken = null)
-        : this(CreateListener(listenPort, serializer, heartbeatInterval, authenticationToken, out var publisher, out var serializerToUse), publisher, serializerToUse)
+        string? authenticationToken = null,
+        ResilientSessionOptions? sessionOptions = null,
+        ILogger<TcpEventTransport>? logger = null)
+        : this(CreateListener(listenPort, serializer, heartbeatInterval, authenticationToken, sessionOptions, logger, out var publisher, out var serializerToUse), publisher, serializerToUse)
     {
     }
 
@@ -148,22 +152,41 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         IEventSerializer? serializer,
         TimeSpan? heartbeatInterval,
         string? authenticationToken,
+        ResilientSessionOptions? configuredOptions,
+        ILogger<TcpEventTransport>? logger,
         out IPersistentFramePublisher publisher,
         out IEventSerializer serializerToUse)
     {
         serializerToUse = serializer ?? new JsonEventSerializer();
 
-        var interval = heartbeatInterval ?? TimeSpan.FromSeconds(30);
-        ResilientSessionOptions sessionOptions = new()
+        ResilientSessionOptions sessionOptions;
+        if (configuredOptions is not null)
         {
-            RequireAuthentication = authenticationToken is not null,
-            AuthenticationToken = authenticationToken,
-            HeartbeatInterval = interval,
-            HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
-        };
+            if (heartbeatInterval is not null || authenticationToken is not null)
+            {
+                throw new ArgumentException("Heartbeat and authentication parameters cannot be combined with sessionOptions.", nameof(configuredOptions));
+            }
+            sessionOptions = configuredOptions;
+        }
+        else
+        {
+            var interval = heartbeatInterval ?? ResilientSessionOptions.DefaultHeartbeatInterval;
+            sessionOptions = new ResilientSessionOptions
+            {
+                RequireAuthentication = authenticationToken is not null,
+                AuthenticationToken = authenticationToken,
+                HeartbeatInterval = interval,
+                HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
+            };
+        }
+
+        if (!sessionOptions.Validate())
+        {
+            throw new ArgumentException("Session options are invalid.", nameof(configuredOptions));
+        }
 
         var sessionManager = new TcpSessionManager(listenPort, sessionOptions);
         publisher = new PersistentEventPublisher(sessionManager);
-        return new PersistentPortListener(listenPort, serializerToUse, sessionManager);
+        return new PersistentPortListener(listenPort, serializerToUse, sessionManager, logger);
     }
 }
