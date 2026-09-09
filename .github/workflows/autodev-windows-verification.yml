@@ -23,6 +23,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: autodev-windows-verification-${{ inputs.expected_sha }}
+  cancel-in-progress: false
+
 jobs:
   windows:
     name: Windows / exact source

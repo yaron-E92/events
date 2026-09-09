@@ -1,6 +1,3 @@
-# This workflow will build and test a .NET project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-net
-
 name: Continous integration pipeline
 
 on:
@@ -10,42 +7,44 @@ on:
     branches: [ "main", "develop" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  buildAndTest:
-    runs-on: ubuntu-latest
+  policy:
+    name: Shared workflow policy
+    uses: yaron-E92/AutoDev/.github/workflows/profile-baseline.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      require_concurrency: true
     permissions:
-      checks: write
-      pull-requests: write
       contents: read
 
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup .NET
-      id: setupDotnet
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '10.0.2xx'
-
-    - name: Install Android workload
-      shell: pwsh
-      run: |
-        dotnet workload install android --skip-manifest-update
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "Failed to install Android workload"
-          exit 1
-        }
-
-    - name: Build
-      id: build
-      run: dotnet build Yaref92.Events.ci.slnf
-    - name: Test
-      run: dotnet test Yaref92.Events.ci.slnf --logger "trx" --no-build --verbosity normal
-    - name: Publish Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v2
-      if: ${{steps.build.outcome == 'success'}}
-      with:
-        files: |
-          tests/**/TestResults/*.xml
-          tests/**/TestResults/*.trx
-          tests/**/TestResults/*.json
+  build-and-test:
+    name: Build, test, and validate packages
+    needs: policy
+    uses: yaron-E92/AutoDev/.github/workflows/profile-dotnet.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      global_json_file: global.json
+      setup_command: dotnet workload install android --skip-manifest-update
+      restore_command: dotnet restore Yaref92.Events.ci.slnf
+      build_command: dotnet build Yaref92.Events.ci.slnf --configuration Release --no-restore
+      test_command: dotnet test Yaref92.Events.ci.slnf --configuration Release --no-build --no-restore --logger trx --results-directory artifacts/test-results
+      lint_command: |
+        rm -rf artifacts/package/release
+        dotnet pack src/Yaref92.Events/Yaref92.Events.csproj --configuration Release --no-build --no-restore
+        dotnet pack src/Yaref92.Events.Rx/Yaref92.Events.Rx.csproj --configuration Release --no-build --no-restore
+        dotnet pack src/Yaref92.Events.Transport.Tcp/Yaref92.Events.Transport.Tcp.csproj --configuration Release --no-build --no-restore
+        dotnet pack src/Yaref92.Events.Transport.Grpc/Yaref92.Events.Transport.Grpc.csproj --configuration Release --no-build --no-restore
+        for package in Yaref92.Events Yaref92.Events.Rx Yaref92.Events.Transport.Tcp Yaref92.Events.Transport.Grpc; do
+          compgen -G "artifacts/package/release/${package}.[0-9]*.nupkg" > /dev/null || { echo "Missing package for ${package}" >&2; exit 1; }
+        done
+      test_results_path: artifacts/test-results/**/*.trx
+      artifact_name: events-test-results
+    permissions:
+      contents: read
