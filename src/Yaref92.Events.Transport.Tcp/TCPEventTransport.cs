@@ -42,7 +42,12 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         string? authenticationToken = null,
         ResilientSessionOptions? sessionOptions = null,
         ILogger<TcpEventTransport>? logger = null)
-        : this(CreateListener(listenPort, serializer, heartbeatInterval, authenticationToken, sessionOptions, logger, out var publisher, out var serializerToUse), publisher, serializerToUse)
+        : this(CreateComponents(listenPort, serializer, heartbeatInterval, authenticationToken, sessionOptions, logger))
+    {
+    }
+
+    private TcpEventTransport(TransportComponents components)
+        : this(components.Listener, components.Publisher, components.Serializer)
     {
     }
 
@@ -147,17 +152,15 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         await Task.WhenAll(publisherDispose, listenerDispose).ConfigureAwait(false);
     }
 
-    private static IPersistentPortListener CreateListener(
+    private static TransportComponents CreateComponents(
         int listenPort,
         IEventSerializer? serializer,
         TimeSpan? heartbeatInterval,
         string? authenticationToken,
         ResilientSessionOptions? configuredOptions,
-        ILogger<TcpEventTransport>? logger,
-        out IPersistentFramePublisher publisher,
-        out IEventSerializer serializerToUse)
+        ILogger<TcpEventTransport>? logger)
     {
-        serializerToUse = serializer ?? new JsonEventSerializer();
+        IEventSerializer serializerToUse = serializer ?? new JsonEventSerializer();
 
         ResilientSessionOptions sessionOptions;
         if (configuredOptions is not null)
@@ -186,7 +189,13 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         }
 
         var sessionManager = new TcpSessionManager(listenPort, sessionOptions);
-        publisher = new PersistentEventPublisher(sessionManager);
-        return new PersistentPortListener(listenPort, serializerToUse, sessionManager, logger);
+        var publisher = new PersistentEventPublisher(sessionManager);
+        var listener = new PersistentPortListener(listenPort, serializerToUse, sessionManager, logger);
+        return new TransportComponents(listener, publisher, serializerToUse);
     }
+
+    private sealed record TransportComponents(
+        IPersistentPortListener Listener,
+        IPersistentFramePublisher Publisher,
+        IEventSerializer Serializer);
 }

@@ -10,6 +10,7 @@ using Yaref92.Events.Transports;
 namespace Yaref92.Events.Transport.Tcp;
 internal class PersistentPortListener : IPersistentPortListener
 {
+    private const string UnknownPeer = "unknown";
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<TcpClient, Task> _acceptConnectionTasks = [];
     private readonly SemaphoreSlim _inboundCapacity;
@@ -86,14 +87,14 @@ internal class PersistentPortListener : IPersistentPortListener
             }
             catch (Exception ex)
             {
-                _diagnostics.Rejected("accept-error", "unknown", exception: ex);
+                _diagnostics.Rejected("accept-error", UnknownPeer, exception: ex);
                 continue;
             }
 
             string peer = incomingTransientConnection.Client.RemoteEndPoint is System.Net.IPEndPoint remoteEndPoint
                 ? remoteEndPoint.Address.ToString()
-                : "unknown";
-            if (!_inboundCapacity.Wait(0))
+                : UnknownPeer;
+            if (!await _inboundCapacity.WaitAsync(0, cancellationToken).ConfigureAwait(false))
             {
                 _diagnostics.Rejected("connection-limit", peer);
                 incomingTransientConnection.Dispose();
@@ -145,7 +146,7 @@ internal class PersistentPortListener : IPersistentPortListener
         }
         catch (Exception ex)
         {
-            _diagnostics.Rejected("connection-initialization-error", "unknown", exception: ex);
+            _diagnostics.Rejected("connection-initialization-error", UnknownPeer, exception: ex);
         }
         finally
         {
@@ -175,7 +176,7 @@ internal class PersistentPortListener : IPersistentPortListener
         }
         catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException)
         {
-            _diagnostics.Rejected("listener-stop-error", "unknown", exception: ex);
+            _diagnostics.Rejected("listener-stop-error", UnknownPeer, exception: ex);
         }
 
         try
@@ -184,7 +185,7 @@ internal class PersistentPortListener : IPersistentPortListener
         }
         catch (Exception ex)
         {
-            _diagnostics.Rejected("listener-disposal-error", "unknown", exception: ex);
+            _diagnostics.Rejected("listener-disposal-error", UnknownPeer, exception: ex);
         }
         finally
         {

@@ -100,7 +100,7 @@ internal sealed class IngressDiagnostics(ILogger? logger)
     }
 }
 
-internal sealed class IngressProtocolException(string category, Exception innerException)
+public sealed class IngressProtocolException(string category, Exception innerException)
     : Exception("The inbound frame violated the protocol.", innerException)
 {
     public string Category { get; } = category;
