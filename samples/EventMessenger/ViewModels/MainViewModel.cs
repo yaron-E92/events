@@ -27,7 +27,7 @@ public class MainViewModel : INotifyPropertyChanged
     private string _peerHost = "localhost";
     private string _peerPort = "5050";
     private Platform _selectedPeerPlatform = Platform.Windows;
-    private string _myPort = "5050";
+    private string _myPort;
     private string _messageText = string.Empty;
 
     public MainViewModel(NetworkedEventAggregator aggregator, GrpcEventTransport transport, MessengerSettings settings)

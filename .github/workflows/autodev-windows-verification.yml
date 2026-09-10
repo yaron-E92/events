@@ -20,6 +20,13 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
+concurrency:
+  group: autodev-windows-verification-${{ inputs.expected_sha }}
+  cancel-in-progress: false
+
 jobs:
   windows:
     name: Windows / exact source
@@ -51,8 +58,6 @@ jobs:
           ref: ${{ inputs.autodev_ref }}
           path: autodev-tooling
           persist-credentials: false
-
-
 
       - name: Execute Windows verification
         shell: pwsh

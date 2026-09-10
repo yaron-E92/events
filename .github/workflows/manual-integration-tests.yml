@@ -1,37 +1,27 @@
-name: Manual Integration Tests
+name: Manual network-sensitive integration tests
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-integration-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   integration-tests:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.2xx'
-
-      - name: Install Android workload
-        run: dotnet workload install android --skip-manifest-update
-
-      - name: Restore dependencies
-        run: dotnet restore Yaref92.Events.ci.slnf
-
-      - name: Build solution
-        id: build
-        run: dotnet build Yaref92.Events.ci.slnf --no-restore --configuration Release
-
-      - name: Run integration tests
-        run: dotnet test tests/Yaref92.Events.IntegrationTests --configuration Release --logger "trx;LogFileName=test_results.trx" --filter TestCategory=Integration
-
-      - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action@v2
-        if: ${{steps.build.outcome == 'success'}}
-        with:
-          files: tests/Yaref92.Events.IntegrationTests/TestResults/*.trx
-          check_name: "Integration tests Results"
+    name: Run manual TCP integration tests
+    uses: yaron-E92/AutoDev/.github/workflows/profile-dotnet.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    with:
+      ref: ${{ github.sha }}
+      global_json_file: global.json
+      setup_command: dotnet workload install android --skip-manifest-update
+      restore_command: dotnet restore Yaref92.Events.ci.slnf
+      build_command: dotnet build Yaref92.Events.ci.slnf --configuration Debug --no-restore
+      test_command: dotnet test tests/Yaref92.Events.IntegrationTests --configuration Debug --no-build --no-restore --filter TestCategory=Integration --logger "trx;LogFileName=integration.trx" --results-directory artifacts/test-results/manual-integration
+      test_results_path: artifacts/test-results/manual-integration/*.trx
+      artifact_name: events-manual-integration-results
+    permissions:
+      contents: read

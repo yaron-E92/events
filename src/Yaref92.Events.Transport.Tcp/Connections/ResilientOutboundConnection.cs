@@ -200,7 +200,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
                 continue;
             }
 
-            await _stateLock.WaitAsync().ConfigureAwait(false);
+            await _stateLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try
             {
                 if (FrameIsAcknowledgedEvent(frame))
@@ -304,7 +304,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             {
                 ClearAcknowledgementState(eventId, AcknowledgementState.Acknowledged);
             }
-        });
+        }, CancellationToken.None);
     }
 
     public void EnqueueFrame(SessionFrame frame)
@@ -317,7 +317,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             && frame.Id != Guid.Empty
             && frame.Payload is string payload)
         {
-            _stateLock.Wait();
+            _stateLock.Wait(CancellationToken.None);
             try
             {
                 if (!_outboxEntries.TryGetValue(frame.Id, out var entry)
@@ -350,7 +350,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
     public void OnAckReceived(Guid eventId)
     {
         var removed = false;
-        _stateLock.Wait();
+        _stateLock.Wait(CancellationToken.None);
         try
         {
             removed = _outboxEntries.Remove(eventId);
@@ -463,7 +463,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     private bool TryConsumeReconnectBudget()
     {
-        if (!_reconnectGate.Wait(0))
+        if (!_reconnectGate.Wait(0, CancellationToken.None))
         {
             return false;
         }
@@ -813,7 +813,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             {
                 Console.Error.WriteLine($"{nameof(ResilientCompositSessionConnection)} failed to persist outbox: {ex}");
             }
-        });
+        }, CancellationToken.None);
     }
 
     private void SignalFirstConnectionSuccess()
@@ -863,7 +863,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
             if (_runOutboundTask is null)
             {
                 _firstConnectionCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                _runOutboundTask = Task.Run(() => RunOutboundAsync(cancellationToken));
+                _runOutboundTask = Task.Run(() => RunOutboundAsync(cancellationToken), CancellationToken.None);
                 return;
             }
 
@@ -873,7 +873,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     private bool TryMarkEventDequeued(Guid messageId)
     {
-        _stateLock.Wait();
+        _stateLock.Wait(CancellationToken.None);
         try
         {
             if (_outboxEntries.TryGetValue(messageId, out var entry))
@@ -892,7 +892,7 @@ public sealed partial class ResilientOutboundConnection : IOutboundResilientConn
 
     private void TryMarkEventQueued(Guid messageId)
     {
-        _stateLock.Wait();
+        _stateLock.Wait(CancellationToken.None);
         try
         {
             if (_outboxEntries.TryGetValue(messageId, out var entry))

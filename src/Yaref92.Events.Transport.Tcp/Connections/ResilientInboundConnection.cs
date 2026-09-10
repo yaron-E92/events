@@ -2,6 +2,7 @@
 using System.Net.Sockets;
 
 using Yaref92.Events.Sessions;
+using Yaref92.Events.Transport.Tcp;
 using Yaref92.Events.Transport.Tcp.Abstractions;
 
 using static Yaref92.Events.Transport.Tcp.Abstractions.IInboundResilientConnection;
@@ -19,17 +20,27 @@ public class ResilientInboundConnection : IInboundResilientConnection
     private CancellationTokenSource _incomingConnectionCts = new();
     private long _lastRemoteActivityTicks;
     private Task? _runInboundTask;
+    private EndPoint? _remoteIngressEndPoint;
+    private PeerIngressLimiter? _ingressLimiter;
+    private IngressDiagnostics? _diagnostics;
     private TcpClient? _transientConnection;
     private Task _transientReceiveLoop = Task.CompletedTask;
 
     public ResilientInboundConnection(ResilientSessionOptions options, SessionKey sessionKey, ResilientOutboundConnection outboundConnection)
     {
-        _options = options!; // The SessionManager ensures options are valid
+        _options = options; // The SessionManager ensures options are valid
         SessionKey = sessionKey;
         OutboundConnection = outboundConnection;
         SessionKey = sessionKey;
         _sessionToken = SessionFrameContract.CreateSessionToken(SessionKey, _options, _options.AuthenticationToken);
         RecordRemoteActivity();
+    }
+
+    internal void ConfigureIngress(EndPoint? remoteEndPoint, PeerIngressLimiter ingressLimiter, IngressDiagnostics diagnostics)
+    {
+        _remoteIngressEndPoint = remoteEndPoint;
+        _ingressLimiter = ingressLimiter;
+        _diagnostics = diagnostics;
     }
 
     public bool IsPastTimeout => _lastRemoteActivityTicks < (DateTime.UtcNow - _options.HeartbeatTimeout).Ticks;
@@ -190,7 +201,7 @@ public class ResilientInboundConnection : IInboundResilientConnection
 
             var connectionToken = _incomingConnectionCts.Token;
             _transientReceiveLoop = Task.Run(
-                () => RunTransientConnectionReceiveLoopAsync(transientConnection, connectionToken),
+                () => RunTransientConnectionReceiveLoopAsync(transientConnection, _incomingConnectionCts, connectionToken),
                 connectionToken);
         }
     }
@@ -200,7 +211,10 @@ public class ResilientInboundConnection : IInboundResilientConnection
         return exception is TcpConnectionDisconnectedException or IOException or SocketException or ObjectDisposedException;
     }
 
-    private async Task RunTransientConnectionReceiveLoopAsync(TcpClient client, CancellationToken incomingConnectionCancellation) //touched
+    private async Task RunTransientConnectionReceiveLoopAsync(
+        TcpClient client,
+        CancellationTokenSource connectionCancellation,
+        CancellationToken incomingConnectionCancellation)
     {
         try
         {
@@ -213,10 +227,15 @@ public class ResilientInboundConnection : IInboundResilientConnection
                 {
                     break;
                 }
+
                 SessionFrameIO.FrameReadResult result;
                 try
                 {
-                    result = await SessionFrameIO.ReadFrameAsync(stream, lengthBuffer, incomingConnectionCancellation).ConfigureAwait(false);
+                    result = await SessionFrameIO.ReadFrameAsync(
+                        stream,
+                        lengthBuffer,
+                        incomingConnectionCancellation,
+                        _options.MaxFrameBytes).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (incomingConnectionCancellation.IsCancellationRequested)
                 {
@@ -225,11 +244,24 @@ public class ResilientInboundConnection : IInboundResilientConnection
 
                 if (!result.IsSuccess || result.Frame is null)
                 {
-                    _ = Console.Error.WriteLineAsync("Frame read failed or resulted in null frame");
+                    _diagnostics?.Rejected("invalid-frame", GetIngressPeer(), result.Failure.ToString());
+                    break;
+                }
+                if (_ingressLimiter is not null && !_ingressLimiter.TryAcquire(_remoteIngressEndPoint, out string peer))
+                {
+                    _diagnostics?.Rejected("peer-rate-limit", peer);
                     break;
                 }
 
-                await HandleInboundFrameAsync(result.Frame, incomingConnectionCancellation).ConfigureAwait(false);
+                try
+                {
+                    await HandleInboundFrameAsync(result.Frame, incomingConnectionCancellation).ConfigureAwait(false);
+                }
+                catch (IngressProtocolException ex)
+                {
+                    _diagnostics?.Rejected(ex.Category, GetIngressPeer(), exception: ex.InnerException);
+                    break;
+                }
             }
 
             if (!client.Connected)
@@ -239,15 +271,30 @@ public class ResilientInboundConnection : IInboundResilientConnection
         }
         finally
         {
+            try
+            {
+                await connectionCancellation.CancelAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // A replacement connection already disposed this token source.
+            }
             client.Dispose();
         }
+    }
+
+    private string GetIngressPeer()
+    {
+        return _remoteIngressEndPoint is IPEndPoint remoteEndPoint
+            ? remoteEndPoint.Address.ToString()
+            : "unknown";
     }
 
     private void StartRunInboundLoop()
     {
         lock (_runLock)
         {
-            _runInboundTask ??= Task.Run(() => RunInboundAsync(_cts.Token));
+            _runInboundTask ??= Task.Run(() => RunInboundAsync(_cts.Token), _cts.Token);
         }
     }
 }

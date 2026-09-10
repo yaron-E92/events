@@ -1,190 +1,53 @@
-# This workflow will build and test a .NET project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-net
-
 name: Continous integration pipeline
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "develop" ]
   workflow_dispatch:
-    inputs:
-      snapshot:
-        description: "Publish snapshot (RC) release"
-        required: false
-        default: "false"
-        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  gitVersion:
-    runs-on: ubuntu-latest
-    outputs:
-      branchName: ${{ steps.gitversion.outputs.branchName }} # To use an output in another job, you have to map it to a job output.
-      semVer: ${{ steps.select-version.outputs.semVer }}
-      sha: ${{ steps.gitversion.outputs.sha }}
-      nugetVersion: ${{ steps.select-version.outputs.nugetVersion }}
-      assemblySemFileVer: ${{ steps.select-version.outputs.assemblySemFileVer }}
-      informationalVersion: ${{ steps.select-version.outputs.informationalVersion }}
-
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    - name: Prepare GitVersion arguments
-      id: gitversionArgs
-      run: |
-        args="/updateprojectfiles"
-        if [ "${{ inputs.snapshot }}" = "true" ]; then
-          args="$args /overrideconfig tag=rc"
-        fi
-
-        echo "value=$args" >> $GITHUB_OUTPUT
-    - name: Install GitVersion
-      uses: gittools/actions/gitversion/setup@v1.1.1
-      with:
-        versionSpec: '5.x'
-        preferLatestVersion: true
-    - name: Determine Version
-      id:   gitversion # id to later be referenced
-      uses: gittools/actions/gitversion/execute@v1.1.1
-      with:
-        additionalArguments: ${{ steps.gitversionArgs.outputs.value }}
-        useConfigFile: true
-        configFilePath: '.github/GitVersion.yaml'
-
-    - name: Select version (snapshot-aware)
-      id: select-version
-      run: |
-        semVer="${{ steps.gitversion.outputs.semVer }}"
-        nugetVersion="${{ steps.gitversion.outputs.nuGetVersion }}"
-        assemblySemFileVer="${{ steps.gitversion.outputs.assemblySemFileVer }}"
-        informationalVersion="${{ steps.gitversion.outputs.informationalVersion }}"
-
-        if [ "${{ inputs.snapshot }}" = "true" ]; then
-          baseVersion="${{ steps.gitversion.outputs.majorMinorPatch }}"
-          rcTimestamp="$(date -u +%Y%m%d%H%M%S)"
-          semVer="${baseVersion}-rc.${rcTimestamp}"
-          nugetVersion="$semVer"
-          informationalVersion="$semVer"
-        fi
-
-        echo "semVer=$semVer" >> $GITHUB_OUTPUT
-        echo "nugetVersion=$nugetVersion" >> $GITHUB_OUTPUT
-        echo "assemblySemFileVer=$assemblySemFileVer" >> $GITHUB_OUTPUT
-        echo "informationalVersion=$informationalVersion" >> $GITHUB_OUTPUT
-
-  buildAndTest:
-    needs: [gitVersion]
-    runs-on: ubuntu-latest
+  policy:
+    name: Shared workflow policy
+    uses: yaron-E92/AutoDev/.github/workflows/profile-baseline.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      require_concurrency: true
     permissions:
-      checks: write
-      pull-requests: write
       contents: read
+      packages: read
 
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup .NET
-      id: setupDotnet
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '10.0.2xx'
-
-    - name: Install Android workload
-      shell: pwsh
-      run: |
-        dotnet workload install android --skip-manifest-update
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "Failed to install Android workload"
-          exit 1
-        }
-
-    - name: Build
-      id: build
-      run: dotnet build Yaref92.Events.ci.slnf /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }} /p:Version=${{ needs.gitVersion.outputs.semVer }} /p:PackageVersion=${{ needs.gitVersion.outputs.nugetVersion }}
-    - name: Test
-      run: dotnet test Yaref92.Events.ci.slnf --logger "trx" --no-build --verbosity normal /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }}
-    - name: Publish Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v2
-      if: ${{steps.build.outcome == 'success'}}
-      with:
-        files: |
-          tests/**/TestResults/*.xml
-          tests/**/TestResults/*.trx
-          tests/**/TestResults/*.json
-
-  tagAndRelease:
-    needs: [gitVersion, buildAndTest]
-    runs-on: ubuntu-latest
-    if: contains(needs.gitVersion.outputs.branchName, 'main') || inputs.snapshot
-    permissions:
-      contents: write
-      packages: write
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '10.0.2xx'
-
-    - name: Install Android workload
-      shell: pwsh
-      run: |
-        dotnet workload install android --skip-manifest-update
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "Failed to install Android workload"
-          exit 1
-        }
-
-    - name: Fetch all tags
-      run: git fetch --tags --force
-    - name: Tag on main
-      run: |
-          git config --global user.name "Github actions: gitversion"
-          git config --global user.email "gitversion@github-actions.com"
-          # Check if tag already exists
-          if git rev-parse "${{ needs.gitVersion.outputs.semVer}}" >/dev/null 2>&1; then
-            echo "Tag ${{ needs.gitVersion.outputs.semVer}} already exists, skipping tag creation"
-          else
-            echo "Creating tag ${{ needs.gitVersion.outputs.semVer}}"
-            git tag -a "${{ needs.gitVersion.outputs.semVer}}" -m "Version ${{ needs.gitVersion.outputs.semVer}}"
-            git push --tags
-          fi
-    - name: Check if package version already exists on GitHub Packages
-      id: check-package
-      run: |
-        VERSION="${{ needs.gitVersion.outputs.semVer }}"
-        echo "Checking for version $VERSION of $PACKAGE_NAME"
-
-        RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          -H "Accept: application/vnd.github+json" \
-          "https://api.github.com/users/yaron-E92/packages/nuget/Yaref92.Events/versions")
-
-        EXISTS=$(echo "$RESPONSE" | jq -r --arg VERSION "$VERSION" '.[] | select(.name == $VERSION) | .name')
-
-        if [[ "$EXISTS" == "$VERSION" ]]; then
-          echo "skip=true" >> $GITHUB_OUTPUT
-          echo "Version $VERSION already exists. Skipping push."
-        else
-          echo "skip=false" >> $GITHUB_OUTPUT
-          echo "Version $VERSION not found. Proceeding with push."
-        fi
-    - name: Pack Nuget
-      if: steps.check-package.outputs.skip == 'false'
-      run: dotnet pack Yaref92.Events.ci.slnf -c Release -o out /p:AssemblyVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:FileVersion=${{ needs.gitVersion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ needs.gitVersion.outputs.informationalVersion }} /p:Version=${{ needs.gitVersion.outputs.semVer }} /p:PackageVersion=${{ needs.gitVersion.outputs.nugetVersion }}
-    - name: Release NuGet package
-      if: steps.check-package.outputs.skip == 'false'
-      run: |
-        for file in ./out/*.nupkg; do
-          echo "Pushing $file..."
-          dotnet nuget push "$file" \
-            --api-key ${GITHUB_TOKEN} \
-            --source "https://nuget.pkg.github.com/yaron-E92/index.json" \
-            --skip-duplicate
+  build-and-test:
+    name: Build, test, and validate packages
+    needs: policy
+    uses: yaron-E92/AutoDev/.github/workflows/profile-dotnet.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      global_json_file: global.json
+      setup_command: dotnet workload install android --skip-manifest-update
+      restore_command: dotnet restore Yaref92.Events.ci.slnf
+      build_command: dotnet build Yaref92.Events.ci.slnf --configuration Debug --no-restore
+      test_command: dotnet test Yaref92.Events.ci.slnf --configuration Debug --no-build --no-restore --logger trx --results-directory artifacts/test-results
+      lint_command: |
+        rm -rf artifacts/package/release
+        dotnet pack src/Yaref92.Events/Yaref92.Events.csproj --configuration Release --no-restore
+        dotnet pack src/Yaref92.Events.Rx/Yaref92.Events.Rx.csproj --configuration Release --no-restore
+        dotnet pack src/Yaref92.Events.Transport.Tcp/Yaref92.Events.Transport.Tcp.csproj --configuration Release --no-restore
+        dotnet pack src/Yaref92.Events.Transport.Grpc/Yaref92.Events.Transport.Grpc.csproj --configuration Release --no-restore
+        for package in Yaref92.Events Yaref92.Events.Rx Yaref92.Events.Transport.Tcp Yaref92.Events.Transport.Grpc; do
+          compgen -G "artifacts/package/release/${package}.[0-9]*.nupkg" > /dev/null || { echo "Missing package for ${package}" >&2; exit 1; }
         done
-      env:
-        GITHUB_TOKEN: ${{ secrets.YARE92_NUGET_PUSH_TOKEN_EXP_29JUN2026 }}
+      test_results_path: artifacts/test-results/**/*.trx
+      artifact_name: events-test-results
+    permissions:
+      contents: read
+      packages: read

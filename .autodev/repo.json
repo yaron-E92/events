@@ -1,0 +1,12 @@
+{
+  "default_semver_intent": "patch",
+  "development": {
+    "integration_branch": "develop",
+    "release_branch": "main",
+    "strategy": "git-flow"
+  },
+  "opencode": {
+    "enabled": true
+  },
+  "version": 1
+}

@@ -1,0 +1,13 @@
+version: 1
+
+priority:
+  - issue: 179
+  - issue: 182
+  - issue: 183
+  - issue: 185
+  - issue: 44
+  - issue: 173
+  - issue: 175
+  - issue: 180
+
+fallback: oldest

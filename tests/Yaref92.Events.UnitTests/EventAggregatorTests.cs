@@ -496,10 +496,26 @@ internal class EventAggregatorTests
     private class DummyAsyncSubscriber : IAsyncEventHandler<DummyEvent>
     {
         public TaskCompletionSource<DummyEvent> Received { get; } = new();
+        public int InvocationCount { get; private set; }
+
         public Task OnNextAsync(DummyEvent domainEvent, CancellationToken cancellationToken = default)
         {
+            InvocationCount++;
             Received.TrySetResult(domainEvent);
             return Task.CompletedTask;
+        }
+    }
+
+    private class GatedAsyncSubscriber(TaskCompletionSource<bool> release) : IAsyncEventHandler<DummyEvent>
+    {
+        public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int InvocationCount { get; private set; }
+
+        public async Task OnNextAsync(DummyEvent domainEvent, CancellationToken cancellationToken = default)
+        {
+            InvocationCount++;
+            Started.TrySetResult(true);
+            await release.Task.WaitAsync(cancellationToken);
         }
     }
 
@@ -533,17 +549,27 @@ internal class EventAggregatorTests
     }
 
     [Test]
-    public async Task MultipleAsyncSubscribers_AllReceiveEvent()
+    public async Task MultipleAsyncSubscribers_RunConcurrently_AndReceiveEventExactlyOnce()
     {
         _aggregator.RegisterEventType<DummyEvent>();
-        var sub1 = new DummyAsyncSubscriber();
-        var sub2 = new DummyAsyncSubscriber();
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sub1 = new GatedAsyncSubscriber(release);
+        var sub2 = new GatedAsyncSubscriber(release);
         _aggregator.SubscribeToEventType(sub1);
         _aggregator.SubscribeToEventType(sub2);
-        var evt = new DummyEvent();
-        await _aggregator.PublishEventAsync(evt);
-        (await sub1.Received.Task).Should().Be(evt);
-        (await sub2.Received.Task).Should().Be(evt);
+
+        var publishTask = _aggregator.PublishEventAsync(new DummyEvent());
+        await Task.WhenAll(sub1.Started.Task, sub2.Started.Task);
+
+        publishTask.IsCompleted.Should().BeFalse("both async handlers should be awaited as a group");
+        sub1.InvocationCount.Should().Be(1);
+        sub2.InvocationCount.Should().Be(1);
+
+        release.SetResult(true);
+        await publishTask;
+
+        sub1.InvocationCount.Should().Be(1);
+        sub2.InvocationCount.Should().Be(1);
     }
 
     [Test]
@@ -556,6 +582,7 @@ internal class EventAggregatorTests
         var evt = new DummyEvent();
         await _aggregator.PublishEventAsync(evt);
         (await asyncSub.Received.Task).Should().Be(evt);
+        asyncSub.InvocationCount.Should().Be(1);
         _subscriber.Received(1).OnNext(evt);
     }
 
@@ -582,6 +609,23 @@ internal class EventAggregatorTests
         _aggregator.SubscribeToEventType(subscriber);
         Func<Task> act = async () => await _aggregator.PublishEventAsync(new DummyEvent());
         await act.Should().ThrowAsync<InvalidOperationException>();
+        subscriber.InvocationCount.Should().Be(1);
+    }
+
+    [Test]
+    public async Task MultipleAsyncSubscriber_Exceptions_AreNotSwallowed()
+    {
+        _aggregator.RegisterEventType<DummyEvent>();
+        var first = new FailingAsyncSubscriber("first failure");
+        var second = new FailingAsyncSubscriber("second failure");
+        _aggregator.SubscribeToEventType(first);
+        _aggregator.SubscribeToEventType(second);
+
+        Func<Task> act = () => _aggregator.PublishEventAsync(new DummyEvent());
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        first.InvocationCount.Should().Be(1);
+        second.InvocationCount.Should().Be(1);
     }
 
     [Test]
@@ -600,9 +644,15 @@ internal class EventAggregatorTests
         subscriber.Cancelled.Task.IsCompleted.Should().BeTrue();
     }
 
-    private class FailingAsyncSubscriber : IAsyncEventHandler<DummyEvent>
+    private class FailingAsyncSubscriber(string message = "fail") : IAsyncEventHandler<DummyEvent>
     {
-        public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default) => throw new InvalidOperationException("fail");
+        public int InvocationCount { get; private set; }
+
+        public Task OnNextAsync(DummyEvent value, CancellationToken cancellationToken = default)
+        {
+            InvocationCount++;
+            return Task.FromException(new InvalidOperationException(message));
+        }
     }
 
     [Test]

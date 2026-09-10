@@ -1,6 +1,6 @@
 # Yaref92.Events
 
-A lightweight, extensible, and type-safe event aggregator for .NET, supporting both synchronous event publishing and subscription with optional Reactive Extensions (Rx) integration.  
+A lightweight, extensible, and type-safe event aggregator for .NET, supporting both synchronous event publishing and subscription with optional Reactive Extensions (Rx) integration.
 Designed for decoupled communication in modern applications.
 
 ---
@@ -58,7 +58,9 @@ Designed for decoupled communication in modern applications.
   - [Logging](#logging)
     - [Logged Events](#logged-events)
   - [Extensibility](#extensibility)
+  - [Generated Output Layout](#generated-output-layout)
   - [Documentation & Testing Readiness](#documentation--testing-readiness)
+  - [Git-Flow Versioning](#git-flow-versioning)
   - [Versioning \& Breaking Changes](#versioning--breaking-changes)
   - [Changelog](#changelog)
   - [License](#license)
@@ -271,16 +273,16 @@ aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 
 ### Core Interfaces
 
-- `IDomainEvent`  
+- `IDomainEvent`
   Marker interface for events. Requires `DateTime DateTimeOccurredUtc` and `Guid EventId` (via `DomainEventBase`).
 
-- `IEventSubscriber<T>`  
+- `IEventSubscriber<T>`
   Synchronous event subscriber. Implements `void OnNext(T @event)`.
 
-- `IAsyncEventSubscriber<T>`  
+- `IAsyncEventHandler<T>`
   Asynchronous event subscriber. Implements `Task OnNextAsync(T @event, CancellationToken cancellationToken = default)`.
 
-- `IEventAggregator`  
+- `IEventAggregator`
   Main interface for registering event types, subscribing, unsubscribing, and publishing events.
 
 ### Main Methods
@@ -289,9 +291,9 @@ aggregator.PublishEvent(new UserRegisteredEvent("user-123"));
 |----------------------------------------------|---------------------------------------------|
 | `RegisterEventType<T>()`                     | Register an event type                      |
 | `SubscribeToEventType<T>(IEventSubscriber<T>)` | Subscribe a synchronous handler        |
-| `SubscribeToEventType<T>(IAsyncEventSubscriber<T>)` | Subscribe an asynchronous handler   |
+| `SubscribeToEventType<T>(IAsyncEventHandler<T>)` | Subscribe an asynchronous handler   |
 | `UnsubscribeFromEventType<T>(IEventSubscriber<T>)` | Unsubscribe a synchronous handler    |
-| `UnsubscribeFromEventType<T>(IAsyncEventSubscriber<T>)` | Unsubscribe an asynchronous handler |
+| `UnsubscribeFromEventType<T>(IAsyncEventHandler<T>)` | Unsubscribe an asynchronous handler |
 | `PublishEvent<T>(T domainEvent)`             | Publish event synchronously                 |
 | `PublishEventAsync<T>(T domainEvent, CancellationToken cancellationToken = default)` | Publish event asynchronously |
 
@@ -364,10 +366,10 @@ Yaref92.Events supports both synchronous and asynchronous event handling, with f
 
 ### Async Subscribers
 
-Implement `IAsyncEventSubscriber<T>` for asynchronous event handling:
+Implement `IAsyncEventHandler<T>` for asynchronous event handling:
 
 ```csharp
-public class EmailService : IAsyncEventSubscriber<UserRegisteredEvent>
+public class EmailService : IAsyncEventHandler<UserRegisteredEvent>
 {
     public async Task OnNextAsync(UserRegisteredEvent @event, CancellationToken cancellationToken = default)
     {
@@ -381,6 +383,8 @@ public class EmailService : IAsyncEventSubscriber<UserRegisteredEvent>
 ### Async Event Publishing
 
 Use `PublishEventAsync` for asynchronous event publishing:
+
+Each synchronous handler runs inline once. Asynchronous handlers are started while subscribers are traversed, then awaited concurrently as a group. Synchronous exceptions escape inline, while asynchronous faults and cancellation propagate to the publisher when the group is awaited.
 
 ```csharp
 var aggregator = new EventAggregator();
@@ -426,7 +430,7 @@ aggregator.SubscribeToEventType(logger);
 var emailService = new EmailService();
 aggregator.SubscribeToEventType(emailService);
 
-// Both will receive the event
+// Both receive the event exactly once
 await aggregator.PublishEventAsync(new UserRegisteredEvent("user-123"));
 ```
 
@@ -447,9 +451,9 @@ public class AsyncAuditLogger : AsyncRxSubscriber<UserRegisteredEvent>
 
 ### Performance Benefits
 
-- **Parallel execution**: Async subscribers are executed in parallel using `Task.WhenAll`
-- **Non-blocking**: Sync subscribers are called directly, async subscribers are awaited
-- **Cancellation**: Full support for cancelling long-running async operations
+- **Concurrent execution**: Async handlers run concurrently and are awaited as a group using `Task.WhenAll`
+- **Inline sync delivery**: Sync handlers are called directly exactly once; async handlers are also invoked exactly once
+- **Error propagation**: Handler faults and cancellation are propagated to the publisher
 - **Memory efficient**: No additional allocations for cancellation tokens (default parameter)
 
 ---
@@ -459,7 +463,7 @@ public class AsyncAuditLogger : AsyncRxSubscriber<UserRegisteredEvent>
 The EventAggregator is designed to be thread-safe:
 
 - **Concurrent Registration**: Multiple threads can register event types simultaneously
-- **Concurrent Subscription**: Multiple threads can subscribe/unsubscribe simultaneously  
+- **Concurrent Subscription**: Multiple threads can subscribe/unsubscribe simultaneously
 - **Concurrent Publishing**: Multiple threads can publish events simultaneously
 - **Safe Iteration**: Subscriber collections are safely iterated during event publishing
 
@@ -495,7 +499,7 @@ var aggregator = new EventAggregator(logger);
 ### Logged Events
 
 - **Warning**: Duplicate event type registration
-- **Warning**: Duplicate subscriber subscription  
+- **Warning**: Duplicate subscriber subscription
 - **Error**: Attempting to publish null events
 - **Error**: Attempting to unsubscribe null subscribers
 
@@ -507,6 +511,19 @@ var aggregator = new EventAggregator(logger);
   Rx (Reactive Extensions) support is available via the optional `Yaref92.Events.Rx` package.
 - **Other Integrations:**
   You can build adapters for MediatR, ASP.NET, or other frameworks as needed.
+
+---
+
+## Generated Output Layout
+
+The .NET SDK writes generated files beneath the repository's ignored `artifacts/` directory:
+
+- `artifacts/bin/` contains build outputs.
+- `artifacts/obj/` contains intermediate and restore outputs.
+- `artifacts/package/` contains NuGet package outputs.
+- `artifacts/release/<version>/` is reserved as the handoff root for future signing and release work.
+
+The entire `artifacts/` directory is generated-only and disposable. It is safe to delete; normal restore, build, test, and pack commands regenerate the required development outputs. Signing and release behavior remains owned by the later release issues and is not defined by this directory convention.
 
 ---
 
@@ -524,6 +541,21 @@ The v2.0.0 release includes refreshed documentation and a reviewed test suite so
   - `tests/Yaref92.Events.Rx.UnitTests` exercises the optional Reactive Extensions surface to ensure async push-based consumers stay compliant with aggregator internals.
   - `tests/Yaref92.Events.IntegrationTests` runs the resilient TCP transport through authentication, heartbeat, reconnection, and ACK/replay flows over real sockets.
   - Execute the full suite with `dotnet test Yaref92.Events.sln` to validate the combined surface before packaging or deployment.
+
+---
+
+## Git-Flow Versioning
+
+Events uses `develop` as its integration branch and `main` as its release branch. The shared AutoDev version policy validates pull-request intent and is the only authority that allocates canonical `vMAJOR.MINOR.PATCH` tags.
+
+- Ordinary pull requests into `develop` must contain exactly one `+semver: major`, `minor`, `patch`, or `none` directive. Their intent accumulates on `develop`; merging them does not create a public tag.
+- A `develop` to `main` promotion derives the highest intent from the contributing pull requests merged into `develop` since the latest canonical release tag. A promotion directive is optional and cannot override contributing intent. If all contributors use `none`, no tag is created.
+- Only a promotion with no contributing integration pull-request intent must include exactly one directive as an explicit fallback release decision.
+- Direct hotfix pull requests into `main` must include exactly one directive. After releasing a hotfix, synchronize `main` back into `develop` before the next promotion; stale ancestry is rejected.
+
+After the existing `main` build and test workflow succeeds, the trusted tag workflow verifies that the tested SHA is still current and then creates at most one annotated canonical tag. Tagging is idempotent and stops without packing, signing, publishing packages, creating a GitHub Release, deploying, or otherwise performing the release transaction. Package publication consumes an existing trusted tag through the separate explicit release process.
+
+Do not add a blanket pull-request template directive: promotion pull requests normally derive their intent and should not be forced to restate it.
 
 ---
 
