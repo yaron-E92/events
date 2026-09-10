@@ -29,20 +29,23 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         remove => EventReceived -= value;
     }
 
-    private readonly IEventSerializer _serializer; // To deserialize incoming event frames
+    private readonly IEventSerializer _serializer;
     private readonly Task? _monitorConnectionsLoop;
     private readonly PeerIngressLimiter _ingressLimiter;
+    private readonly ActiveInboundSessionRegistry _activeSessions;
     private readonly IngressDiagnostics _diagnostics;
 
     public InboundConnectionManager(
         TcpSessionManager sessionManager,
         IEventSerializer serializer,
         PeerIngressLimiter? ingressLimiter = null,
+        ActiveInboundSessionRegistry? activeSessions = null,
         IngressDiagnostics? diagnostics = null)
     {
         SessionManager = sessionManager;
         _serializer = serializer;
         _ingressLimiter = ingressLimiter ?? new PeerIngressLimiter(sessionManager.Options);
+        _activeSessions = activeSessions ?? new ActiveInboundSessionRegistry(sessionManager.Options);
         _diagnostics = diagnostics ?? new IngressDiagnostics(null);
         _monitorConnectionsLoop = Task.Run(() => MonitorConnectionsAsync(_cts.Token), _cts.Token);
     }
@@ -73,12 +76,8 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
         bool didManageToReconnect = await handler(sessionKey, monitorToken).ConfigureAwait(false);
         if (!didManageToReconnect)
         {
-            // Connection could not be re-established
-            // React to stale connection, e.g., notify session manager or log
             _diagnostics.Rejected("stale-session", sessionKey.Host);
         }
-        // If connection was re-established, react accordingly...
-        // ... but, technically nothing to do here since the session's InboundConnection would have been updated
     }
 
     public async Task<ConnectionInitializationResult> HandleIncomingTransientConnectionAsync(TcpClient incomingTransientConnection, CancellationToken serverToken)
@@ -88,7 +87,6 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
 
         try
         {
-            // During initialization, any pending authentication frame is processed. Even if auth is not required, this ensures proper session setup.
             ConnectionInitializationResult initialization = await InitializeConnectionAsync(incomingTransientConnection, lengthBuffer, serverToken).ConfigureAwait(false);
 
             if (initialization.IsSuccess && initialization.ConnectionCancellation is null)
@@ -97,12 +95,15 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             }
 
             initializationSucceeded = initialization.IsSuccess;
-
             return initialization;
         }
         catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
         {
             // shutting down
+        }
+        catch (SessionCapacityExceededException ex)
+        {
+            _diagnostics.Rejected("session-capacity", GetPeer(incomingTransientConnection), exception: ex);
         }
         catch (Exception ex) when (ex is IOException or SocketException or JsonException or NotSupportedException)
         {
@@ -169,31 +170,39 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             return ConnectionInitializationResult.Failed();
         }
 
-        if (session is null)
+        if (!_activeSessions.TryAdmit(session.Key, out ActiveInboundSessionRegistry.ActiveSessionLease? admissionLease))
         {
-            _diagnostics.Rejected("session-resolution-failed", peer);
+            _diagnostics.Rejected("connection-limit", peer);
             return ConnectionInitializationResult.Failed();
         }
 
-        session.Touch();
-        EnsureFrameHandlerSubscribed(session);
-
-        await EnsureInboundConnectionInitializedAsync(session, serverToken).ConfigureAwait(false);
-
-        var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-        IInboundResilientConnection inboundConnection = (session as IResilientTcpSession).InboundConnection;
-        if (inboundConnection is Connections.ResilientInboundConnection resilientInboundConnection)
+        try
         {
-            resilientInboundConnection.ConfigureIngress(remoteEndPoint, _ingressLimiter, _diagnostics);
-        }
-        await inboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
+            session.Touch();
+            EnsureFrameHandlerSubscribed(session);
+            await EnsureInboundConnectionInitializedAsync(session, serverToken).ConfigureAwait(false);
 
-        if (shouldReplayInitialFrame)
+            var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
+            IInboundResilientConnection inboundConnection = (session as IResilientTcpSession).InboundConnection;
+            if (inboundConnection is Connections.ResilientInboundConnection resilientInboundConnection)
+            {
+                resilientInboundConnection.ConfigureIngress(remoteEndPoint, _ingressLimiter, _diagnostics);
+            }
+            await inboundConnection.AttachTransientConnection(transientIncomingConnection, connectionCts).ConfigureAwait(false);
+            admissionLease!.Bind(connectionCts.Token);
+
+            if (shouldReplayInitialFrame)
+            {
+                await OnFrameReceivedAsync(initialFrame, session.Key, serverToken).ConfigureAwait(false);
+            }
+
+            return ConnectionInitializationResult.Success(session, connectionCts);
+        }
+        catch
         {
-            await OnFrameReceivedAsync(initialFrame, session.Key, serverToken).ConfigureAwait(false);
+            admissionLease!.Release();
+            throw;
         }
-
-        return ConnectionInitializationResult.Success(session, connectionCts);
     }
 
     private static string GetPeer(TcpClient client)
@@ -234,6 +243,7 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
             (session as IResilientTcpSession).FrameReceived -= subscription.Value;
         }
 
+        _inboundInitialization.TryRemove(session.Key, out _);
         session.Disposed -= OnSessionDisposed;
     }
 
@@ -269,14 +279,14 @@ internal sealed partial class InboundConnectionManager : IInboundConnectionManag
                     await ackReceived(frame.Id, sessionKey).ConfigureAwait(false);
                 }
                 break;
-            case SessionFrameKind.Ping: // RESPOND WITH PONG USING Publisher/Transport
+            case SessionFrameKind.Ping:
                 Func<SessionKey, Task>? pingReceived = PingReceived;
                 if (pingReceived is not null)
                 {
                     await pingReceived(sessionKey).ConfigureAwait(false);
                 }
                 break;
-            case SessionFrameKind.Pong: // Just touch the session, which already happened
+            case SessionFrameKind.Pong:
                 break;
         }
     }
