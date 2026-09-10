@@ -1,4 +1,6 @@
-﻿using Yaref92.Events.Abstractions;
+﻿using Microsoft.Extensions.Logging;
+
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Transport.Tcp.Abstractions;
@@ -38,7 +40,32 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         IEventSerializer? serializer = null,
         TimeSpan? heartbeatInterval = null,
         string? authenticationToken = null)
-        : this(CreateListener(listenPort, serializer, heartbeatInterval, authenticationToken, out var publisher, out var serializerToUse), publisher, serializerToUse)
+        : this(CreateComponents(listenPort, serializer, heartbeatInterval, authenticationToken, null, null))
+    {
+    }
+
+    public TcpEventTransport(
+        int listenPort,
+        ResilientSessionOptions sessionOptions,
+        ILogger<TcpEventTransport>? logger = null,
+        IEventSerializer? serializer = null)
+        : this(CreateComponents(listenPort, serializer, null, null, sessionOptions, logger))
+    {
+    }
+
+    public TcpEventTransport(
+        int listenPort,
+        IEventSerializer? serializer,
+        TimeSpan? heartbeatInterval,
+        string? authenticationToken,
+        ResilientSessionOptions? sessionOptions,
+        ILogger<TcpEventTransport>? logger)
+        : this(CreateComponents(listenPort, serializer, heartbeatInterval, authenticationToken, sessionOptions, logger))
+    {
+    }
+
+    private TcpEventTransport(TransportComponents components)
+        : this(components.Listener, components.Publisher, components.Serializer)
     {
     }
 
@@ -74,14 +101,11 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         return await _publisher.ConnectionManager.TryReconnectAsync(key, token);
     }
 
-    // Invoked from the listener when a resilient inbound session connection is accepted
     private async Task OnSessionConnectionAcceptedByListener(SessionKey sessionKey, CancellationToken cancellationToken)
     {
         await _publisher?.ConnectionManager.ConnectAsync(sessionKey, cancellationToken)!;
     }
 
-    // Invoked from the listener's inbound connection manager when an event is received
-    // Invokes the transports EventReceived so the aggregator can react
     private async Task OnEventReceived(IDomainEvent domainEvent, SessionKey sessionKey)
     {
         var handler = EventReceived;
@@ -143,27 +167,50 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         await Task.WhenAll(publisherDispose, listenerDispose).ConfigureAwait(false);
     }
 
-    private static IPersistentPortListener CreateListener(
+    private static TransportComponents CreateComponents(
         int listenPort,
         IEventSerializer? serializer,
         TimeSpan? heartbeatInterval,
         string? authenticationToken,
-        out IPersistentFramePublisher publisher,
-        out IEventSerializer serializerToUse)
+        ResilientSessionOptions? configuredOptions,
+        ILogger<TcpEventTransport>? logger)
     {
-        serializerToUse = serializer ?? new JsonEventSerializer();
+        IEventSerializer serializerToUse = serializer ?? new JsonEventSerializer();
 
-        var interval = heartbeatInterval ?? TimeSpan.FromSeconds(30);
-        ResilientSessionOptions sessionOptions = new()
+        ResilientSessionOptions sessionOptions;
+        if (configuredOptions is not null)
         {
-            RequireAuthentication = authenticationToken is not null,
-            AuthenticationToken = authenticationToken,
-            HeartbeatInterval = interval,
-            HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
-        };
+            if (heartbeatInterval is not null || authenticationToken is not null)
+            {
+                throw new ArgumentException("Heartbeat and authentication parameters cannot be combined with sessionOptions.", nameof(configuredOptions));
+            }
+            sessionOptions = configuredOptions;
+        }
+        else
+        {
+            var interval = heartbeatInterval ?? ResilientSessionOptions.DefaultHeartbeatInterval;
+            sessionOptions = new ResilientSessionOptions
+            {
+                RequireAuthentication = authenticationToken is not null,
+                AuthenticationToken = authenticationToken,
+                HeartbeatInterval = interval,
+                HeartbeatTimeout = TimeSpan.FromTicks(interval.Ticks * 2),
+            };
+        }
+
+        if (!sessionOptions.Validate())
+        {
+            throw new ArgumentException("Session options are invalid.", nameof(configuredOptions));
+        }
 
         var sessionManager = new TcpSessionManager(listenPort, sessionOptions);
-        publisher = new PersistentEventPublisher(sessionManager);
-        return new PersistentPortListener(listenPort, serializerToUse, sessionManager);
+        var publisher = new PersistentEventPublisher(sessionManager);
+        var listener = new PersistentPortListener(listenPort, serializerToUse, sessionManager, logger);
+        return new TransportComponents(listener, publisher, serializerToUse);
     }
+
+    private sealed record TransportComponents(
+        IPersistentPortListener Listener,
+        IPersistentFramePublisher Publisher,
+        IEventSerializer Serializer);
 }

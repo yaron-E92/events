@@ -102,4 +102,19 @@ public class SessionManagerTests
         secondSession.OutboundBuffer.Should().BeSameAs(firstSession.OutboundBuffer);
         (secondSession as IResilientTcpSession).OutboundConnection.AcknowledgedEventIds.Should().ContainKey(ackedEventId);
     }
+
+    [Test]
+    public void GetOrGenerate_RejectsNewIdentityWhenRetainedSessionCapacityIsReached()
+    {
+        var options = new ResilientSessionOptions { MaxRetainedSessions = 1 };
+        var sessionManager = new TcpSessionManager(listenPort: 5050, options);
+        var firstKey = new SessionKey(Guid.NewGuid(), "peer-one", 62000);
+        var secondKey = new SessionKey(Guid.NewGuid(), "peer-two", 62001);
+
+        sessionManager.GetOrGenerate(firstKey);
+
+        Action createSecondSession = () => sessionManager.GetOrGenerate(secondKey);
+        createSecondSession.Should().Throw<SessionCapacityExceededException>();
+        sessionManager.GetOrGenerate(firstKey).Should().NotBeNull("existing sessions remain reusable at capacity");
+    }
 }
