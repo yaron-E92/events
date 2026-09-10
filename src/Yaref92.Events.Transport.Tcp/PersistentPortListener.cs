@@ -13,7 +13,7 @@ internal class PersistentPortListener : IPersistentPortListener
     private const string UnknownPeer = "unknown";
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<TcpClient, Task> _acceptConnectionTasks = [];
-    private readonly SemaphoreSlim _inboundCapacity;
+    private readonly SemaphoreSlim _handshakeCapacity;
     private readonly IngressDiagnostics _diagnostics;
     private TcpListener? _listener;
     private Task? _acceptLoop;
@@ -25,10 +25,11 @@ internal class PersistentPortListener : IPersistentPortListener
         Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         Port = listenPort;
-        _inboundCapacity = new SemaphoreSlim(sessionManager.Options.MaxInboundConnections, sessionManager.Options.MaxInboundConnections);
+        _handshakeCapacity = new SemaphoreSlim(sessionManager.Options.MaxInboundConnections, sessionManager.Options.MaxInboundConnections);
         _diagnostics = new IngressDiagnostics(logger);
         var limiter = new PeerIngressLimiter(sessionManager.Options);
-        ConnectionManager = new InboundConnectionManager(sessionManager, eventSerializer, limiter, _diagnostics);
+        var activeSessions = new ActiveInboundSessionRegistry(sessionManager.Options);
+        ConnectionManager = new InboundConnectionManager(sessionManager, eventSerializer, limiter, activeSessions, _diagnostics);
     }
 
     public event Func<SessionKey, CancellationToken, Task>? SessionConnectionAccepted;
@@ -94,14 +95,14 @@ internal class PersistentPortListener : IPersistentPortListener
             string peer = incomingTransientConnection.Client.RemoteEndPoint is System.Net.IPEndPoint remoteEndPoint
                 ? remoteEndPoint.Address.ToString()
                 : UnknownPeer;
-            if (!await _inboundCapacity.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+            if (!await _handshakeCapacity.WaitAsync(0, cancellationToken).ConfigureAwait(false))
             {
                 _diagnostics.Rejected("connection-limit", peer);
                 incomingTransientConnection.Dispose();
                 continue;
             }
 
-            var lease = new CapacityLease(_inboundCapacity);
+            var lease = new CapacityLease(_handshakeCapacity);
             Task<ConnectionInitializationResult> initializationTask =
                 ConnectionManager.HandleIncomingTransientConnectionAsync(incomingTransientConnection, cancellationToken);
             _acceptConnectionTasks[incomingTransientConnection] = initializationTask;
@@ -115,21 +116,10 @@ internal class PersistentPortListener : IPersistentPortListener
         CapacityLease lease,
         CancellationToken cancellationToken)
     {
-        var leaseTransferred = false;
         try
         {
             ConnectionInitializationResult result = await initializationTask.ConfigureAwait(false);
-            if (!result.IsSuccess || result.Session is not { Key: not null } session || result.ConnectionCancellation is null)
-            {
-                return;
-            }
-
-            try
-            {
-                _ = result.ConnectionCancellation.Token.Register(lease.Release);
-                leaseTransferred = true;
-            }
-            catch (ObjectDisposedException)
+            if (!result.IsSuccess || result.Session is not { Key: not null } session)
             {
                 return;
             }
@@ -151,10 +141,7 @@ internal class PersistentPortListener : IPersistentPortListener
         finally
         {
             _acceptConnectionTasks.TryRemove(client, out _);
-            if (!leaseTransferred)
-            {
-                lease.Release();
-            }
+            lease.Release();
         }
     }
 
@@ -191,7 +178,7 @@ internal class PersistentPortListener : IPersistentPortListener
         {
             await _cts.CancelAsync().ConfigureAwait(false);
             _cts.Dispose();
-            _inboundCapacity.Dispose();
+            _handshakeCapacity.Dispose();
         }
     }
 
