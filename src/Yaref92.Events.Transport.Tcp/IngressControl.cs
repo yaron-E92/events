@@ -8,6 +8,76 @@ using Yaref92.Events.Sessions;
 
 namespace Yaref92.Events.Transport.Tcp;
 
+internal sealed class ActiveInboundSessionRegistry
+{
+    private readonly int _capacity;
+    private readonly Dictionary<SessionKey, long> _generations = [];
+    private readonly object _sync = new();
+    private long _nextGeneration;
+
+    public ActiveInboundSessionRegistry(ResilientSessionOptions options)
+    {
+        _capacity = options.MaxInboundConnections;
+    }
+
+    public bool TryAdmit(SessionKey sessionKey, out ActiveSessionLease? lease)
+    {
+        lock (_sync)
+        {
+            bool replacement = _generations.ContainsKey(sessionKey);
+            if (!replacement && _generations.Count >= _capacity)
+            {
+                lease = null;
+                return false;
+            }
+
+            long generation = ++_nextGeneration;
+            _generations[sessionKey] = generation;
+            lease = new ActiveSessionLease(this, sessionKey, generation);
+            return true;
+        }
+    }
+
+    private void Release(SessionKey sessionKey, long generation)
+    {
+        lock (_sync)
+        {
+            if (_generations.TryGetValue(sessionKey, out long currentGeneration)
+                && currentGeneration == generation)
+            {
+                _generations.Remove(sessionKey);
+            }
+        }
+    }
+
+    internal sealed class ActiveSessionLease(
+        ActiveInboundSessionRegistry owner,
+        SessionKey sessionKey,
+        long generation)
+    {
+        private int _released;
+
+        public void Bind(CancellationToken cancellationToken)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                Release();
+                return;
+            }
+
+            _ = cancellationToken.Register(Release);
+        }
+
+        public void Release()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+            {
+                owner.Release(sessionKey, generation);
+            }
+        }
+    }
+}
+
 internal sealed class PeerIngressLimiter
 {
     private static readonly long WindowTicks = Stopwatch.Frequency;
