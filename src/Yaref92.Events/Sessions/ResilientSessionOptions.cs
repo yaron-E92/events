@@ -10,6 +10,7 @@ public sealed class ResilientSessionOptions
     public const int DefaultMaximalReconnectAttempts = 5;
     public const int DefaultMaxFrameBytes = 1024 * 1024;
     public const int DefaultMaxInboundConnections = 128;
+    public const int DefaultMaxRetainedSessions = 512;
     public const int DefaultMaxFramesPerSecondPerPeer = 100;
     public const int DefaultFrameRateBurstAllowance = 20;
 
@@ -35,6 +36,9 @@ public sealed class ResilientSessionOptions
 
     /// <summary>Maximum simultaneous inbound handshakes and active transient inbound connections.</summary>
     public int MaxInboundConnections { get; init; } = DefaultMaxInboundConnections;
+
+    /// <summary>Maximum number of peer sessions retained in memory at once.</summary>
+    public int MaxRetainedSessions { get; init; } = DefaultMaxRetainedSessions;
 
     /// <summary>Maximum sustained frame rate accepted from one remote IP address.</summary>
     public int MaxFramesPerSecondPerPeer { get; init; } = DefaultMaxFramesPerSecondPerPeer;
@@ -91,7 +95,11 @@ public sealed class ResilientSessionOptions
         {
             return false;
         }
-        if (MaxFrameBytes <= 0 || MaxInboundConnections <= 0 || MaxFramesPerSecondPerPeer <= 0 || FrameRateBurstAllowance < 0)
+        if (MaxFrameBytes <= 0
+            || MaxInboundConnections <= 0
+            || MaxRetainedSessions <= 0
+            || MaxFramesPerSecondPerPeer <= 0
+            || FrameRateBurstAllowance < 0)
         {
             return false;
         }
