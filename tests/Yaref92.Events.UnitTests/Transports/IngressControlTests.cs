@@ -8,6 +8,7 @@ using FluentAssertions;
 
 using NUnit.Framework;
 
+using Yaref92.Events.Abstractions;
 using Yaref92.Events.Sessions;
 using Yaref92.Events.Serialization;
 using Yaref92.Events.Transport.Tcp;
@@ -34,6 +35,24 @@ public class IngressControlTests
         limiter.TryAcquire(peer, out _).Should().BeFalse();
     }
 
+    [Test]
+    public void ActiveInboundSessionRegistry_AllowsReplacementAtCapacity_WithoutReleasingReplacementFromOldLease()
+    {
+        var registry = new ActiveInboundSessionRegistry(new ResilientSessionOptions { MaxInboundConnections = 1 });
+        var firstKey = new SessionKey(Guid.NewGuid(), "127.0.0.1", 5001);
+        var secondKey = new SessionKey(Guid.NewGuid(), "127.0.0.1", 5002);
+
+        registry.TryAdmit(firstKey, out ActiveInboundSessionRegistry.ActiveSessionLease? firstLease).Should().BeTrue();
+        registry.TryAdmit(firstKey, out ActiveInboundSessionRegistry.ActiveSessionLease? replacementLease).Should().BeTrue();
+        registry.TryAdmit(secondKey, out _).Should().BeFalse();
+
+        firstLease!.Release();
+        registry.TryAdmit(secondKey, out _).Should().BeFalse("the stale connection must not release the replacement's slot");
+
+        replacementLease!.Release();
+        registry.TryAdmit(secondKey, out _).Should().BeTrue();
+    }
+
     [TestCase(0, 1, 1, 0)]
     [TestCase(1, 0, 1, 0)]
     [TestCase(1, 1, 0, 0)]
@@ -53,6 +72,20 @@ public class IngressControlTests
         };
 
         options.Validate().Should().BeFalse();
+    }
+
+    [Test]
+    public void Validate_RejectsInvalidRetainedSessionLimit()
+    {
+        new ResilientSessionOptions { MaxRetainedSessions = 0 }.Validate().Should().BeFalse();
+    }
+
+    [Test]
+    public void TcpEventTransport_PreservesLegacyFourParameterConstructor()
+    {
+        typeof(TcpEventTransport).GetConstructor(
+            [typeof(int), typeof(IEventSerializer), typeof(TimeSpan?), typeof(string)])
+            .Should().NotBeNull();
     }
 
     [Test]
