@@ -39,9 +39,27 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         int listenPort,
         IEventSerializer? serializer = null,
         TimeSpan? heartbeatInterval = null,
-        string? authenticationToken = null,
-        ResilientSessionOptions? sessionOptions = null,
-        ILogger<TcpEventTransport>? logger = null)
+        string? authenticationToken = null)
+        : this(CreateComponents(listenPort, serializer, heartbeatInterval, authenticationToken, null, null))
+    {
+    }
+
+    public TcpEventTransport(
+        int listenPort,
+        ResilientSessionOptions sessionOptions,
+        ILogger<TcpEventTransport>? logger = null,
+        IEventSerializer? serializer = null)
+        : this(CreateComponents(listenPort, serializer, null, null, sessionOptions, logger))
+    {
+    }
+
+    public TcpEventTransport(
+        int listenPort,
+        IEventSerializer? serializer,
+        TimeSpan? heartbeatInterval,
+        string? authenticationToken,
+        ResilientSessionOptions? sessionOptions,
+        ILogger<TcpEventTransport>? logger)
         : this(CreateComponents(listenPort, serializer, heartbeatInterval, authenticationToken, sessionOptions, logger))
     {
     }
@@ -83,14 +101,11 @@ public class TcpEventTransport : IEventTransport, IAsyncDisposable
         return await _publisher.ConnectionManager.TryReconnectAsync(key, token);
     }
 
-    // Invoked from the listener when a resilient inbound session connection is accepted
     private async Task OnSessionConnectionAcceptedByListener(SessionKey sessionKey, CancellationToken cancellationToken)
     {
         await _publisher?.ConnectionManager.ConnectAsync(sessionKey, cancellationToken)!;
     }
 
-    // Invoked from the listener's inbound connection manager when an event is received
-    // Invokes the transports EventReceived so the aggregator can react
     private async Task OnEventReceived(IDomainEvent domainEvent, SessionKey sessionKey)
     {
         var handler = EventReceived;
