@@ -13,7 +13,7 @@ concurrency:
 jobs:
   integration-tests:
     name: Run manual TCP integration tests
-    uses: yaron-E92/AutoDev/.github/workflows/profile-dotnet.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    uses: FullHouseDevelopment/AutoDev/.github/workflows/profile-dotnet.yml@296eddb54f01168a798eafe1bcc81a02e8330242
     with:
       ref: ${{ github.sha }}
       global_json_file: global.json
