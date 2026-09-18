@@ -20,7 +20,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main'
-    uses: yaron-E92/AutoDev/.github/workflows/version-tag.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    uses: FullHouseDevelopment/AutoDev/.github/workflows/version-tag.yml@296eddb54f01168a798eafe1bcc81a02e8330242
     with:
       head: ${{ github.event.workflow_run.head_sha }}
       branch: main
