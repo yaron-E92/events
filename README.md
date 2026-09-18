@@ -1,4 +1,4 @@
-# Yaref92.Events
+# FullHouse.Events
 
 A lightweight, extensible, and type-safe event aggregator for .NET, supporting both synchronous event publishing and subscription with optional Reactive Extensions (Rx) integration.
 Designed for decoupled communication in modern applications.
@@ -6,9 +6,9 @@ Designed for decoupled communication in modern applications.
 ---
 
 ![Latest Release](https://img.shields.io/github/v/release/yaron-E92/events)
-[![Build Status](https://github.com/yaron-E92/events/actions/workflows/ci-pipeline.yaml/badge.svg)](https://github.com/yaron-E92/events/actions/workflows/ci-pipeline.yaml)
-[![License](https://img.shields.io/github/license/yaron-E92/events)](https://github.com/yaron-E92/events/blob/main/LICENSE)
-[![Last Commit](https://img.shields.io/github/last-commit/yaron-E92/events)](https://github.com/yaron-E92/events/commits/main)
+[![Build Status](https://github.com/FullHouseDevelopment/events/actions/workflows/ci-pipeline.yaml/badge.svg)](https://github.com/FullHouseDevelopment/events/actions/workflows/ci-pipeline.yaml)
+[![License](https://img.shields.io/github/license/yaron-E92/events)](https://github.com/FullHouseDevelopment/events/blob/main/LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/yaron-E92/events)](https://github.com/FullHouseDevelopment/events/commits/main)
 
 ---
 
@@ -211,7 +211,7 @@ See [docs/networking/resilient-tcp.md](docs/networking/resilient-tcp.md) for a d
 Install the main package via NuGet:
 
 ```sh
-dotnet add package Yaref92.Events
+dotnet add package FullHouse.Events
 ```
 
 ### Rx Integration (Optional)
@@ -219,7 +219,7 @@ dotnet add package Yaref92.Events
 For Reactive Extensions support:
 
 ```sh
-dotnet add package Yaref92.Events.Rx
+dotnet add package FullHouse.Events.Rx
 ```
 
 ---
