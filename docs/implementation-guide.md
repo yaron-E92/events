@@ -6,11 +6,11 @@ This guide walks through the steps required to integrate **Yaref92.Events** and 
 
 1. Add the core package reference:
    ```bash
-   dotnet add package Yaref92.Events
+   dotnet add package FullHouse.Events
    ```
 2. (Optional) Add the TCP transport package when you need to publish or receive events over the network:
    ```bash
-   dotnet add package Yaref92.Events.Transport.Tcp
+   dotnet add package FullHouse.Events.Transport.Tcp
    ```
 
 ## 2. Compose the Aggregator and Transport

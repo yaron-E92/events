@@ -4,8 +4,10 @@
     <TargetFrameworks>net10.0;net10.0-android</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RepositoryUrl>https://github.com/yaron-E92/events</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/yaron-E92/events</PackageProjectUrl>
+    <PackageId>FullHouse.Events.Transport.Grpc</PackageId>
+    <Authors>Full House Development</Authors>
+    <RepositoryUrl>https://github.com/FullHouseDevelopment/events</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/FullHouseDevelopment/events</PackageProjectUrl>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
