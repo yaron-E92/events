@@ -18,7 +18,7 @@ concurrency:
 jobs:
   policy:
     name: Shared workflow policy
-    uses: yaron-E92/AutoDev/.github/workflows/profile-baseline.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    uses: FullHouseDevelopment/AutoDev/.github/workflows/profile-baseline.yml@296eddb54f01168a798eafe1bcc81a02e8330242
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
       require_concurrency: true
@@ -29,7 +29,7 @@ jobs:
   build-and-test:
     name: Build, test, and validate packages
     needs: policy
-    uses: yaron-E92/AutoDev/.github/workflows/profile-dotnet.yml@296eddb54f01168a798eafe1bcc81a02e8330242
+    uses: FullHouseDevelopment/AutoDev/.github/workflows/profile-dotnet.yml@296eddb54f01168a798eafe1bcc81a02e8330242
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
       global_json_file: global.json
